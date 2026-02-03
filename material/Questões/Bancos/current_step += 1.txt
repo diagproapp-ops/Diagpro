@@ -1,0 +1,30 @@
+current_step += 1
+            self._update_progress(current_step, total_steps, f"Gerando gabaritos para {nome_cargo_sanitizado}...")
+
+            # 3. Gerar arquivos de Gabarito (CSV) para este cargo
+            if gabaritos_por_variacao: # Usa o novo dicionário com todos os gabaritos
+                
+                # Gera o Gabarito Completo (com todos os tipos no mesmo arquivo)
+                gab_completo_filename = sanitize_filename(f"GABARITO_COMPLETO_{self.evento_atual.nome_curto_evento}_{self.cargo_atual.codigo_cargo}.csv")
+                gab_completo_path = os.path.join(dir_saida_cargo, gab_completo_filename)
+                if self.answer_key_generator.generate_complete_csv(gab_completo_path, gabaritos_por_variacao):
+                    todos_gabaritos_gerados_no_lote.append(gab_completo_path)
+                    todos_arquivos_finais_gerados_no_lote.append(gab_completo_path)
+                    self._log_ui(f"Gabarito completo para {nome_cargo_sanitizado} gerado.", "info")
+
+                # Gera o Gabarito Simples (com uma linha por tipo de prova)
+                if gerar_gabarito_simplificado_global:
+                    gab_simples_filename = sanitize_filename(f"GABARITO_SIMPLES_{self.evento_atual.nome_curto_evento}_{self.cargo_atual.codigo_cargo}.csv")
+                    gab_simples_path = os.path.join(dir_saida_cargo, gab_simples_filename)
+                    
+                    if self.answer_key_generator.generate_simple_row_based_csv(
+                        filepath=gab_simples_path,
+                        cargo_obj=self.cargo_atual,
+                        gabaritos_por_variacao=gabaritos_por_variacao
+                    ):
+                        todos_gabaritos_gerados_no_lote.append(gab_simples_path)
+                        todos_arquivos_finais_gerados_no_lote.append(gab_simples_path)
+                        self._log_ui(f"Gabarito simples para {nome_cargo_sanitizado} gerado.", "info")
+            else:
+                self._log_ui(f"Sem dados de gabarito para {nome_cargo_sanitizado}.", "warning")
+

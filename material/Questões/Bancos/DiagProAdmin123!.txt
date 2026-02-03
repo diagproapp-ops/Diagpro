@@ -1,0 +1,138 @@
+DiagProAdmin123!
+
+
+Layout Geral: A disposição dos painéis, botões, listas? Parece desorganizado ou difícil de usar?
+Cores e Tema: As cores dos botões, do fundo, do texto não te agradam? 
+Podemos manter o padrão que já temos.
+Tipografia: As fontes usadas, tamanhos de texto?
+Podemos manter o padrão que já temos
+
+Densidade de Informação: Há muita informação na tela ao mesmo tempo, tornando-a confusa? Ou, ao contrário, parece que falta algo?
+Estilo dos Componentes: Os botões, caixas de seleção, campos de texto, etc., não têm a aparência que você gostaria?
+Usabilidade: Além da aparência, há algo na forma de usar a tela que parece complicado ou pouco intuitiv
+
+Acredito que ela primeiramente deva pegar toda a tela do monitor (responsivo)
+Para ficar mais top
+Uma barra que aparecem todos os cargos do evento para serem selecionados
+Uma barra com o nível (quando selecionarmos o nível) só aparecerão as disciplinas daquele nível
+Uma barra com o turno (quando selecionarmos o nível) só aparecerão as disciplinas daquele Turno
+Como filtros
+Aqui não precisa aparecer as questões individuais da disciplina somente a disciplina em si.
+Uma barra de progresso se possível (para ir enchendo conforme colocamos as disciplinas)
+Quando formos trazendo as disciplinas do banco para a prova a barra vai enchendo conforme a quantidade de questões (Língua Portuguesa 10 questões, Informática 5 questões)
+Quando a barra estiver 100% podemos salvar e já começar outro cargo.
+Dá para entender?
+
+Que ótimo que a QuestionEditorWindow está abrindo e você já está pensando em novas funcionalidades! Essas duas adições são muito importantes para o ciclo de vida completo de uma questão e para a usabilidade.
+
+Vamos detalhar como implementar cada uma:
+
+1. Opção "Questão Anulada" e Campo "Recurso Respondido"
+Isso envolve atualizar o modelo de dados, a interface do editor e a lógica de salvamento/carregamento.
+
+Passo 1.1: Atualizar o Modelo QuestaoType (em core/elements.py)
+
+Adicione os seguintes campos ao seu Pydantic BaseModel QuestaoType:
+
+Python
+
+# core/elements.py
+# Dentro da classe QuestaoType(BaseModel):
+
+    # ... outros campos existentes ...
+    status_revisao: Optional[str] = None # Você já tem este, pode ser usado/adaptado
+    anulada: bool = Field(default=False) # Novo campo para marcar se a questão foi anulada
+    justificativa_anulacao_recurso: Optional[str] = None # Para a resposta do recurso ou justificativa da anulação
+    # O campo gabarito_definitivo: Optional[str] = None já existe e pode ser usado aqui.
+
+    # ...
+anulada: bool: Um simples booleano para marcar se a questão está anulada.
+justificativa_anulacao_recurso: Optional[str]: Um campo de texto para detalhar o motivo da anulação ou a resposta a um recurso que levou a uma mudança ou anulação.
+Passo 1.2: Adicionar os Campos na Interface (ui/question_editor_window.py)
+
+No método _build_ui_widgets da QuestionEditorWindow, adicione os seguintes elementos, por exemplo, antes dos botões de ação ou junto com outros metadados como "Nível de Dificuldade":
+
+Python
+
+# ui/question_editor_window.py
+# Dentro de _build_ui_widgets(self):
+
+        # ... (após campos como Tags ou antes dos Botões de Ação) ...
+        row_idx += 1 # Ajuste o row_idx conforme necessário
+
+        # --- Seção de Anulação e Recurso ---
+        anulacao_frame = customtkinter.CTkFrame(self.content_frame, fg_color="transparent")
+        anulacao_frame.grid(row=row_idx, column=0, columnspan=3, sticky="ew", pady=(10,5))
+        anulacao_frame.grid_columnconfigure(1, weight=1)
+        
+        self.check_anulada_var = customtkinter.BooleanVar() # Use BooleanVar para CTkCheckBox
+        self.check_anulada = customtkinter.CTkCheckBox(anulacao_frame, text="Marcar Questão como ANULADA",
+                                                       variable=self.check_anulada_var,
+                                                       onvalue=True, offvalue=False)
+        self.check_anulada.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+
+        customtkinter.CTkLabel(anulacao_frame, text="Justificativa (Anulação/Recurso):").grid(row=1, column=0, padx=5, pady=(5,0), sticky="nw")
+        self.txt_justificativa_anulacao = customtkinter.CTkTextbox(anulacao_frame, height=80, wrap="word", border_width=1)
+        self.txt_justificativa_anulacao.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        
+        # Você já tem o campo gabarito_definitivo no modelo QuestaoType.
+        # Se precisar de um campo de entrada para ele na UI:
+        # customtkinter.CTkLabel(anulacao_frame, text="Gabarito Definitivo (se alterado):").grid(row=2, column=0, padx=5, pady=(5,0), sticky="nw")
+        # self.entry_gabarito_definitivo = customtkinter.CTkEntry(anulacao_frame, placeholder_text="Ex: B (se diferente do original)")
+        # self.entry_gabarito_definitivo.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+
+        row_idx += 1 
+        # ... (Botões de Ação Salvar/Cancelar) ...
+Passo 1.3: Carregar e Salvar os Novos Dados
+
+Em _initialize_form_state(self) (em question_editor_window.py):
+Carregue os valores se estiver editando uma questão:
+
+Python
+
+# Dentro de _initialize_form_state, no bloco if self.is_editing and self.questao_original:
+    self.check_anulada_var.set(getattr(self.questao_original, 'anulada', False))
+    self.txt_justificativa_anulacao.delete("1.0", tk.END)
+    self.txt_justificativa_anulacao.insert("1.0", getattr(self.questao_original, 'justificativa_anulacao_recurso', "") or "")
+    # Se adicionou self.entry_gabarito_definitivo:
+    # self.entry_gabarito_definitivo.delete(0, tk.END)
+    # self.entry_gabarito_definitivo.insert(0, getattr(self.questao_original, 'gabarito_definitivo', "") or "")
+E para novas questões, no bloco else:
+
+Python
+
+# Dentro de _initialize_form_state, no bloco else: # Nova questão
+    self.check_anulada_var.set(False)
+    self.txt_justificativa_anulacao.delete("1.0", tk.END)
+    # self.entry_gabarito_definitivo.delete(0, tk.END)
+Em _salvar_questao(self) (em question_editor_window.py):
+Colete os dados dos novos campos antes de criar/atualizar o QuestaoType:
+
+Python
+
+# Dentro de _salvar_questao, antes de criar questao_data_dict ou questao_obj_final:
+    anulada_val = self.check_anulada_var.get()
+    justificativa_val = self.txt_justificativa_anulacao.get("1.0", "end-1c").strip()
+    # gabarito_definitivo_val = self.entry_gabarito_definitivo.get().strip() if hasattr(self, 'entry_gabarito_definitivo') else None
+
+# Ao criar questao_obj_final ou questao_data_dict, inclua:
+# 'anulada': anulada_val,
+# 'justificativa_anulacao_recurso': justificativa_val if justificativa_val else None,
+# 'gabarito_definitivo': gabarito_definitivo_val if gabarito_definitivo_val else getattr(self.questao_original, 'gabarito_definitivo', None), # ou lógica para atualizar
+Passo 1.4: Atualizar Banco de Dados e EventManager
+
+Schema do Banco (core/database_setup.py):
+Adicione as colunas anulada (INTEGER/BOOLEAN), justificativa_anulacao_recurso (TEXT) à tabela QuestoesBanco no método _criar_tabelas_iniciais. Se você recriar o banco, isso será aplicado. Se não, você precisará de um script de migração (ALTER TABLE).
+O campo gabarito_definitivo já deve estar lá, mas verifique.
+
+EventManager (em core/event_manager.py):
+
+No método save_questao_banco, certifique-se de que a query INSERT OR REPLACE INTO QuestoesBanco inclua os novos campos (anulada, justificativa_anulacao_recurso) e seus respectivos placeholders (?) e que eles sejam passados no params_questoes.
+No método obter_questoes_do_evento, certifique-se de que a query SELECT da tabela QuestoesBanco também busque esses novos campos e que eles sejam mapeados para o objeto QuestaoType ao ser construído.
+
+
+
+2. Botão para "Edição Mais Completa"
+Essa é uma funcionalidade que pode ter várias interpretações. A mais simples e imediata para "edição mais completa" de campos de texto longos é abrir um pop-up com uma área de texto maior.
+
+Abordagem Sugerida (Pop-up para Edição de Texto):

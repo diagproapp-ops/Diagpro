@@ -9,9 +9,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+
 # Importações da nossa aplicação
 from backend.app.database import get_db
 from backend.app.db_models import User as DBUser
+from backend.app.models import User as PydanticUser
 from backend.app.roles import UserRole
 
 # --- Modelo Pydantic para o Token ---
@@ -68,7 +70,7 @@ def decode_access_token(token: str):
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db)
-) -> DBUser:
+) -> PydanticUser:   # <-- Retorna Pydantic agora
     """
     Descodifica o token, obtém o username e busca o usuário no banco de dados.
     """
@@ -82,7 +84,9 @@ async def get_current_user(
             detail="Usuário não encontrado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return user
+
+    # Converte ORM -> Pydantic para evitar lazy load
+    return PydanticUser.from_orm(user)
 
 def get_admin_user(current_user: DBUser = Depends(get_current_user)):
     """

@@ -2111,6 +2111,7 @@ class EventManager:
         """
         Busca todas as provas montadas para um evento e PREENCHE os blocos
         com as questões correspondentes do banco de questões do evento.
+        Utiliza apenas os campos do sistema novo.
         """
         import json
         conn: Optional[sqlite3.Connection] = None
@@ -2126,72 +2127,51 @@ class EventManager:
 
             for row_data in rows:
                 proof_dict = dict(row_data)
-                
-                if 'id_evento_fk' in proof_dict: proof_dict['id_evento'] = proof_dict.pop('id_evento_fk')
-                if 'id_cargo_fk' in proof_dict: proof_dict['id_cargo'] = proof_dict.pop('id_cargo_fk')
 
-                blocos_json_str = proof_dict.get('blocos_questoes_json') or '[]'
+                # --- CAMPOS NOVOS SOMENTE ---
+                # Blocos de questões
+                blocos_json_str = proof_dict.get('blocos_questoes') or '[]'
                 blocos_questoes_list = []
-                if blocos_json_str:
-                    try:
-                        list_of_dicts = json.loads(blocos_json_str)
-                        for bloco_dict in list_of_dicts:
-                            # --- INÍCIO DA LÓGICA DE CORREÇÃO ---
-                            chave_busca = bloco_dict.get("agrupamento_banco")
-                            questoes_para_o_bloco = []
-
-                            # Busca as questões no banco de questões que a função recebeu
-                            if chave_busca and chave_busca in banco_questoes_evento:
-                                questoes_do_banco = banco_questoes_evento[chave_busca]
-                                num_a_usar = bloco_dict.get("qtd_questoes", len(questoes_do_banco))
-                                # Pega uma amostra das questões para o bloco
-                                questoes_para_o_bloco = questoes_do_banco[:num_a_usar]
-                            
-                            # Adiciona a lista de questões (agora preenchida) ao dicionário
-                            bloco_dict['questoes'] = questoes_para_o_bloco
-                            # --- FIM DA LÓGICA DE CORREÇÃO ---
-
-                            blocos_questoes_list.append(BlocoQuestoesType(**bloco_dict))
-                    except Exception as e_json:
-                        self.logger.error(f"Erro ao processar blocos de questões: {e_json}")
-
+                try:
+                    list_of_dicts = json.loads(blocos_json_str)
+                    for bloco_dict in list_of_dicts:
+                        blocos_questoes_list.append(BlocoQuestoesType(**bloco_dict))
+                except Exception as e_json:
+                    self.logger.error(f"Erro ao processar blocos de questões: {e_json}")
                 proof_dict['blocos_questoes'] = blocos_questoes_list
 
-                # ======================= NOVO BLOCO DE CÓDIGO ADICIONADO AQUI =======================
-                # Desserializar Textos de Referência
-                textos_ref_json_str = proof_dict.get('textos_referencia_prova_json', '[]')
+                # Textos de referência
+                textos_ref_json_str = proof_dict.get('textos_referencia_prova') or '[]'
                 textos_ref_list = []
-                if textos_ref_json_str:
-                    try:
-                        # Carrega a string JSON em uma lista de dicionários
-                        list_of_dicts = json.loads(textos_ref_json_str)
-                        # Converte cada dicionário em um objeto TextoReferenciaType
-                        for texto_ref_dict in list_of_dicts:
-                            textos_ref_list.append(TextoReferenciaType(**texto_ref_dict))
-                    except (json.JSONDecodeError, TypeError) as e:
-                        self.logger.error(f"Erro ao desserializar textos_referencia_prova_json para prova {proof_dict.get('id_prova_montada')}: {e}")
-                
-                # Atribui a lista de objetos ao dicionário que será usado para criar o objeto final
+                try:
+                    list_of_dicts = json.loads(textos_ref_json_str)
+                    for texto_ref_dict in list_of_dicts:
+                        textos_ref_list.append(TextoReferenciaType(**texto_ref_dict))
+                except Exception as e:
+                    self.logger.error(f"Erro ao desserializar textos_referencia_prova: {e}")
                 proof_dict['textos_referencia_prova'] = textos_ref_list
-                # ====================================================================================
 
-                # Desserializar outros campos JSON (configurações, metadados, etc.)
-                for json_field, default_val in [('metadados_prova', {}), ('configuracoes', {})]:
-                    db_field_name = 'configuracoes_prova' if json_field == 'configuracoes' else json_field
-                    if db_field_name in proof_dict and isinstance(proof_dict[db_field_name], str):
-                        try:
-                            proof_dict[json_field] = json.loads(proof_dict[db_field_name])
-                        except json.JSONDecodeError:
-                            proof_dict[json_field] = default_val
-                    elif json_field not in proof_dict or proof_dict[json_field] is None:
-                        proof_dict[json_field] = default_val
-                    if db_field_name != json_field and db_field_name in proof_dict:
-                        del proof_dict[db_field_name]
+                # Configurações
+                configuracoes_json_str = proof_dict.get('configuracoes') or '{}'
+                try:
+                    proof_dict['configuracoes'] = ConfiguracoesProvaType(**json.loads(configuracoes_json_str))
+                except Exception as e:
+                    self.logger.error(f"Erro ao desserializar configuracoes: {e}")
+                    proof_dict['configuracoes'] = ConfiguracoesProvaType()
 
-                # Converter datas
+                # Metadados da prova
+                metadados_prova_json_str = proof_dict.get('metadados_prova') or '{}'
+                try:
+                    proof_dict['metadados_prova'] = json.loads(metadados_prova_json_str)
+                except Exception as e:
+                    self.logger.error(f"Erro ao desserializar metadados_prova: {e}")
+                    proof_dict['metadados_prova'] = {}
+
+                # Datas
                 for date_field in ['data_criacao', 'data_modificacao', 'data_ultima_geracao']:
                     proof_dict[date_field] = self._convert_date_field(proof_dict.get(date_field), date_field, event_id)
 
+                # Remover qualquer campo antigo/desnecessário
                 unwanted_fields = [
                     'estrutura_prova_json', 'textos_referencia_prova_json', 'blocos_questoes_json',
                     'questoes_por_disciplina', 'ordem_disciplinas_na_prova', 'questoes_por_disciplina_json',
@@ -2203,29 +2183,21 @@ class EventManager:
                     proof_dict.pop(unwanted, None)
 
                 try:
-                    if 'configuracoes' in proof_dict and isinstance(proof_dict['configuracoes'], dict):
-                        proof_dict['configuracoes'] = ConfiguracoesProvaType(**proof_dict['configuracoes'])
-                    else:
-                        proof_dict['configuracoes'] = ConfiguracoesProvaType()
-
                     prova = ProvaMontadaType(**proof_dict)
-                    print("DEBUG ProvaMontadaType criado:", prova)
                     proofs.append(prova)
                 except Exception as e_pydantic:
-                    print("ERRO ao criar ProvaMontadaType:", e_pydantic)
                     self.logger.error(f"Erro ao criar ProvaMontadaType para evento {event_id} com dados {proof_dict}: {e_pydantic}", exc_info=True)
-            print(f"DEBUG: Retornando {len(proofs)} provas montadas do método")
+
             return proofs
         except sqlite3.Error as e:
-            print("ERRO SQLite:", e)
             self.logger.error(f"Erro SQLite ao buscar provas montadas para evento {event_id}: {e}", exc_info=True)
             return []
         except Exception as e:
-            print("ERRO geral:", e)
             self.logger.error(f"Erro geral ao buscar provas montadas para evento {event_id}: {e}", exc_info=True)
             return []
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     def update_proof_assembly(self, proof_id: str, updates: Dict[str, Any]) -> bool:
         """

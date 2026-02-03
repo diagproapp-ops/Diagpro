@@ -13,7 +13,13 @@ DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 engine = create_async_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 # Cria uma classe de sessão que iremos usar para interagir com a BD
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, class_=AsyncSession)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False  # <-- ESSENCIAL!
+)
 
 # Uma classe base para os nossos modelos da BD (as tabelas)
 Base = declarative_base()

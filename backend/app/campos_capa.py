@@ -1,0 +1,120 @@
+CAMPOS_CAPA_PROVA = [
+    # Dados do candidato
+    "Inscricao",
+    "NomeCandidato",
+    "CPF",
+    "RG",
+    "DataNascimento",
+    "Sexo",
+    "FotoCandidato",
+    "Telefone",
+    "Email",
+    "Escola",
+    "Curso",
+    "Modalidade",
+    "Sala",
+    "Bloco",
+    "Turno",
+    "Periodo",
+    "NumeroOrdemGeral",
+    "NumeroOrdemSala",
+
+    # Prova/Cargo
+    "CodigoCargo",
+    "NomeCargo",
+    "CargoTipo",
+    "CargoTipoCompleto",
+    "CargoCompleto",
+    "Tipo",
+    "letra_tipo",
+    "NomeProva",
+    "IdentificadorProva",
+    "TipoProva",
+    "QuantidadeQuestoes",
+    "TempoProva",
+    "NumeroProva",
+
+    # Evento
+    "NomeEvento",
+    "DataEvento",
+    "LocalEvento",
+    "DataProva",
+
+    # Empresa/Banca
+    "Empresa",
+    "EnderecoEmpresa",
+
+    # Frase motivacional
+    "Frase",
+
+    # QRCode
+    "QRCode",
+
+    # Assinaturas/Observações
+    "AssinaturaCandidato",
+    "AssinaturaFiscal",
+    "Observacoes",
+
+    # Extras
+    "Outros"
+]
+
+def montar_dados_capa(
+    candidato,
+    cargo,
+    evento,
+    prova,
+    frase,
+    tipo,
+    tempo_prova,
+    quantidade_questoes,
+    empresa,
+    qrcode="",
+    outros="",
+    letra_tipo=None, 
+):
+    return {
+        "Inscricao": candidato.get("inscricao", ""),
+        "NomeCandidato": candidato.get("nome", ""),
+        "CPF": candidato.get("cpf", ""),
+        "RG": candidato.get("rg", ""),
+        "DataNascimento": candidato.get("data_nascimento", ""),
+        "Sexo": candidato.get("sexo", ""),
+        "FotoCandidato": candidato.get("foto", ""),
+        "Telefone": candidato.get("telefone", ""),
+        "Email": candidato.get("email", ""),
+        "Escola": candidato.get("escola", ""),
+        "Curso": candidato.get("curso", ""),
+        "Modalidade": candidato.get("modalidade", ""),
+        "Sala": candidato.get("sala", ""),
+        "Bloco": candidato.get("bloco", ""),
+        "Turno": candidato.get("turno", ""),
+        "Periodo": candidato.get("periodo", ""),
+        "NumeroOrdemGeral": candidato.get("ordem_geral", ""),
+        "NumeroOrdemSala": candidato.get("ordem_sala", ""),
+        "CodigoCargo": getattr(cargo, "codigo_cargo", ""),
+        "NomeCargo": getattr(cargo, "nome_cargo", ""),
+        "CargoTipo": f'{getattr(cargo, "nome_cargo", "")} ({tipo})',
+        "CargoTipoCompleto": f'{getattr(cargo, "codigo_cargo", "")} - {getattr(cargo, "nome_cargo", "")} - {tipo}',
+        "CargoCompleto": f'{getattr(cargo, "codigo_cargo", "")} - {getattr(cargo, "nome_cargo", "")}',
+        "Tipo": tipo,
+        "LetraTipo": letra_tipo if letra_tipo is not None else "",
+        "NomeProva": getattr(prova, "nome_prova", ""),
+        "IdentificadorProva": getattr(prova, "identificador_prova", ""),
+        "TipoProva": getattr(prova, "tipo_prova", ""),
+        "QuantidadeQuestoes": quantidade_questoes,
+        "TempoProva": tempo_prova,
+        "NumeroProva": getattr(prova, "numero_prova", ""),
+        "NomeEvento": getattr(evento, "nome_evento", ""),
+        "DataEvento": getattr(evento, "data_evento", "").strftime("%d/%m/%Y") if getattr(evento, "data_evento", None) else "",
+        "LocalEvento": getattr(evento, "local_evento", ""),
+        "DataProva": getattr(evento, "data_prova", "").strftime("%d/%m/%Y") if getattr(evento, "data_prova", None) else "",
+        "Empresa": empresa,
+        "EnderecoEmpresa": getattr(evento, "endereco_empresa", ""),
+        "Frase": frase,
+        "QRCode": qrcode,
+        "AssinaturaCandidato": "",
+        "AssinaturaFiscal": "",
+        "Observacoes": "",
+        "Outros": outros,
+    }

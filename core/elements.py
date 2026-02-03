@@ -135,10 +135,10 @@ class FileReferenceType:
 # --- Modelos de Dados Principais ---
 
 class TipoQuestao(str, Enum):
-    MULTIPLA_ESCOLHA = "Múltipla Escolha"
-    VERDADEIRO_FALSO = "Verdadeiro/Falso"
-    DISCURSIVA = "Discursiva"
-    PREENCHIMENTO_LACUNAS = "Preenchimento de Lacunas"
+    MULTIPLA_ESCOLHA = "MULTIPLA_ESCOLHA"
+    VERDADEIRO_FALSO = "VERDADEIRO_FALSO"
+    DISCURSIVA = "DISCURSIVA"
+    PREENCHIMENTO_LACUNAS = "PREENCHIMENTO_LACUNAS"
 
 class NivelDificuldadeQuestao(str, Enum):
     MUITO_FACIL = "Muito Fácil"

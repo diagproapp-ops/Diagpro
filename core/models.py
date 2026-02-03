@@ -225,3 +225,4 @@ class Cargos(Base):
     id_evento = Column(Integer, ForeignKey('events.id'))
     nome_cargo = Column(String, nullable=False)
     codigo_cargo = Column(String)
+

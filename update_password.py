@@ -1,52 +1,27 @@
-# update_password.py
-import sqlite3
-import getpass
-from passlib.context import CryptContext
+from dotenv import load_dotenv
+load_dotenv()
 
-# Configuração do Passlib (igual à sua API)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-DB_NAME = "diagprooff.db"
+import asyncio
+from sqlalchemy.future import select
+from backend.app.database import SessionLocal  # Seu SessionLocal retorna AsyncSession
+from backend.app.db_models import Evento
+from backend.app.utils_crypto import encrypt_text
 
-def get_db_connection():
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        return conn
-    except sqlite3.Error as e:
-        print(f"Erro ao conectar ao banco de dados: {e}")
-        return None
+evento_id = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+nova_senha = "1234"
+senha_cripto = encrypt_text(nova_senha)
 
-def update_admin_password():
-    username = input("Digite o nome de usuário para atualizar (ex: admin): ")
-    password = getpass.getpass(f"Digite a nova senha para '{username}': ")
-    
-    conn = get_db_connection()
-    if conn is None:
-        return
-        
-    try:
-        cursor = conn.cursor()
-        
-        # Criptografa a nova senha com o método da API
-        hashed_password = pwd_context.hash(password)
-        
-        # Atualiza a senha no banco de dados
-        cursor.execute(
-            "UPDATE users SET password_hash = ? WHERE username = ?",
-            (hashed_password, username)
-        )
-        
-        if cursor.rowcount == 0:
-            print(f"\nERRO: Usuário '{username}' não encontrado no banco de dados.")
+async def main():
+    async with SessionLocal() as db:
+        result = await db.execute(select(Evento).where(Evento.id_evento == evento_id))
+        evento = result.scalar_one_or_none()
+        if not evento:
+            print("Evento não encontrado!")
         else:
-            conn.commit()
-            print(f"\nSUCESSO! A senha para o usuário '{username}' foi atualizada para o novo formato.")
-            
-    except sqlite3.Error as e:
-        print(f"Ocorreu um erro no banco de dados: {e}")
-        conn.rollback()
-    finally:
-        if conn:
-            conn.close()
+            print("Antes:", evento.senha_evento_cripto)
+            evento.senha_evento_cripto = senha_cripto
+            await db.commit()
+            await db.refresh(evento)
+            print("Depois:", evento.senha_evento_cripto)
 
-if __name__ == "__main__":
-    update_admin_password()
+asyncio.run(main())

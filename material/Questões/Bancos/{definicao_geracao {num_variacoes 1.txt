@@ -1,0 +1,50 @@
+{"definicao_geracao": {"num_variacoes": 10, "geracao_individual": false, "embaralhar_questoes": true, "embaralhar_alternativas": true, "caminho_csv_candidatos": null, "semente_embaralhamento": "2ef04cae2fdf19674b5d4aea7d2cdd07"}, "frases_por_tipo_prova": {"Tipo A": "Aja com paix\u00e3o e prop\u00f3sito todos os dias.", "Tipo B": "Erros s\u00e3o provas de que voc\u00ea est\u00e1 tentando.", "Tipo C": "Acredite no poder dos seus sonhos mais ousados.", "Tipo D": "A disciplina \u00e9 a ponte entre metas e realiza\u00e7\u00f5es.", "Tipo E": "Sua determina\u00e7\u00e3o \u00e9 sua maior aliada.", "Tipo F": "A atitude certa transforma pensamentos negativos em positivos.", "Tipo G": "Nunca \u00e9 tarde demais para ser o que voc\u00ea poderia ter sido.", "Tipo H": "O seu potencial \u00e9 infinito. Explore-o.", "Tipo I": "A sua vis\u00e3o positiva \u00e9 o seu maior poder.", "Tipo J": "Para alcan\u00e7ar o que nunca teve, fa\u00e7a o que nunca fez."}}
+
+def _selecionar_questoes_com_balanceamento(self, pool_de_questoes: List[QuestaoType], qtd_a_selecionar: int) -> List[QuestaoType]:
+        """
+        Seleciona um número de questões de um pool, garantindo balanceamento
+        e um embaralhamento intercalado para evitar padrões e repetições.
+        """
+        if not pool_de_questoes or qtd_a_selecionar <= 0:
+            return []
+
+        # 1. Separa as questões em listas, uma para cada gabarito.
+        questoes_por_gabarito = {'A': [], 'B': [], 'C': [], 'D': [], 'E': []}
+        for q in pool_de_questoes:
+            gabarito = getattr(q, 'resposta_correta', '').upper()
+            if gabarito in questoes_por_gabarito:
+                questoes_por_gabarito[gabarito].append(q)
+
+        # Embaralha cada lista individualmente para garantir aleatoriedade interna
+        for key in questoes_por_gabarito:
+            random.shuffle(questoes_por_gabarito[key])
+
+        # 2. Lógica do "Sorteio Circular"
+        prova_final = []
+        opcoes_para_sorteio = ['A', 'B', 'C', 'D', 'E']
+        
+        # Loop para selecionar cada uma das questões da prova
+        while len(prova_final) < qtd_a_selecionar:
+            
+            # Embaralha a ordem de prioridade dos gabaritos a cada seleção
+            random.shuffle(opcoes_para_sorteio)
+            
+            pegou_nesta_rodada = False
+            for opcao in opcoes_para_sorteio:
+                # Se o monte (a lista de questões) desta opção ainda tem itens...
+                if questoes_por_gabarito[opcao]:
+                    # Pega uma questão e a remove do monte para não ser usada de novo
+                    questao = questoes_por_gabarito[opcao].pop()
+                    prova_final.append(questao)
+                    pegou_nesta_rodada = True
+                    # Para e vai para a próxima questão da prova (próxima iteração do while)
+                    break 
+            
+            # Condição de segurança: se passamos por todos os montes e não tinha 
+            # mais nenhuma questão em nenhum deles, encerramos.
+            if not pegou_nesta_rodada:
+                self.logger.warning("Não há mais questões disponíveis em nenhum grupo para continuar o sorteio.")
+                break
+
+        self.logger.info(f"Seleção final com {len(prova_final)} questões (balanceadas e intercaladas).")
+        return prova_final

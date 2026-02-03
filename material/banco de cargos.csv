@@ -1,0 +1,26 @@
+nome_cargo;codigo_cargo;nivel;turno;vagas;salario;requisitos;tem_discursiva;letterhead_pdf_path;cover_pdf_paths;peso_total_prova;disciplina_1;tipo_conhecimento_1;qtd_questoes_1;peso_1;obs_1;ordem_1;disciplina_2;tipo_conhecimento_2;qtd_questoes_2;peso_2;obs_2;ordem_2;disciplina_3;tipo_conhecimento_3;qtd_questoes_3;peso_3;obs_3;ordem_3;disciplina_4;tipo_conhecimento_4;qtd_questoes_4;peso_4;obs_4;ordem_4;disciplina_5;tipo_conhecimento_5;qtd_questoes_5;peso_5;obs_5;ordem_5
+Analista de Sistemas;101;Nível Superior;Tarde;5;7500;Graduação em TI, Inglês fluente;1;;;100;Língua Portuguesa;Comum;10;1.0;Foco em interpretação;1;Raciocínio Lógico;Comum;5;1.0;;2;Ética;Comum;5;1;;3;Língua Inglesa;Comum;5;1;;4;Conhecimentos Específicos;Específico;15;2;;5
+Agente de Tecnologia;102;Nível Superior;Tarde;2;7500;Graduação em TI, Inglês fluente;1;;;100;Língua Portuguesa;Comum;10;1.0;Foco em interpretação;1;Raciocínio Lógico;Comum;5;1.0;;2;Ética;Comum;5;1;;3;Língua Inglesa;Comum;5;1;;4;Conhecimentos Específicos;Específico;15;2;;5
+Bancário;201;Médio;Manhã;10;3500;Ensino Médio Completo;1;;;100;Língua Portuguesa;Comum;10;1.0;;1;Noções de Informática;Comum;5;1.0;;2;Ética;Comum;5;1;;3;Conhecimentos Específicos;Específico;10;2;;4;;;;;;
+Agente Comercial;203;Médio;Manhã;15;3500;Ensino Médio Completo;0;;;100;Língua Portuguesa;Comum;10;1.0;;1;Noções de Informática;Comum;5;1.0;;2;Ética;Comum;5;1;;3;Conhecimentos Específicos;Específico;10;2;;4;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

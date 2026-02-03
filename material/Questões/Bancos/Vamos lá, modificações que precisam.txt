@@ -1,0 +1,7 @@
+Vamos lá, modificações que precisamos fazer nessa tela.
+1. Selecionar cargos para geração: Não está aparecendo o cargo, deve popular todos os cargos que temos no evento com prova montada e provas geradas. E com a opção de marcar um ou todos os cargos para exportar de uma vez.
+2. Templates Docx (Opcional):
+Tem o do timbrado que é muito necessário mesmo e tem o da capa, não precisamos desse da capa por que colocamos a capa do cargo na criação dos cargos, já existe o campo para isso.
+Mas temos que ter o campo para colocarmos o rascunho caso tenha prova discursiva, que nesse caso você poderá me sugerir se o sistema poderá fazer a página de rascunho com o numero exato de linhas ou se fazemos um template para isso. Se o sistema puder fazer acho mais top.
+3. Opções de Geração:
+Não precisamos disso nessa tela, temos a tela para esse fim e já está no sistema (isso nem é para aparecer aqui). Essas são as alterações iniciais.

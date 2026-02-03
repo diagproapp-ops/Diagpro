@@ -1,4 +1,3 @@
-
 """
 Módulo para geração de documentos (provas, gabaritos, pacotes).
 """
@@ -27,6 +26,9 @@ from docx.oxml import OxmlElement
 import json
 import unicodedata
 from core.utils import parse_enunciado_formatado
+from backend.app.utils_crypto import decrypt_text
+from backend.app.html_to_docx import html_to_docx
+from cryptography.fernet import InvalidToken
 
 logger_dg = logging.getLogger(f"core.{__name__}")
 
@@ -258,6 +260,28 @@ def unir_itens_texto_formatado(lista):
         result.append(["text", last_text])
     return result
 
+def resolve_logo_path(logo_path_from_db):
+    if not logo_path_from_db:
+        return None
+    # Troca / e \ para o separador correto do sistema operacional
+    path = logo_path_from_db.replace("/", os.sep).replace("\\", os.sep)
+    path = path.lstrip(os.sep)  # Remove barra inicial, se houver
+    abs_path = os.path.abspath(path)
+    if os.path.exists(abs_path):
+        return abs_path
+    return None
+
+def safe_decrypt(val):
+    if not val:
+        return ""
+    try:
+        return decrypt_text(val)
+    except InvalidToken:
+        print(f"[ATENÇÃO] Valor não criptografado ou corrompido ao descriptografar: {repr(val)}")
+        return val
+    except Exception as e:
+        print(f"[ATENÇÃO] Outro erro ao descriptografar: {e}")
+        return val
 
 class DocxProofGenerator:
     """
@@ -274,6 +298,7 @@ class DocxProofGenerator:
                  core_elements_module: Optional[Any] = None,
                  app_instance: Optional[Any] = None, # Para logging na UI
                  K_consts: Optional[Any] = None,
+                 logo_path_override: Optional[str] = None,
                  **kwargs: Any): 
         # super().__init__(**kwargs) if hasattr(super(), '__init__') else None # Chamada super segura
 
@@ -286,9 +311,9 @@ class DocxProofGenerator:
         self.core_elements = core_elements_module if core_elements_module else sys.modules.get('core.elements')
         self.app_instance = app_instance # Para log na UI
         self.K = K_consts
+        self.logo_path_override = logo_path_override
         
         self.image_storage_base_dir = image_storage_base_dir
-        os.makedirs(self.image_storage_base_dir, exist_ok=True)
 
         self.QuestaoTypeModel: Type[QuestaoType] = getattr(self.core_elements, 'QuestaoType', QuestaoType) # type: ignore
         self.OpcaoModel: Type[OpcaoMultiplaEscolha] = getattr(self.core_elements, 'OpcaoMultiplaEscolha', OpcaoMultiplaEscolha) # type: ignore
@@ -308,6 +333,11 @@ class DocxProofGenerator:
         else:
             log_func = getattr(self.logger, level, self.logger.info)
             log_func(message)
+    
+    def _get_field(self, obj, field, default=""):
+        if isinstance(obj, dict):
+            return obj.get(field, default)
+        return getattr(obj, field, default)
     
     def renderizar_conteudo_formatado(self, document, conteudo_formatado, fonte="Arial", tamanho=Pt(12)):
         """
@@ -763,7 +793,8 @@ class DocxProofGenerator:
     def _add_header_footer(self, document):
         """
         Adiciona cabeçalho e rodapé ao documento DOCX,
-        com logo, tipo de prova e info do cargo/evento.
+        com logo dinâmico (do banco), tipo de prova e info do cargo/evento.
+        Funciona para objetos OU dicionários!
         """
         if not PYTHON_DOCX_AVAILABLE_DG_FLAG:
             return
@@ -771,22 +802,22 @@ class DocxProofGenerator:
         section = document.sections[0]
 
         # --- LOGO ---
-        logo_path = None
-        try:
-            with open("app_config.json", "r", encoding="utf-8") as f:
-                config = json.load(f)
-                logo_path = config.get("application_settings", {}).get("company_logo_path", None)
-                if logo_path and not os.path.exists(logo_path):
-                    self.logger.warning(f"O caminho da logo informado não existe: {logo_path}")
-        except Exception as e:
-            self.logger.warning(f"Não foi possível carregar logo do app_config.json: {e}")
+        print("LOGO_PATH (input):", self.logo_path_override)
+        logo_path = self.logo_path_override
+        if logo_path:
+            logo_path = logo_path.lstrip("/\\")
+            if not os.path.isabs(logo_path):
+                logo_path = os.path.abspath(logo_path)
+        print("LOGO_PATH (final):", logo_path)
+        print("LOGO_PATH EXISTS:", os.path.exists(logo_path) if logo_path else False)
 
         # ----- CABEÇALHO -----
         header = section.header
 
+        nome_evento = self._get_field(self.evento, "nome_evento", "NOME DO EVENTO")
+
         if header.tables:
-            table = header.tables[0]  # primeira tabela do cabeçalho
-            nome_evento = getattr(self.evento, 'nome_evento', 'NOME DO EVENTO')
+            table = header.tables[0]
             cell_nome = table.cell(0, 0)
             for p in cell_nome.paragraphs:
                 p.clear()
@@ -803,7 +834,6 @@ class DocxProofGenerator:
             else:
                 cell_logo.text = ""
         else:
-            # Cria tabela 2x1 no cabeçalho em modo padrão
             for para in header.paragraphs:
                 para.clear()
             table = header.add_table(rows=1, cols=2, width=Inches(6.5))
@@ -811,7 +841,6 @@ class DocxProofGenerator:
             table.columns[0].width = Pt(350)
             table.columns[1].width = Pt(130)
 
-            nome_evento = getattr(self.evento, 'nome_evento', 'NOME DO EVENTO')
             p_evento = table.cell(0, 0).paragraphs[0]
             p_evento.text = nome_evento
             self._add_paragraph_formatting(p_evento, alignment=WD_ALIGN_PARAGRAPH.LEFT, font_size=Pt(11), bold=True)
@@ -826,26 +855,26 @@ class DocxProofGenerator:
             else:
                 cell_dir.text = ""
 
-            # Remove bordas da tabela do cabeçalho
             tbl = table._tbl
             for border in tbl.xpath(".//w:tblBorders"):
                 border.getparent().remove(border)
 
-        
         # ----- RODAPÉ -----
         footer = section.footer
 
-        # TIPO DE PROVA (ex: "Tipo A", "Tipo B", etc.), deve ser definido antes de chamar este método:
-        tipo_prova = getattr(self.prova_montada, 'identificador_prova', 'N/A')
+        tipo_prova = self._get_field(self.prova_montada, "identificador_prova", "").strip()
+        if not tipo_prova:
+            tipo_prova = "PADRÃO"  # ou "Tipo A", "Tipo B", etc, se quiser personalizar
 
-        codigo_cargo = getattr(self.cargo, 'codigo_cargo', '')
-        nome_cargo = getattr(self.cargo, 'nome_cargo', '')
+        codigo_cargo = self._get_field(self.cargo, "codigo_cargo", "")
+        nome_cargo = self._get_field(self.cargo, "nome_cargo", "")
 
         # Evita duplicidade: só mostra o código se não está incluso no nome
         if codigo_cargo and codigo_cargo in nome_cargo:
             texto_rodape = f"{nome_cargo} - {tipo_prova}"
         else:
             texto_rodape = f"{codigo_cargo} - {nome_cargo} - {tipo_prova}"
+
 
         if footer.tables:
             tablef = footer.tables[0]
@@ -986,12 +1015,27 @@ class DocxProofGenerator:
         if not image_path:
             return
 
-        image_path = os.path.normpath(
-            image_path if os.path.isabs(image_path) else os.path.join(self.image_storage_base_dir, image_path)
-        )
+        # Remove prefixo 'static/' se já estiver no caminho salvo no banco
+        norm_path = os.path.normpath(image_path)
+        if norm_path.startswith("static" + os.sep):
+            norm_path = norm_path[len("static" + os.sep):]
+        elif norm_path.startswith("static/"):
+            norm_path = norm_path[len("static/"):]
+        elif norm_path.startswith("static\\"):
+            norm_path = norm_path[len("static\\"):]
 
-        if not os.path.exists(image_path):
-            self.logger.warning(f"Imagem não encontrada: {image_path}")
+        # Tenta static primeiro, depois media_files (compatibilidade legada)
+        candidate_paths = [
+            os.path.normpath(os.path.join("static", norm_path)),
+            os.path.normpath(os.path.join("media_files", norm_path)),
+        ]
+
+        for try_path in candidate_paths:
+            if os.path.exists(try_path):
+                image_path = try_path
+                break
+        else:
+            self.logger.warning(f"Imagem não encontrada em nenhum caminho: {candidate_paths}")
             return
 
         try:
@@ -1016,7 +1060,6 @@ class DocxProofGenerator:
 
                     final_width_cm = width
             else:
-                # Para alternativas (onde width_cm é passado junto com os limites corretos!)
                 with Image.open(image_path) as img:
                     dpi_tuple = img.info.get("dpi", (96, 96))
                     dpi = dpi_tuple[0] if isinstance(dpi_tuple, (tuple, list)) and dpi_tuple else 96
@@ -1024,21 +1067,19 @@ class DocxProofGenerator:
                     height_cm_img = img.height * 2.54 / dpi
                     aspect_ratio = img.width / img.height
 
-                    # Se width_cm está sendo usado para alternativas, defina os limites de altura conforme colunas
-                    if width_cm == 6.0:  # duas colunas
+                    if width_cm == 6.0:
                         max_width = 6.0
                         max_height = 3.0
-                    elif width_cm == 12.0:  # uma coluna
+                    elif width_cm == 12.0:
                         max_width = 12.0
                         max_height = 6.0
                     else:
                         max_width = width_cm if width_cm else width_cm_img
-                        max_height = height_cm_img  # sem limite
+                        max_height = height_cm_img
 
-                    # Redimensionamento proporcional, nunca ultrapassando os limites
                     escala_w = max_width / width_cm_img
                     escala_h = max_height / height_cm_img
-                    escala = min(escala_w, escala_h, 1.0)  # nunca aumenta
+                    escala = min(escala_w, escala_h, 1.0)
 
                     final_width_cm = width_cm_img * escala
 
@@ -1254,7 +1295,7 @@ class DocxProofGenerator:
         from copy import deepcopy
         import random
         from PIL import Image
-        from docx.shared import Inches
+        from docx.shared import Inches, Pt
 
         def add_gray_shading(paragraph, color="DDDDDD"):
             pPr = paragraph._p.get_or_add_pPr()
@@ -1284,6 +1325,12 @@ class DocxProofGenerator:
                 table.style = style_name
             elif table_styles:
                 table.style = table_styles[0].name
+
+        # Helper to get field from dict/object
+        def get_field(obj, field, default=None):
+            if isinstance(obj, dict):
+                return obj.get(field, default)
+            return getattr(obj, field, default)
 
         if not PYTHON_DOCX_AVAILABLE_DG_FLAG:
             self.logger.warning("DocxProofGenerator: Geração abortada pois python-docx não está disponível.")
@@ -1322,42 +1369,61 @@ class DocxProofGenerator:
         self._add_header_footer(doc)
 
         primeiro_elemento_adicionado = False
-        if self.prova_montada.titulo_prova:
+        titulo_prova = get_field(self.prova_montada, "titulo_prova", "")
+        if titulo_prova:
             if doc.paragraphs and doc.paragraphs[0].text == "" and not doc.paragraphs[0].runs:
                 p_titulo = doc.paragraphs[0]
-                p_titulo.add_run(self.prova_montada.titulo_prova).bold = True
+                p_titulo.add_run(titulo_prova).bold = True
             else:
                 p_titulo = doc.add_paragraph()
-                p_titulo.add_run(self.prova_montada.titulo_prova).bold = True
-
+                p_titulo.add_run(titulo_prova).bold = True
             p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
             primeiro_elemento_adicionado = True
             apply_keep_together(p_titulo)
 
-        config_obj = self.prova_montada.configuracoes
-        if config_obj and config_obj.instrucoes_gerais:
+        config_obj = get_field(self.prova_montada, "configuracoes", {})
+        instrucoes_gerais = get_field(config_obj, "instrucoes_gerais", "")
+        if instrucoes_gerais:
             if primeiro_elemento_adicionado:
                 doc.add_paragraph()
-
             p_inst_titulo = doc.add_paragraph()
             p_inst_titulo.add_run("INSTRUÇÕES GERAIS").bold = True
-            doc.add_paragraph(config_obj.instrucoes_gerais)
+            doc.add_paragraph(instrucoes_gerais)
             doc.add_paragraph()
 
         answer_key_data = []
         ordered_question_ids = []
-        textos_referencia_map = {tr.id_texto_ref: tr for tr in self.prova_montada.textos_referencia_prova}
+        textos_referencia = get_field(self.prova_montada, "textos_referencia_prova", [])
+        # Monta o map de textos de referência
+        textos_referencia_map = {}
+        print("IDs do questoes_vinculo do texto:")
+        for tr in textos_referencia:
+            tr_id = get_field(tr, "id_texto_ref", None)
+            if tr_id:
+                textos_referencia_map[tr_id] = tr
+
         textos_ja_impressos = set()
-        blocos_ordenados = sorted(self.prova_montada.blocos_questoes, key=lambda b: b.ordem_bloco or 999)
-        total_questoes = sum(len(bloco.questoes) for bloco in blocos_ordenados)
+        blocos_questoes = get_field(self.prova_montada, "blocos_questoes", [])
+        blocos_ordenados = sorted(
+            blocos_questoes,
+            key=lambda b: get_field(b, "ordem_bloco", 999)
+        )
+        total_questoes = sum(len(get_field(bloco, "questoes", [])) for bloco in blocos_ordenados)
         letras_gabarito_total = self.gerar_gabarito_balanceado(total_questoes, seed=f"{variacao_num}-TOTAL")
         idx_global_gabarito = 0
         bloco_discursivo = None
         nova_secao = None
-        bloco_especifico_iniciado = False
 
         for bloco_idx, bloco in enumerate(blocos_ordenados):
-            titulo_disciplina = getattr(bloco, 'nome_disciplina_prova', 'Questões').upper()
+            # Aceita ambos os campos para máxima compatibilidade de backend
+            titulo_disciplina = (
+                get_field(bloco, 'nome_disciplina_na_prova')
+                or get_field(bloco, 'nome_disciplina_prova')
+                or get_field(bloco, 'nome_disciplina')
+                or 'Questões'
+            ).upper()
+            questoes_do_bloco = get_field(bloco, "questoes", [])
+            print(f"BLOCO: {titulo_disciplina} — QTD QUESTOES: {len(questoes_do_bloco)}")
             
             if "discursiva" in titulo_disciplina.lower():
                 bloco_discursivo = bloco
@@ -1375,7 +1441,7 @@ class DocxProofGenerator:
             add_gray_shading(p_titulo_bloco)
             doc.add_paragraph()
 
-            # --- INSTRUÇÕES PARA INFORMÁTICA ---
+            # INSTRUÇÕES PARA INFORMÁTICA
             if "informática" in titulo_disciplina.lower():
                 instrucoes_informatica = [
                     "Nas questões que abordarem conteúdos de informática e/ou tecnologia da informação, presume-se que todos os programas citados estão configurados em seus padrões originais, sem quaisquer limitações de acesso, funcionamento ou uso em relação aos softwares, arquivos, pastas, recursos e dispositivos mencionados.",
@@ -1394,139 +1460,152 @@ class DocxProofGenerator:
                         p.paragraph_format.first_line_indent = Inches(-0.25)
                     p.paragraph_format.space_after = Pt(6)
                 doc.add_paragraph()
-            # --- FIM DAS INSTRUÇÕES INFORMÁTICA ---
 
-            questoes_do_bloco = bloco.questoes
+            questoes_do_bloco = get_field(bloco, "questoes", [])
+            print(f"BLOCO: {titulo_disciplina} — QTD QUESTOES: {len(questoes_do_bloco)}")
+            textos_referencia = get_field(self.prova_montada, "textos_referencia_prova", [])
+            textos_referencia_map = {}
+            map_texto_questoes = {}
+            print("IDs do questoes_vinculo do texto:")
+            for tr in textos_referencia:
+                print("id_texto_ref:", tr.get("id_texto_ref"))
+                print("questoes_vinculo:", tr.get("questoes_vinculo"))
+                print("LISTA IDS:", [q.strip() for q in (tr.get("questoes_vinculo") or "").split(",") if q.strip()])
+                id_texto = get_field(tr, "id_texto_ref", None)
+                questoes_vinculo = set(q.strip() for q in (get_field(tr, "questoes_vinculo", "") or "").split(",") if q.strip())
+                textos_referencia_map[id_texto] = tr
+                map_texto_questoes[id_texto] = questoes_vinculo
+
+            # Agrupa as questões do bloco por texto de referência
+            
             grupos = {}
+            print("QUESTOES DO BLOCO:")
             for questao in questoes_do_bloco:
-                id_texto_ref = None
-                if hasattr(questao, 'id_texto_ref_vinculado'):
-                    id_texto_ref = getattr(questao, 'id_texto_ref_vinculado')
-                elif isinstance(questao.metadados_questao, dict):
-                    id_texto_ref = questao.metadados_questao.get("id_texto_ref_vinculado") \
-                        or questao.metadados_questao.get("id_texto_referencia")
-                grupos.setdefault(id_texto_ref, []).append(questao)
+                id_ref = questao.get("id_referencia_vinculo")
+                grupos.setdefault(id_ref, []).append(questao)
 
-            # 2. ORDENA OS GRUPOS (textos primeiro, depois questões sem texto) E ITERA SOBRE ELES
-            for id_texto_ref in sorted(grupos.keys(), key=lambda x: (x is None, x)):
-                questoes_grupo = grupos[id_texto_ref][:]
-                rng = random.Random(f"{bloco_idx}-{id_texto_ref}-{variacao_num}")
+            # ORDENA OS GRUPOS (referências primeiro, depois questões sem referência)
+            for id_ref in sorted(grupos.keys(), key=lambda x: (x is None, x)):
+                questoes_grupo = grupos[id_ref][:]
+                rng = random.Random(f"{bloco_idx}-{id_ref}-{variacao_num}")
                 rng.shuffle(questoes_grupo)
 
-                # 3. IMPRIME O TEXTO DE REFERÊNCIA (APENAS UMA VEZ)
-                # Este bloco só executa se o grupo de questões tiver um texto de referência
-                # e se esse texto ainda não foi impresso nesta prova.
-                if id_texto_ref and id_texto_ref not in textos_ja_impressos:
-                    print(f"VARIAÇÃO {variacao_num}: IMPRIMINDO texto de referência {id_texto_ref}")
-                    texto_ref = textos_referencia_map.get(id_texto_ref)
-
-                    # Calcula os números das questões para o cabeçalho
+                # IMPRIME O TEXTO OU IMAGEM DE REFERÊNCIA (APENAS UMA VEZ)
+                if id_ref and id_ref not in textos_ja_impressos:
+                    texto_ref = textos_referencia_map.get(id_ref)
                     numeros_questoes_grupo = list(range(
                         ordered_question_ids[-1] + 1 if ordered_question_ids else 1,
                         (ordered_question_ids[-1] if ordered_question_ids else 0) + len(questoes_grupo) + 1
                     ))
-                    prefixo = "Imagem" if getattr(texto_ref, "tipo_conteudo", "").lower() == "imagem" else "Texto"
+                    prefixo = "Imagem" if texto_ref and texto_ref.get("tipo_conteudo", "").lower() == "imagem" else "Texto"
 
+                    # Cabeçalho (MANTENHA!)
                     if len(numeros_questoes_grupo) == 1:
-                        cabecalho_texto_ref = f"{prefixo} para a questão {numeros_questoes_grupo[0]}."
+                        cabecalho = f"{prefixo} para a questão {numeros_questoes_grupo[0]}."
                     elif len(numeros_questoes_grupo) <= 4:
-                        cabecalho_texto_ref = f"{prefixo} para as questões " + ", ".join(map(str, numeros_questoes_grupo[:-1])) + f" e {numeros_questoes_grupo[-1]}."
+                        cabecalho = f"{prefixo} para as questões " + ", ".join(map(str, numeros_questoes_grupo[:-1])) + f" e {numeros_questoes_grupo[-1]}."
                     else:
-                        cabecalho_texto_ref = f"{prefixo} para as questões de {min(numeros_questoes_grupo)} a {max(numeros_questoes_grupo)}."
+                        cabecalho = f"{prefixo} para as questões de {min(numeros_questoes_grupo)} a {max(numeros_questoes_grupo)}."
 
-                    # Adiciona um espaço antes do bloco do texto
                     if ordered_question_ids:
                         doc.add_paragraph()
-
-                    # IMPRIME O CABEÇALHO DO TEXTO (Ex: "Texto para as questões...")
                     self._add_formatted_paragraph(
                         doc,
-                        text=cabecalho_texto_ref,
+                        text=cabecalho,
                         bold=True,
                         alignment=WD_ALIGN_PARAGRAPH.LEFT,
                         font_name=fonte_principal,
                         font_size=tamanho_fonte_principal,
-                        first_line_indent_cm=0.0  # Garante que não há recuo
+                        first_line_indent_cm=0.0
                     )
                     doc.add_paragraph()
 
-                    # IMPRIME O TÍTULO (SE EXISTIR), SEM RECUO
-                    if texto_ref and getattr(texto_ref, "titulo", None):
-                        self._add_formatted_paragraph(
-                            doc,
-                            text=texto_ref.titulo,
-                            bold=True,
-                            italic=True,
-                            alignment=WD_ALIGN_PARAGRAPH.CENTER,
-                            font_name=fonte_principal,
-                            font_size=tamanho_fonte_principal
-                            # Sem recuo aqui
-                        )
+                    # ----------- IMPRESSÃO DO TEXTO DE REFERÊNCIA (título/corpo/legenda) ----------
+                    titulo = texto_ref.get("titulo") if texto_ref else ""
+                    conteudo = str(texto_ref.get("conteudo", "")).strip() if texto_ref else ""
+                    legenda_texto = texto_ref.get("legenda_texto") if texto_ref else ""
+                    tipo_conteudo = texto_ref.get("tipo_conteudo", "") if texto_ref else ""
+
+                    if titulo:
+                        titulo = decrypt_text(titulo)
+                    if conteudo:
+                        conteudo = safe_decrypt(conteudo)
+                    if legenda_texto:
+                        legenda_texto = decrypt_text(legenda_texto)
+
+                    def _strip_html_tags(text):
+                        import re
+                        return re.sub(r'<.*?>', '', text or '').strip()
+
+                    duplica_titulo = False
+                    titulo_str = (titulo or '').strip().lower()
+                    conteudo_inicio = conteudo[:300].strip().lower()
+                    conteudo_inicio_plain = _strip_html_tags(conteudo_inicio)
+                    if titulo_str:
+                        if (titulo_str == conteudo_inicio_plain or titulo_str in conteudo_inicio_plain[:len(titulo_str)+10]):
+                            duplica_titulo = True
+
+                    # Título do texto de referência (NÃO duplicado)
+                    if titulo and not duplica_titulo:
+                        if '<' in titulo:
+                            html_to_docx(doc, titulo, fonte_principal, tamanho_fonte_principal)
+                        else:
+                            p_titulo = doc.add_paragraph()
+                            p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            run = p_titulo.add_run(titulo)
+                            run.bold = True
+                            run.italic = True
                         doc.add_paragraph()
 
-                    # IMPRIME O CORPO DO TEXTO (COM RECUO), USANDO A LÓGICA CORRETA
-                    if texto_ref:
-                        conteudo_ref = str(getattr(texto_ref, "conteudo", "")).strip()
+                    # Corpo do texto de referência
+                    if tipo_conteudo.lower() == "imagem" or conteudo.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        caminho_imagem = texto_ref.get('caminho_imagem_relativo') or conteudo.replace("![](", "").replace(")", "").strip()
+                        if caminho_imagem:
+                            p_img_ref = doc.add_paragraph()
+                            p_img_ref.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            self._add_image_to_paragraph(p_img_ref, caminho_imagem, doc=doc, is_texto_referencia=True)
+                    elif conteudo:
+                        if '<' in conteudo:
+                            html_to_docx(doc, conteudo, fonte_principal, tamanho_fonte_principal)
+                        else:
+                            for paragrafo in conteudo.split('\n'):
+                                if paragrafo.strip():
+                                    p = doc.add_paragraph(paragrafo)
+                                    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                                    p.paragraph_format.first_line_indent = Cm(1.0)
 
-                        # Se for conteúdo formatado
-                        if hasattr(texto_ref, "conteudo_formatado") and texto_ref.conteudo_formatado:
-                            self.inserir_texto_formatado_docx(
-                                doc,
-                                texto_ref.conteudo_formatado,
-                                first_line_indent_cm=1.0,
-                                base_font_size_pt=tamanho_fonte_principal
-                            )
-                        # Se for imagem
-                        elif getattr(texto_ref, "tipo_conteudo", "").lower() == "imagem" or conteudo_ref.lower().endswith(('.png', '.jpg', '.jpeg')):
-    
-                            # --- INÍCIO DA CORREÇÃO PONTUAL ---
-                            
-                            # 1. Determina o caminho correto da imagem de forma inteligente
-                            caminho_da_imagem = getattr(texto_ref, 'caminho_imagem_relativo', None)
-                            if not caminho_da_imagem:
-                                caminho_da_imagem = conteudo_ref.replace("![](", "").replace(")", "").strip()
+                    # Legenda do texto de referência (se houver)
+                    if legenda_texto:
+                        if '<' in legenda_texto:
+                            html_to_docx(doc, legenda_texto, fonte_principal, tamanho_fonte_principal)
+                        else:
+                            p_legenda = doc.add_paragraph()
+                            p_legenda.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                            run = p_legenda.add_run(f"Legenda: {legenda_texto}")
+                            run.italic = True
 
-                            # 2. Insere a imagem usando a variável com o caminho correto
-                            if caminho_da_imagem:
-                                p_img_ref = doc.add_paragraph()
-                                p_img_ref.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                self._add_image_to_paragraph(p_img_ref, caminho_da_imagem, doc=doc, is_texto_referencia=True)
-                        # Se for texto simples
-                        elif conteudo_ref:
-                            # Divide o conteúdo em parágrafos e chama a função para cada um
-                            for paragrafo in conteudo_ref.split('\n'):
-                                if paragrafo.strip(): # Garante que não processamos linhas em branco
-                                    self._add_formatted_paragraph(
-                                        doc,
-                                        text=paragrafo,
-                                        first_line_indent_cm=1.0, # Aplica o recuo de 1cm
-                                        font_name=fonte_principal,
-                                        font_size=tamanho_fonte_principal,
-                                        alignment=WD_ALIGN_PARAGRAPH.JUSTIFY
-                                    )
-
-                    # Adiciona a linha separadora e marca o texto como impresso
                     self._add_separator(doc)
-                    textos_ja_impressos.add(id_texto_ref)
+                    textos_ja_impressos.add(id_ref)
 
+                # IMPRIME AS QUESTÕES DO GRUPO NORMALMENTE
                 for questao in questoes_grupo:
                     current_question_display_number = (ordered_question_ids[-1] + 1) if ordered_question_ids else 1
                     ordered_question_ids.append(current_question_display_number)
                     letra_correta = letras_gabarito_total[idx_global_gabarito]
                     idx_global_gabarito += 1
 
-                    alternativas_orig = list(questao.opcoes)
+                    alternativas_orig = list(get_field(questao, "opcoes", []))
                     if not alternativas_orig:
-                        self.logger.warning(f"Questão ID {questao.id_questao} não possui alternativas, pulando.")
+                        self.logger.warning(f"Questão ID {get_field(questao, 'id_questao', '?')} não possui alternativas, pulando.")
                         continue
 
-                    alternativa_correta = next((alt for alt in alternativas_orig if getattr(alt, "correta", False)), None)
-                    semente_alt = f"{questao.id_questao}-VAR{variacao_num}-ALTS"
+                    alternativa_correta = next((alt for alt in alternativas_orig if get_field(alt, "correta", False)), None)
+                    semente_alt = f"{get_field(questao, 'id_questao', '?')}-VAR{variacao_num}-ALTS"
                     rng_alt = random.Random(semente_alt)
                     alternativas_final = list(alternativas_orig)
                     rng_alt.shuffle(alternativas_final)
 
-                    idx_correta_real = next(i for i, alt in enumerate(alternativas_final) if getattr(alt, "correta", False))
+                    idx_correta_real = next(i for i, alt in enumerate(alternativas_final) if get_field(alt, "correta", False))
                     idx_balanceado = ord(letra_correta) - ord('A')
 
                     if idx_correta_real != idx_balanceado:
@@ -1537,51 +1616,65 @@ class DocxProofGenerator:
 
                     letra_correta_final = chr(ord('A') + idx_correta_real)
                     questao_embaralhada = deepcopy(questao)
-                    questao_embaralhada.opcoes = alternativas_final
+                    if isinstance(questao_embaralhada, dict):
+                        questao_embaralhada["opcoes"] = alternativas_final
+                    else:
+                        questao_embaralhada.opcoes = alternativas_final
 
                     self._add_question_to_doc(
                         doc, questao_embaralhada, current_question_display_number, [],
                         variacao_num=variacao_num,
                         textos_map=textos_referencia_map
                     )
-                    if getattr(questao, "anulada", False):
+                    if get_field(questao, "anulada", False):
                         gabarito_exibido = "ANULADA"
-                    elif getattr(questao, "gabarito_definitivo", None):
-                        gabarito_exibido = questao.gabarito_definitivo.strip().upper()
+                    elif get_field(questao, "gabarito_definitivo", None):
+                        gabarito_exibido = get_field(questao, "gabarito_definitivo", "").strip().upper()
                     else:
                         gabarito_exibido = letra_correta_final
+
+                    codigo_curto = (
+                        get_field(questao, "codigo_curto_questao", "")
+                        or get_field(questao, "codigo_curto", "")
+                        or get_field(get_field(questao, "metadados_questao", {}), "codigo_curto_questao", "")
+                        or get_field(get_field(questao, "metadados_questao", {}), "codigo_curto", "")
+                    )
+
+                    # Descriptografa texto da alternativa correta
+                    texto_opcao_correta = get_field(alternativa_correta, "texto_opcao", "") if alternativa_correta else ""
+                    if texto_opcao_correta:
+                        try:
+                            texto_opcao_correta = decrypt_text(texto_opcao_correta)
+                        except Exception:
+                            pass  # já pode estar descriptografado ou não precisar descriptografar
 
                     answer_key_data.append({
                         "numero_questao_exibido": current_question_display_number,
                         "gabarito_letra_exibida": gabarito_exibido,
-                        "disciplina_nome": getattr(bloco, 'nome_disciplina_prova', 'N/A'),
-                        "texto_opcao_correta_original": alternativa_correta.texto_opcao if alternativa_correta else "",
-                        "questao_id_original": questao.id_questao
+                        "disciplina_nome": (
+                            get_field(bloco, 'nome_disciplina_na_prova', '') or
+                            get_field(bloco, 'nome_disciplina_prova', '') or
+                            get_field(bloco, 'nome_disciplina', '') or
+                            'N/A'
+                        ),
+                        "texto_opcao_correta_original": texto_opcao_correta,
+                        "codigo_curto_questao": get_field(questao, "codigo_curto_questao", ""),
                     })
-            # Verifica se não estamos no último bloco da prova
+
+            # Quebra de bloco
             is_last_block = (bloco_idx == len(blocos_ordenados) - 1)
             if not is_last_block:
                 next_bloco = blocos_ordenados[bloco_idx + 1]
-                is_next_discursive = "discursiva" in getattr(next_bloco, 'nome_disciplina_prova', '').lower()
-
-                # A quebra não é inserida se o próximo bloco for discursivo,
-                # pois ele já força uma nova seção de página inteira.
+                is_next_discursive = "discursiva" in get_field(next_bloco, 'nome_disciplina_prova', '').lower()
                 if not is_next_discursive:
-                    
-                    # --- LÓGICA DE QUEBRA DE BLOCO UNIFICADA ---
-                    # 1. Primeiro, verifica se o usuário QUER uma quebra de bloco.
                     if self.format_options.get("quebra_de_pagina_por_bloco"):
-                        
-                        # 2. Se sim, decide QUAL tipo de quebra usar com base no layout.
                         if self.format_options.get("duas_colunas"):
-                            # Layout de duas colunas -> Quebra de COLUNA
                             last_paragraph = doc.paragraphs[-1]
                             DocxProofGenerator.add_column_break(last_paragraph)
                         else:
-                            # Layout de uma coluna -> Quebra de PÁGINA
                             doc.add_page_break()
-                    # --- FIM DA LÓGICA UNIFICADA ---
-        
+
+        # Discursiva
         if bloco_discursivo is not None:
             nova_secao = doc.add_section(WD_SECTION_START.NEW_PAGE)
             sectPr = nova_secao._sectPr
@@ -1592,7 +1685,7 @@ class DocxProofGenerator:
             sectPr.append(cols)
             self.logger.info("Nova seção criada em layout de uma coluna para discursiva.")
 
-            titulo_discursiva = getattr(bloco_discursivo, 'nome_disciplina_prova', 'PROVA DISCURSIVA').upper()
+            titulo_discursiva = get_field(bloco_discursivo, 'nome_disciplina_prova', 'PROVA DISCURSIVA').upper()
             p_titulo_discursiva = doc.add_paragraph()
             run_titulo_discursiva = p_titulo_discursiva.add_run(titulo_discursiva)
             run_titulo_discursiva.bold = True
@@ -1627,8 +1720,9 @@ class DocxProofGenerator:
             self._add_separator(doc)
             doc.add_paragraph()
             
-            num_questoes_disc = len(bloco_discursivo.questoes)
-            for idx, questao in enumerate(bloco_discursivo.questoes, start=1):
+            questoes_discursivas = get_field(bloco_discursivo, "questoes", [])
+            num_questoes_disc = len(questoes_discursivas)
+            for idx, questao in enumerate(questoes_discursivas, start=1):
                 questao_number_display = idx if num_questoes_disc > 1 else None
                 self._add_question_to_doc(doc, questao, questao_number_display, [], variacao_num)
                 answer_key_data.append({
@@ -1636,26 +1730,42 @@ class DocxProofGenerator:
                     "gabarito_letra_exibida": "",
                     "disciplina_nome": titulo_discursiva,
                     "texto_opcao_correta_original": "",
-                    "questao_id_original": getattr(questao, "id_questao", None)
+                    "questao_id_original": get_field(questao, "id_questao", None)
                 })
             ordered_question_ids.extend(list(range(
                 (ordered_question_ids[-1] + 1) if ordered_question_ids else 1,
-                (ordered_question_ids[-1] + 1) if ordered_question_ids else 1 + len(bloco_discursivo.questoes)
+                (ordered_question_ids[-1] + 1) if ordered_question_ids else 1 + len(questoes_discursivas)
             )))
 
         if bloco_discursivo is not None:
             self.logger.info("Adicionando folha de rascunho pautada...")
             doc.add_page_break()
-            self.adicionar_rascunho_discursiva(doc, total_linhas=num_linhas_rascunho)
+            questoes_discursivas = get_field(bloco_discursivo, "questoes", [])
+            for idx, questao in enumerate(questoes_discursivas, start=1):
+                detalhes = None
+                # Procure o campo detalhes_discursiva ou detalhes_discursiva_model
+                if isinstance(questao, dict):
+                    detalhes = questao.get("detalhes_discursiva") or questao.get("detalhes_discursiva_model")
+                else:
+                    detalhes = getattr(questao, "detalhes_discursiva", None) or getattr(questao, "detalhes_discursiva_model", None)
+                num_linhas = 30  # valor padrão
+                if detalhes:
+                    if isinstance(detalhes, dict):
+                        num_linhas = int(detalhes.get("numero_linhas_resposta") or 30)
+                    else:
+                        num_linhas = int(getattr(detalhes, "numero_linhas_resposta", 30) or 30)
+                self.adicionar_rascunho_discursiva(doc, total_linhas=num_linhas, titulo=f"RASCUNHO DA QUESTÃO DISCURSIVA {idx}")
 
-        config_obj = self.prova_montada.configuracoes
-        if config_obj and config_obj.incluir_folha_rascunho:
+        config_obj = get_field(self.prova_montada, "configuracoes", {})
+        incluir_folha_rascunho = get_field(config_obj, "incluir_folha_rascunho", False)
+        if incluir_folha_rascunho:
             doc.add_page_break()
             self._add_formatted_paragraph(doc, "FOLHA DE RASCUNHO", alignment=WD_ALIGN_PARAGRAPH.CENTER, font_size=Pt(14), bold=True)
 
         output_path = os.path.join(output_dir, f"{base_filename}.docx")
         try:
             doc.save(output_path)
+            print("VOU SALVAR O DOCX AGORA EM:", output_path)
             return output_path, answer_key_data, ordered_question_ids
         except Exception as e:
             self.logger.error(f"Erro ao salvar arquivo DOCX '{output_path}': {e}", exc_info=True)
@@ -1696,131 +1806,138 @@ class DocxProofGenerator:
         textos_map=None
     ):
         from docx.shared import Cm, Pt, RGBColor
+        from backend.app.html_to_docx import html_to_docx
 
-        if not PYTHON_DOCX_AVAILABLE_DG_FLAG:
-            return ""
+        def get_field(obj, field, default=None):
+            if isinstance(obj, dict):
+                return obj.get(field, default)
+            return getattr(obj, field, default)
 
         fonte = self.format_options.get("fonte_principal", "Calibri")
         tamanho_fonte = Pt(self.format_options.get("tamanho_fonte_principal", 11))
-        mostrar_id_questao = self.format_options.get("incluir_id_questao", False)
-        mostrar_gabarito_na_prova = self.format_options.get("incluir_gabarito_prova", False)
+        mostrar_codigo_curto = self.format_options.get("exibir_codigo_curto_questao", False)
 
-        is_discursive = getattr(questao, 'tipo', '').strip().lower() == 'discursiva'
+        tipo_questao_raw = get_field(questao, 'tipo', '')
+        tipo_questao = str(tipo_questao_raw).strip().lower()
+        is_discursive = 'discursiva' in tipo_questao
+        print("DEBUG QUESTAO:", get_field(questao, "id_questao", None), "| tipo:", repr(tipo_questao), "| is_discursive:", is_discursive)
 
-        # Só cria o título se questao_number_display não for None (ou seja, só se deve exibir "Questão X")
+        questao_paragraphs = []
+
+        # TÍTULO DA QUESTÃO
         if questao_number_display is not None:
             texto_titulo = f"Questão {questao_number_display}"
-            if mostrar_id_questao:
-                texto_titulo += f" (ID: {questao.id_questao})"
+            if mostrar_codigo_curto:
+                codigo_curto = (
+                    get_field(questao, 'codigo_curto_questao', '') or
+                    get_field(questao, 'codigo_curto', '') or
+                    get_field(get_field(questao, 'metadados_questao', {}), 'codigo_curto_questao', '') or
+                    get_field(get_field(questao, 'metadados_questao', {}), 'codigo_curto', '')
+                )
+                if codigo_curto:
+                    texto_titulo += f" [{codigo_curto}]"
 
-            # Descobrir a letra do gabarito
-            letra_gabarito = None
-            for i, opcao in enumerate(questao.opcoes):
-                if getattr(opcao, 'correta', False):
-                    letra_gabarito = chr(ord('A') + i)
-                    break
-
-            # Adiciona o gabarito em vermelho no topo, se ativado
             p_titulo = document.add_paragraph()
+            questao_paragraphs.append(p_titulo)
             run_titulo = p_titulo.add_run(texto_titulo)
             run_titulo.bold = True
             run_titulo.font.name = fonte
             run_titulo.font.size = tamanho_fonte
             p_titulo.paragraph_format.space_after = Pt(6)
-            p_titulo.paragraph_format.keep_with_next = True
-            p_titulo.paragraph_format.keep_together = True
-            if mostrar_gabarito_na_prova and letra_gabarito:
-                run_gab = p_titulo.add_run(f" Gabarito: {letra_gabarito}")
-                run_gab.font.color.rgb = RGBColor(255, 0, 0)
-                run_gab.bold = True
 
-        print("DEBUG ENUNCIADO FORMATADO:", getattr(questao, "enunciado_formatado", None))
-        print(f"\n== DEBUG enunciado_formatado Q{questao_number_display} ==\n", getattr(questao, "enunciado_formatado", None), "\n")
-        dados_formatados_brutos = getattr(questao, 'enunciado_formatado', None)
+        # ENUNCIADO
+        dados_formatados_brutos = get_field(questao, 'enunciado_formatado', None)
         dados_limpos = []
-
         if isinstance(dados_formatados_brutos, list):
             for item in dados_formatados_brutos:
                 if isinstance(item, (list, tuple)) and len(item) >= 2:
                     dados_limpos.append([item[0], item[1]])
 
         if dados_limpos:
-            dados_limpos_sem_tags = filtrar_tags_lista_formatada_robusto(dados_limpos)
-            is_discursive = getattr(questao, 'tipo', '').strip().lower() == 'discursiva'
             recuo_a_aplicar = 1.0 if is_discursive else None
+            p_enunciado = document.add_paragraph()
+            questao_paragraphs.append(p_enunciado)
             self.inserir_texto_formatado_docx(
-                document,
-                dados_limpos_sem_tags,
+                p_enunciado,
+                filtrar_tags_lista_formatada_robusto(dados_limpos),
                 first_line_indent_cm=recuo_a_aplicar,
-                mostrar_gabarito=mostrar_gabarito_na_prova
+                mostrar_gabarito=False
             )
-            if document.paragraphs:
-                ultimo_paragrafo_criado = document.paragraphs[-1]
-                ultimo_paragrafo_criado.paragraph_format.keep_together = True
-                ultimo_paragrafo_criado.paragraph_format.keep_with_next = True
-                ultimo_paragrafo_criado.paragraph_format.space_after = Pt(6)
+            p_enunciado.paragraph_format.space_after = Pt(6)
         else:
-            enunciado_limpo = remover_tags_metadados(str(questao.enunciado))
-            paragrafos_enunciado = self._add_text_with_images(document, enunciado_limpo, questao, largura_cm=8.0)
-            if paragrafos_enunciado:
-                for i, p_enun in enumerate(paragrafos_enunciado):
-                    p_enun.paragraph_format.keep_together = True
-                    p_enun.paragraph_format.keep_with_next = True
-                    if i == len(paragrafos_enunciado) - 1:
-                        p_enun.paragraph_format.space_after = Pt(8)
+            enunciado_val = get_field(questao, 'enunciado', '') or ''
+            enunciado_val = decrypt_text(enunciado_val) if enunciado_val else ''
+            if enunciado_val.strip():
+                if '<' in enunciado_val:
+                    html_to_docx(document, enunciado_val, fonte, tamanho_fonte)
+                    for p in document.paragraphs[-1:]:
+                        questao_paragraphs.append(p)
+                else:
+                    parags = self._add_text_with_images(document, enunciado_val, questao, largura_cm=8.0)
+                    questao_paragraphs.extend(parags)
 
-        # Imagem extra do enunciado
-        if isinstance(questao.metadados_questao, dict) and questao.metadados_questao.get('caminho_imagem_enunciado'):
+        caminho_img = get_field(questao, 'caminho_imagem_relativo', None)
+        if caminho_img:
+            norm_path = os.path.normpath(caminho_img)
+            if norm_path.startswith("static" + os.sep):
+                norm_path = norm_path[len("static" + os.sep):]
+            elif norm_path.startswith("static/"):
+                norm_path = norm_path[len("static/"):]
+            elif norm_path.startswith("static\\"):
+                norm_path = norm_path[len("static\\"):]
+
             is_two_columns = self.format_options.get("duas_colunas", False)
             image_width_cm = 8.5 if is_two_columns else 16.0
 
             p_img = document.add_paragraph()
+            questao_paragraphs.append(p_img)
             p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p_img.paragraph_format.keep_together = True
-            p_img.paragraph_format.keep_with_next = True
-            p_img.paragraph_format.space_after = Pt(8)
             self._add_image_to_paragraph(
                 p_img,
-                questao.metadados_questao['caminho_imagem_enunciado'],
+                norm_path,
                 width_cm=image_width_cm
             )
 
-        opcoes_para_imprimir = list(questao.opcoes)
+        # PATCH: NÃO IMPRIME ALTERNATIVAS PARA DISCURSIVA
+        if is_discursive:
+            print("DEBUG: Entrou no bloco da discursiva, NÃO imprimindo alternativas!")
+            self._add_separator(document)
+            return "?"
+
+        # --- DAQUI PRA BAIXO SEGUE NORMAL PARA MULTIPLA ESCOLHA E OUTROS TIPOS ---
+        opcoes_para_imprimir = list(get_field(questao, "opcoes", []))
+        print("DEBUG: opcoes_para_imprimir =", opcoes_para_imprimir)
         if not opcoes_para_imprimir:
-            self.logger.warning(f"Questão ID {questao.id_questao} não possui opções para processar.")
+            self.logger.warning(f"Questão ID {get_field(questao, 'id_questao', '?')} não possui opções para processar.")
             return "?"
 
         correct_option_display_label = "?"
         if self.format_options.get("duas_colunas"):
             largura_maxima_alternativa = 6.0
-            altura_maxima_alternativa = 3.0
         else:
             largura_maxima_alternativa = 12.0
-            altura_maxima_alternativa = 6.0
 
+        p_espaco = document.add_paragraph()
+        questao_paragraphs.append(p_espaco)
+
+        alternativa_paragraphs = []
         for i, opcao_obj in enumerate(opcoes_para_imprimir):
-            texto_opcao_limpo = remover_tags_metadados(getattr(opcao_obj, 'texto_opcao', ''))
+            texto_opcao_val = get_field(opcao_obj, 'texto_opcao', '') or ''
+            texto_opcao_val = decrypt_text(texto_opcao_val) if texto_opcao_val else ''
             letra = alternative_labels[i]
-            self.logger.info(
-                f"Alternativa {letra}: limite imagem = {largura_maxima_alternativa:.2f} x {altura_maxima_alternativa:.2f} cm, duas_colunas = {self.format_options.get('duas_colunas')}"
-            )
 
-            texto_opcao_vazio = not getattr(opcao_obj, 'texto_opcao', '').strip()
-            imagem_opcao = getattr(opcao_obj, 'imagem_path_opcao', None)
+            texto_opcao_vazio = not texto_opcao_val.strip()
+            imagem_opcao = get_field(opcao_obj, 'imagem_path_opcao', None)
+            is_correta = get_field(opcao_obj, 'correta', False)
+            cor_gabarito = RGBColor(255, 0, 0) if is_correta else None
 
-            # ALTERNATIVA SÓ IMAGEM (sem texto)
             if texto_opcao_vazio and imagem_opcao:
-                from docx.enum.table import WD_ALIGN_VERTICAL
+                from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT, WD_ROW_HEIGHT
                 tabela = document.add_table(rows=1, cols=2)
                 tabela.alignment = WD_TABLE_ALIGNMENT.LEFT
                 tabela.autofit = False
                 tabela.rows[0].height_rule = WD_ROW_HEIGHT.AT_LEAST
                 tabela.rows[0].height = Cm(0.5)
-                for celula in tabela.rows[0].cells:
-                    for par in celula.paragraphs:
-                        pf = par.paragraph_format
-                        pf.keep_together = True
-                        pf.keep_with_next = True
                 largura_col_letra = Cm(1.0)
                 largura_col_imagem = Cm(8.0)
                 tabela.columns[0].width = largura_col_letra
@@ -1835,6 +1952,9 @@ class DocxProofGenerator:
                 run_letra.bold = True
                 run_letra.font.name = fonte
                 run_letra.font.size = tamanho_fonte
+                if cor_gabarito:
+                    run_letra.font.color.rgb = cor_gabarito
+                alternativa_paragraphs.append(p_letra)
                 celula_imagem = tabela.cell(0, 1)
                 p_img = celula_imagem.paragraphs[0]
                 p_img.alignment = WD_ALIGN_PARAGRAPH.LEFT
@@ -1844,74 +1964,84 @@ class DocxProofGenerator:
                     doc=document,
                     width_cm=largura_maxima_alternativa
                 )
+                alternativa_paragraphs.append(p_img)
             else:
-                # ALTERNATIVA COM TEXTO (SIMPLES OU FORMATADO)
                 p_opcao = document.add_paragraph()
+                alternativa_paragraphs.append(p_opcao)
                 p_opcao.paragraph_format.left_indent = Cm(0.8)
                 p_opcao.paragraph_format.first_line_indent = Cm(-0.8)
-                p_opcao.paragraph_format.keep_together = True
-                if i < len(opcoes_para_imprimir) - 1:
-                    p_opcao.paragraph_format.keep_with_next = True
 
                 run_letra = p_opcao.add_run(f"{letra})\t")
                 run_letra.font.name = fonte
                 run_letra.font.size = tamanho_fonte
                 run_letra.bold = True
+                if cor_gabarito:
+                    run_letra.font.color.rgb = cor_gabarito
 
-                if mostrar_gabarito_na_prova and getattr(opcao_obj, 'correta', False):
-                    run_letra.font.color.rgb = RGBColor(255, 0, 0)
-
-                if hasattr(opcao_obj, "texto_opcao_formatado") and opcao_obj.texto_opcao_formatado:
-                    lista_formatada = [
-                        [item[0], item[1].rstrip('\n')] if item[0] == 'text' else item
-                        for item in opcao_obj.texto_opcao_formatado
-                    ]
-                    lista_formatada_sem_tags = filtrar_tags_lista_formatada(lista_formatada)
+                texto_opcao_formatado = get_field(opcao_obj, "texto_opcao_formatado", None)
+                if texto_opcao_formatado:
                     self.inserir_texto_formatado_docx(
                         p_opcao,
-                        lista_formatada_sem_tags,
-                        correta=getattr(opcao_obj, 'correta', False) if mostrar_gabarito_na_prova else False
+                        texto_opcao_formatado,
+                        correta=is_correta,
+                        mostrar_gabarito=False
                     )
                 else:
-                    texto_opcao_limpo = remover_tags_metadados(getattr(opcao_obj, 'texto_opcao', '').rstrip('\n'))
-                    run_texto = p_opcao.add_run(texto_opcao_limpo)
-                    if mostrar_gabarito_na_prova and getattr(opcao_obj, 'correta', False):
-                        run_texto.font.color.rgb = RGBColor(255, 0, 0)
+                    if texto_opcao_val.strip():
+                        run_txt = p_opcao.add_run(texto_opcao_val)
+                        if cor_gabarito:
+                            run_txt.font.color.rgb = cor_gabarito
+                    else:
+                        texto_opcao_limpo = f"<<ALTERNATIVA SEM TEXTO: {get_field(opcao_obj, 'id_opcao_questao', '')}>>"
+                        run_txt = p_opcao.add_run(texto_opcao_limpo)
+                        if cor_gabarito:
+                            run_txt.font.color.rgb = cor_gabarito
 
                 if imagem_opcao:
                     p_img_op = document.add_paragraph()
                     p_img_op.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    p_img_op.paragraph_format.keep_together = True
-                    if i < len(opcoes_para_imprimir) - 1:
-                        p_img_op.paragraph_format.keep_with_next = True
-
                     self._add_image_to_paragraph(
                         p_img_op,
                         imagem_opcao,
                         doc=document,
                         width_cm=largura_maxima_alternativa
                     )
+                    alternativa_paragraphs.append(p_img_op)
 
-            if getattr(opcao_obj, 'correta', False):
+            if is_correta:
                 correct_option_display_label = letra
 
-        print(f"\n== DEBUG conteudo_formatado Q{questao_number_display} ==\n", getattr(questao, "conteudo_formatado", None), "\n")
-        if hasattr(questao, "conteudo_formatado") and questao.conteudo_formatado:
+        for idx, p in enumerate(alternativa_paragraphs):
+            p.paragraph_format.keep_together = True
+            if idx < len(alternativa_paragraphs) - 1:
+                p.paragraph_format.keep_with_next = True
+
+        for idx, p in enumerate(questao_paragraphs):
+            p.paragraph_format.keep_together = True
+            if idx < len(questao_paragraphs) - 1 or alternativa_paragraphs:
+                p.paragraph_format.keep_with_next = True
+
+        conteudo_formatado = get_field(questao, "conteudo_formatado", None)
+        if conteudo_formatado:
             p_ref = document.add_paragraph()
             p_ref.paragraph_format.left_indent = Cm(1.0)
             p_ref.paragraph_format.keep_together = True
             lista_formatada = [
-                [item[0], item[1].rstrip('\n')] if item[0] == 'text' else item
-                for item in questao.conteudo_formatado
+                [item[0], (item[1] or '').rstrip('\n')] if item[0] == 'text' else item
+                for item in conteudo_formatado
             ]
             lista_formatada_sem_tags = filtrar_tags_lista_formatada(lista_formatada)
             self.inserir_texto_formatado_docx(p_ref, lista_formatada_sem_tags)
-        elif hasattr(questao, "referencia") and questao.referencia:
+        elif get_field(questao, "referencia", None):
             p_ref = document.add_paragraph()
             p_ref.paragraph_format.left_indent = Cm(1.0)
             p_ref.paragraph_format.keep_together = True
-            ref_limpa = remover_tags_metadados(str(questao.referencia).rstrip('\n'))
-            p_ref.add_run(ref_limpa)
+            ref_val = get_field(questao, "referencia", "") or ""
+            if '<' in ref_val:
+                html_to_docx(document, ref_val, fonte, tamanho_fonte)
+            else:
+                ref_limpa = remover_tags_metadados(str(ref_val).rstrip('\n'))
+                p_ref.add_run(ref_limpa)
 
         self._add_separator(document)
         return correct_option_display_label
@@ -2247,7 +2377,6 @@ class DocumentGenerator:
     Classe principal para orquestrar a geração de documentos de prova.
     """
     def __init__(self, templates_base_dir: str,
-                 event_manager_instance: EventManagerTypeInternal, # Renomeado para evitar conflito com módulo
                  logger: logging.Logger,
                  core_elements_module: Any, # Módulo elements
                  config: Optional[dict] = None, 
@@ -2255,7 +2384,6 @@ class DocumentGenerator:
         
         self.logger = logger.getChild(self.__class__.__name__)
         self.templates_base_dir = templates_base_dir
-        self.event_manager = event_manager_instance # Usar o nome corrigido
         self.core_elements = core_elements_module 
         self.config = config if config else {} 
         self.app_instance = app_instance
@@ -2376,101 +2504,109 @@ class DocumentGenerator:
             return False
     
 
-    def gerar_prova_docx(self, prova_montada: 'ProvaMontadaType', nome_cargo: str, variacao_num: int, output_folder: str, format_options: dict, textos_map: dict) -> Optional[str]:
+    def gerar_prova_docx(
+        self,
+        prova_montada: 'ProvaMontadaType',
+        nome_cargo: str,
+        variacao_num: int,
+        output_folder: str,
+        format_options: dict,
+        textos_map: dict
+    ) -> Optional[str]:
         """
-        VERSÃO FINAL: Gera um único arquivo DOCX para uma variação de prova, com embaralhamento por bloco,
-        e textos de referência inseridos antes da primeira questão que os utiliza.
+        Gera um único arquivo DOCX para uma variação de prova usando o motor centralizado
+        (generate_docx_and_answer_key_data), com todos os recursos avançados.
         """
-        self.logger.info(f"Gerador: Iniciando DOCX para '{nome_cargo}' - Variação {variacao_num}")
-        
-        try:
-            evento = self.event_manager.get_event_by_id(prova_montada.id_evento)
-            evento_nome = getattr(evento, 'nome_evento', "Evento")
-        except Exception as e:
-            self.logger.error(f"Erro ao buscar nome do evento: {e}")
-            evento_nome = "EventoDesconhecido"
+        import traceback
 
-        nome_arquivo_docx = sanitize_filename(f"PROVA_{evento_nome}_{nome_cargo}_TIPO_{variacao_num}.docx")
-        caminho_completo_docx = os.path.join(output_folder, nome_arquivo_docx)
+        print("\n=== [DEBUG] INICIANDO gerar_prova_docx ===")
+        print("prova_montada keys:", list(prova_montada.keys()) if isinstance(prova_montada, dict) else type(prova_montada))
+        print("nome_cargo:", nome_cargo)
+        print("variacao_num:", variacao_num)
+        print("output_folder:", output_folder)
+        print("format_options:", format_options)
+        print("template_path:", format_options.get("template_path"))
+        print("image_storage_base_dir:", self.image_storage_base_dir)
+        print("textos_map:", f"{len(textos_map) if textos_map else 0} textos")
+        print("prova_montada['evento']:", prova_montada.get('evento'))
+        print("prova_montada['cargo']:", prova_montada.get('cargo'))
+        print("== FIM DOS PRINTS DE CONTEXTO ==\n")
 
-        document = None
-        template_path = format_options.get("template_path")
-        if template_path and os.path.exists(template_path):
-            try:
-                document = Document(template_path)
-                self.logger.info(f"Usando template DOCX (timbrado): {template_path}")
-            except Exception as e_template:
-                self.logger.error(f"FALHA AO CARREGAR TEMPLATE '{template_path}': {e_template}. Um documento em branco será usado.", exc_info=True)
-        
-        if document is None:
-            document = Document()
+        evento_obj = prova_montada.get("evento")
+        cargo_obj = prova_montada.get("cargo")
+        assert evento_obj is not None, "Evento não presente em prova_montada!"
+        assert cargo_obj is not None, "Cargo não presente em prova_montada!"
 
-        # --- ESCRITA DO CONTEÚDO ---
-        document.add_heading(f"Prova - {evento_nome}", level=0)
-        document.add_heading(f"Cargo: {nome_cargo} (Tipo {variacao_num})", level=1)
-        if getattr(prova_montada, 'instrucoes_gerais', None):
-            document.add_paragraph(prova_montada.instrucoes_gerais)
-        document.add_page_break()
+        # --- PATCH LOGO ---
+        company = None
 
-        # REMOVIDO: O bloco que imprimia todos os textos aqui foi retirado.
-        
-        # --- LÓGICA DE GERAÇÃO DAS QUESTÕES ---
-        definicao_geracao = prova_montada.metadados_prova.get("definicao_geracao", {})
-        num_questao_global = 0
-        
-        # ADICIONADO: Conjunto para rastrear textos já impressos nesta prova
-        textos_ja_impressos = set()
-        blocos_ordenados = sorted(prova_montada.blocos_questoes, key=lambda b: b.ordem_bloco or 999)
+        print("cargo_obj:", cargo_obj)
+        if isinstance(cargo_obj, dict):
+            # Verifica se o campo 'company' existe no dict
+            company = cargo_obj.get("company")
+            print("cargo_obj.get('company'):", company)
+            if company and isinstance(company, dict):
+                print("cargo_obj['company'].get('company_logo_path'):", company.get("company_logo_path"))
+        else:
+            company = getattr(cargo_obj, "company", None)
+            print("getattr(cargo_obj, 'company', None):", company)
+            if company:
+                print("getattr(company, 'company_logo_path', None):", getattr(company, "company_logo_path", None))
 
-        for bloco in blocos_ordenados:
-            nome_bloco = getattr(bloco, 'nome_disciplina_prova', 'Bloco de Questões').upper()
-            document.add_heading(nome_bloco, level=2)
-            document.add_paragraph()
+        # Se não estiver dentro do cargo, tente buscar de outra fonte aqui, se necessário
 
-            questoes_do_bloco = list(getattr(bloco, 'questoes', []))
-            if definicao_geracao.get("embaralhar_questoes", False):
-                semente_questoes = f"{prova_montada.id_prova_montada}-{variacao_num}-{bloco.id_bloco}"
-                self.logger.info(f"Embaralhando {len(questoes_do_bloco)} questões para o bloco '{nome_bloco}'.")
-                random.seed(semente_questoes)
-                random.shuffle(questoes_do_bloco)
-                random.seed()
+        logo_path_db = None
+        if company:
+            if isinstance(company, dict):
+                logo_path_db = company.get("company_logo_path", None)
+            else:
+                logo_path_db = getattr(company, "company_logo_path", None)
 
-            for questao_obj in questoes_do_bloco:
-                codigo_ref = None
-                if isinstance(getattr(questao_obj, 'metadados_questao', None), dict):
-                    codigo_ref = questao_obj.metadados_questao.get("codigo_ref_vinculado_gerado")
+        print("logo_path_db:", logo_path_db)
 
-                if codigo_ref and codigo_ref in textos_map and codigo_ref not in textos_ja_impressos:
-                    texto_ref = textos_map[codigo_ref]
-                    self.logger.info(f"Adicionando Texto de Referência '{texto_ref.codigo_ref}' antes da questão {num_questao_global + 1}.")
-                    p_aviso = document.add_paragraph()
-                    p_aviso.add_run("LEIA O TEXTO ABAIXO PARA RESPONDER À(S) QUESTÃO(ÕES) A SEGUIR.").bold = True
-                    if getattr(texto_ref, "conteudo_formatado", None):
-                        p_ref = document.add_paragraph()
-                        self.inserir_texto_formatado_docx(p_ref, texto_ref.conteudo_formatado)
-                    else:
-                        document.add_paragraph(getattr(texto_ref, "conteudo", ""))
-                    document.add_paragraph()
-                    textos_ja_impressos.add(codigo_ref)
+        logo_path = resolve_logo_path(logo_path_db)
+        print("LOGO_PATH_ABS:", logo_path, "EXISTS:", os.path.exists(logo_path) if logo_path else False)
+        # --- FIM PATCH LOGO ---
 
-                # Agora, sempre incrementa e adiciona a questão
-                num_questao_global += 1
-                self._adicionar_questao_ao_docx(
-                    document, 
-                    questao_obj, 
-                    num_questao_global, 
-                    definicao_geracao, 
-                    prova_montada.id_prova_montada, 
-                    variacao_num,
-                    textos_map=textos_map
-                )
+        nome_base = sanitize_filename(
+            f"PROVA_{evento_obj['nome_evento']}_{nome_cargo}_TIPO_{variacao_num}"
+        )
 
         try:
-            document.save(caminho_completo_docx)
-            self.logger.info(f"Gerador: Prova DOCX salva em: {caminho_completo_docx}")
-            return caminho_completo_docx
+            docx_proof_gen = DocxProofGenerator(
+                prova_montada_obj=prova_montada,
+                evento_obj=evento_obj,
+                cargo_obj=cargo_obj,
+                format_options=format_options,
+                image_storage_base_dir="static",
+                template_prova_path=format_options.get("template_path"),
+                logger=self.logger,
+                core_elements_module=self.core_elements,
+                app_instance=self.app_instance,
+                logo_path_override=logo_path,  # <-- ESSENCIAL!
+            )
+
+            print("[DEBUG] Instanciado DocxProofGenerator.")
+
+            output_path, answer_key_data, ordered_questions = docx_proof_gen.generate_docx_and_answer_key_data(
+                output_dir=output_folder,
+                base_filename=nome_base,
+                variacao_num=variacao_num,
+                num_linhas_rascunho=format_options.get("num_linhas_rascunho", 30),
+                # textos_ja_impressos pode ser passado se necessário
+            )
+
+            print(f"[DEBUG] Retorno do generate_docx_and_answer_key_data: output_path={output_path}")
+            if not output_path:
+                print("[ERRO] Não foi possível gerar o DOCX.")
+                return None
+
+            print(f"[SUCESSO] DOCX GERADO EM: {output_path}")
+            return output_path
+
         except Exception as e:
-            self.logger.error(f"Gerador: Erro CRÍTICO ao salvar DOCX: {e}", exc_info=True)
+            print("ERRO AO EXPORTAR PROVA:", e)
+            traceback.print_exc()
             return None
     
     def exporta_dados_capas_completos(
@@ -2683,6 +2819,27 @@ class DocumentGenerator:
         total_cargos_a_processar = len(provas_montadas_selecionadas_map)
         cargo_processado_count = 0
 
+        def resolve_capa_template_path(cover_pdf_paths):
+            # Se vier como string de lista, parse
+            if isinstance(cover_pdf_paths, str):
+                try:
+                    paths = json.loads(cover_pdf_paths)
+                    if isinstance(paths, str):
+                        paths = [paths]
+                except Exception:
+                    paths = [cover_pdf_paths]
+            elif isinstance(cover_pdf_paths, list):
+                paths = cover_pdf_paths
+            else:
+                paths = []
+
+            if paths:
+                template_path = os.path.normpath(paths[0])
+                if not os.path.isabs(template_path):
+                    template_path = os.path.abspath(template_path)
+                return template_path
+            return None
+
         def preencher_capas_java(template_pdf, dados_json, saida_dir):
             os.makedirs(saida_dir, exist_ok=True)
             comando = [
@@ -2766,8 +2923,8 @@ class DocumentGenerator:
             gabaritos_por_variacao: Dict[str, List[Dict[str, Any]]] = {}
             questoes_ordenadas_para_cargo: List[str] = [] 
 
-            lista_de_capas = getattr(self.cargo_atual, 'cover_pdf_paths', None)
-            path_capa_template_do_cargo = lista_de_capas[0] if isinstance(lista_de_capas, list) and lista_de_capas else None
+            cover_pdf_paths = getattr(self.cargo_atual, 'cover_pdf_paths', None)
+            template_folha_rosto_pdf = resolve_capa_template_path(cover_pdf_paths)
             identificador_base = getattr(self.prova_montada_atual, "identificador_prova", None) or "PADRAO"
 
             for variacao_num in range(1, num_variacoes_prova + 1):
@@ -2908,7 +3065,7 @@ class DocumentGenerator:
                         with open(json_capa_path, "w", encoding="utf-8") as f:
                             json.dump([dados_para_preencher], f, ensure_ascii=False, indent=2)
 
-                        preencher_capas_java(resource_path(path_capa_template_do_cargo), json_capa_path, dir_capas_java)
+                        preencher_capas_java(resource_path(template_folha_rosto_pdf), json_capa_path, dir_capas_java)
 
                         capa_java_gerada = os.path.join(dir_capas_java, f"{nome_base_final}_capa.pdf")
                         if not os.path.exists(capa_java_gerada):
@@ -2992,19 +3149,26 @@ class DocumentGenerator:
         return caminho_final_pacote, todos_arquivos_finais_gerados_no_lote, gabaritos_dados_agregados_lote
     
 
-    def gerar_gabaritos_balanceados_por_variacao(self, evento, cargo, num_linhas_rascunho=30):
+    def gerar_gabaritos_balanceados_por_variacao(self, prova_montada, num_linhas_rascunho=30):
         """
-        Gera o dicionário de gabaritos balanceados por variação (Tipo A, Tipo B, ...) para um cargo específico.
+        Gera o dicionário de gabaritos balanceados por variação (Tipo A, Tipo B, ...) para uma prova montada específica.
         Retorna: {'Tipo A': [...], 'Tipo B': [...], ...}
         """
-        provas_por_cargo_map = getattr(evento, 'provas_montadas_por_cargo', {})
-        prova_montada = provas_por_cargo_map.get(cargo.id_cargo)
         if not prova_montada:
-            self.logger.error(f"Nenhuma prova montada encontrada para Cargo ID: {cargo.id_cargo}")
+            self.logger.error("Nenhuma prova montada recebida para geração de gabaritos.")
             return {}
 
         definicao_geracao = getattr(prova_montada, 'metadados_prova', {}).get("definicao_geracao", {})
         num_variacoes_prova = definicao_geracao.get("num_variacoes", 1)
+
+        # Recupere evento_obj e cargo_obj se eles existirem como atributo ou chave no dict
+        evento_obj = getattr(prova_montada, 'evento', None)
+        if evento_obj is None and isinstance(prova_montada, dict):
+            evento_obj = prova_montada.get('evento')
+
+        cargo_obj = getattr(prova_montada, 'cargo', None)
+        if cargo_obj is None and isinstance(prova_montada, dict):
+            cargo_obj = prova_montada.get('cargo')
 
         gabaritos_por_variacao = {}
         for variacao_num in range(1, num_variacoes_prova + 1):
@@ -3012,8 +3176,8 @@ class DocumentGenerator:
             # Instancia um gerador para cada variação
             docx_gen = DocxProofGenerator(
                 prova_montada_obj=prova_montada,
-                evento_obj=evento,
-                cargo_obj=cargo,
+                evento_obj=evento_obj,
+                cargo_obj=cargo_obj,
                 format_options=definicao_geracao,
                 image_storage_base_dir=self.image_storage_base_dir,
                 logger=self.logger,

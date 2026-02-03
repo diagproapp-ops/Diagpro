@@ -1,0 +1,384 @@
+def gerar_pacote_provas_completo(self, evento_id_str: str,
+                               provas_montadas_selecionadas_map: Dict[str, ProvaMontadaType],
+                               candidatos_data_por_cargo: Dict[str, List[Dict[str,str]]],
+                               output_dir_base_lote_param: str,
+                               format_options_gerais: dict,
+                               gerar_pdf_final_global: bool,
+                               manter_docx_corpo_global: bool,
+                               gerar_zip_final_global: bool,
+                               gerar_gabarito_simplificado_global: bool,
+                               template_prova_path_override: Optional[str] = None, # <-- AGORA NO FINAL
+                               template_capa_pacote_override: Optional[str] = None, # <-- PARÂMETRO ADICIONADO AQUI
+                               app_progress_callback: Optional[Callable] = None,
+                               **kwargs) -> Tuple[Optional[str], List[str], List[str]]:
+        """
+        Gera um pacote completo de provas para um evento, processando múltiplos cargos e suas provas montadas.
+        Retorna: caminho do ZIP/diretório final, lista de caminhos de gabaritos gerados, lista de arquivos de prova gerados.
+        """
+        self._log_ui(f"Iniciando geração de pacote completo para Evento ID: {evento_id_str}", "info", progress=0)
+        os.makedirs(output_dir_base_lote_param, exist_ok=True)
+        self.output_dir_lote = output_dir_base_lote_param # Define o diretório base para este lote
+
+        todos_arquivos_finais_gerados_no_lote: List[str] = []
+        todos_gabaritos_gerados_no_lote: List[str] = []
+        erros_ocorridos: List[str] = []
+
+        total_cargos_a_processar = len(provas_montadas_selecionadas_map)
+        cargo_processado_count = 0
+
+        for cargo_id_str, prova_montada_obj_selecionada in provas_montadas_selecionadas_map.items():
+            cargo_processado_count += 1
+            self.logger.info(f"Processando Cargo ID: {cargo_id_str} ({cargo_processado_count}/{total_cargos_a_processar})")
+            self._update_progress(cargo_processado_count, total_cargos_a_processar, f"Processando Cargo ID: {cargo_id_str}")
+
+            # 1. Atualizar contexto para o cargo e prova montada atuais
+            # O prova_montada_id é o ID da ProvaMontadaType específica.
+            prova_montada_id_especifica = getattr(prova_montada_obj_selecionada, 'id_prova_montada', None)
+            if not self._atualizar_contexto_geradores(
+                evento_id_str, 
+                cargo_id_str, 
+                prova_montada_id=prova_montada_id_especifica, 
+                format_options_override=format_options_gerais,
+                template_prova_path_override=template_prova_path_override # <<-- ADICIONE ESTE PARÂMETRO
+            ):
+                msg_erro_ctx = f"Falha ao atualizar contexto para Cargo ID {cargo_id_str}. Pulando este cargo."
+                self.logger.error(msg_erro_ctx)
+                self._log_ui(msg_erro_ctx, "error")
+                erros_ocorridos.append(msg_erro_ctx)
+                continue # Pula para o próximo cargo
+
+            if not self.docx_proof_generator or not self.evento_atual or not self.cargo_atual or not self.prova_montada_atual:
+                msg_erro_comp = f"Componentes de geração não inicializados corretamente para Cargo ID {cargo_id_str} após atualização de contexto. Pulando."
+                self.logger.critical(msg_erro_comp)
+                self._log_ui(msg_erro_comp, "critical")
+                erros_ocorridos.append(msg_erro_comp)
+                continue
+
+            # Diretório de saída específico para este cargo dentro do lote
+            nome_cargo_sanitizado = sanitize_filename(self.cargo_atual.nome_cargo if self.cargo_atual else f"cargo_{cargo_id_str}")
+            dir_saida_cargo = os.path.join(self.output_dir_lote, nome_cargo_sanitizado)
+            os.makedirs(dir_saida_cargo, exist_ok=True)
+
+            # Configurações específicas da prova_montada_obj_selecionada (podem sobrescrever as globais)
+            # --- LÓGICA DE CONFIGURAÇÃO CORRIGIDA ---
+            # Lê as definições do local correto: metadados_prova['definicao_geracao']
+            definicoes_geracao = prova_montada_obj_selecionada.metadados_prova.get("definicao_geracao", {})
+
+            # Usa os valores salvos, com um fallback para os valores padrão
+            gerar_pdf_final_local = definicoes_geracao.get('exportar_para_pdf', gerar_pdf_final_global)
+            manter_docx_corpo_local = definicoes_geracao.get('manter_arquivos_docx_individuais', manter_docx_corpo_global)
+            num_variacoes_prova = definicoes_geracao.get('num_variacoes', 1)
+            
+            # Atualiza o objeto de configurações da prova com as opções de embaralhamento para uso posterior
+            # Isso garante que a lógica de semente que já fizemos funcione corretamente
+            if not hasattr(prova_montada_obj_selecionada, 'configuracoes'):
+                prova_montada_obj_selecionada.configuracoes = self.core_elements.ConfiguracoesProvaType()
+
+            prova_montada_obj_selecionada.configuracoes.embaralhar_questoes = definicoes_geracao.get('embaralhar_questoes', False)
+            prova_montada_obj_selecionada.configuracoes.embaralhar_alternativas = definicoes_geracao.get('embaralhar_alternativas', False)
+
+
+            # 2. Gerar o(s) corpo(s) da prova em DOCX e o gabarito base para esta prova montada
+            # Se houver múltiplas variações (ex: Tipo A, B, C) definidas na prova_montada_obj_selecionada,
+            # esta parte precisa gerar cada uma delas.
+            # Por simplicidade, vamos assumir que `generate_docx_and_answer_key_data` lida com UMA variação por vez
+            # baseada no estado de `self.prova_montada_atual` e suas configs de embaralhamento.
+            
+            lista_corpos_docx_gerados_para_cargo: List[str] = []
+            dados_gabarito_mestre_para_cargo: List[Dict[str, Any]] = []
+            questoes_ordenadas_para_cargo: List[str] = [] # IDs das questões na ordem do DOCX
+
+            # ####################################################################
+            # # MODIFICAÇÃO 1: PREPARAR A CAPA PARA O CARGO
+            # ####################################################################
+            lista_de_capas = getattr(self.cargo_atual, 'cover_pdf_paths', None)
+        
+            # Pega o PRIMEIRO caminho da lista, se a lista existir e não estiver vazia
+            path_capa_template_do_cargo = lista_de_capas[0] if isinstance(lista_de_capas, list) and lista_de_capas else None
+            
+            for variacao_num in range(1, num_variacoes_prova + 1):
+                identificador_variacao_pm = self.prova_montada_atual.identificador_prova or "PADRAO"
+                if num_variacoes_prova > 1:
+                    # Adicionar sufixo de variação se não estiver já no identificador da prova montada
+                    if not any(suf in identificador_variacao_pm.upper() for suf in [f"TIPO {chr(ord('A') + variacao_num - 1)}", f"_{chr(ord('A') + variacao_num - 1)}"]):
+                         sufixo_variacao = f"_TIPO_{chr(ord('A') + variacao_num - 1)}" if variacao_num <= 26 else f"_VAR_{variacao_num}"
+                         identificador_final_variacao = f"{identificador_variacao_pm}{sufixo_variacao}"
+                    else:
+                         identificador_final_variacao = identificador_variacao_pm
+                else:
+                    identificador_final_variacao = identificador_variacao_pm
+
+                # Nome base para o arquivo DOCX desta variação
+                base_filename_docx_variacao = sanitize_filename(f"CORPO_PROVA_{self.evento_atual.nome_curto_evento}_{self.cargo_atual.codigo_cargo}_{identificador_final_variacao}")
+                
+                self._log_ui(f"Gerando DOCX variação '{identificador_final_variacao}' para {nome_cargo_sanitizado}...", "debug")
+                docx_path_variacao, gabarito_data_variacao, q_ids_ordenados_variacao = self.docx_proof_generator.generate_docx_and_answer_key_data(
+                    output_dir=dir_saida_cargo, # Salva DOCX no subdir do cargo
+                    base_filename=base_filename_docx_variacao
+                )
+
+                if docx_path_variacao:
+                    lista_corpos_docx_gerados_para_cargo.append(docx_path_variacao)
+                    if not dados_gabarito_mestre_para_cargo: # Pega o gabarito da primeira variação como base
+                        dados_gabarito_mestre_para_cargo = gabarito_data_variacao
+                        questoes_ordenadas_para_cargo = q_ids_ordenados_variacao # E a ordem das questões
+                    self._log_ui(f"DOCX '{os.path.basename(docx_path_variacao)}' gerado.", "info")
+                else:
+                    msg_erro_docx_var = f"Falha ao gerar DOCX variação '{identificador_final_variacao}' para {nome_cargo_sanitizado}. Pulando esta variação."
+                    self.logger.error(msg_erro_docx_var)
+                    self._log_ui(msg_erro_docx_var, "error")
+                    erros_ocorridos.append(msg_erro_docx_var)
+                    continue # Pula para a próxima variação ou cargo
+
+            if not lista_corpos_docx_gerados_para_cargo:
+                msg_erro_sem_docx = f"Nenhum corpo de prova DOCX foi gerado para o Cargo ID {cargo_id_str}. Pulando geração de PDFs e gabaritos para este cargo."
+                self.logger.error(msg_erro_sem_docx)
+                self._log_ui(msg_erro_sem_docx, "error")
+                erros_ocorridos.append(msg_erro_sem_docx)
+                continue # Pula para o próximo cargo
+
+
+            # 3. Gerar arquivos de Gabarito (CSV) para este cargo
+            if dados_gabarito_mestre_para_cargo:
+                num_total_questoes_cargo = len(dados_gabarito_mestre_para_cargo) # Ou pegar de config_prova
+                
+                gab_completo_filename = sanitize_filename(f"GABARITO_COMPLETO_{self.evento_atual.nome_curto_evento}_{self.cargo_atual.codigo_cargo}.csv")
+                gab_completo_path = os.path.join(dir_saida_cargo, gab_completo_filename)
+                if self.answer_key_generator.generate_complete_csv(gab_completo_path, dados_gabarito_mestre_para_cargo):
+                    todos_gabaritos_gerados_no_lote.append(gab_completo_path)
+                    todos_arquivos_finais_gerados_no_lote.append(gab_completo_path) # Adicionar ao ZIP
+                    self._log_ui(f"Gabarito completo para {nome_cargo_sanitizado} gerado.", "info")
+
+                if gerar_gabarito_simplificado_global: # Usa a flag global ou local se definida
+                    gab_simples_filename = sanitize_filename(f"GABARITO_SIMPLES_{self.evento_atual.nome_curto_evento}_{self.cargo_atual.codigo_cargo}.csv")
+                    gab_simples_path = os.path.join(dir_saida_cargo, gab_simples_filename)
+                    if self.answer_key_generator.generate_simple_csv_v2(gab_simples_path, dados_gabarito_mestre_para_cargo, num_total_questoes_cargo):
+                        todos_gabaritos_gerados_no_lote.append(gab_simples_path)
+                        todos_arquivos_finais_gerados_no_lote.append(gab_simples_path) # Adicionar ao ZIP
+                        self._log_ui(f"Gabarito simples para {nome_cargo_sanitizado} gerado.", "info")
+            else:
+                self._log_ui(f"Sem dados de gabarito para {nome_cargo_sanitizado}.", "warning")
+
+
+            # 4. Converter DOCX para PDF e aplicar folhas de rosto (se houver candidatos)
+            candidatos_do_cargo_atual = candidatos_data_por_cargo.get(cargo_id_str, [])
+            template_folha_rosto_pdf = getattr(self.cargo_atual, 'cover_pdf_paths', None)
+            
+
+            if gerar_pdf_final_local:
+                # Para cada corpo DOCX gerado (cada variação de prova)
+                for idx_variacao, docx_corpo_path in enumerate(lista_corpos_docx_gerados_para_cargo):
+                    identificador_variacao_atual = os.path.basename(docx_corpo_path).replace("CORPO_PROVA_", "").replace(".docx", "") # Extrai identificador
+                    
+                    self._log_ui(f"Convertendo DOCX '{os.path.basename(docx_corpo_path)}' para PDF...", "debug")
+                    pdf_corpo_path = self.pdf_converter.convert_to_pdf(docx_corpo_path, dir_saida_cargo)
+                    if not pdf_corpo_path:
+                        msg_erro_pdf_conv = f"Falha ao converter DOCX '{os.path.basename(docx_corpo_path)}' para PDF. Pulando PDFs para esta variação."
+                        self.logger.error(msg_erro_pdf_conv)
+                        self._log_ui(msg_erro_pdf_conv, "error")
+                        erros_ocorridos.append(msg_erro_pdf_conv)
+                        continue # Pula esta variação de DOCX
+
+                    # ADICIONE ESTA LINHA:
+                    path_pdf_final_variacao = "" 
+
+                    # Se houver candidatos, gerar um PDF final para cada um com folha de rosto
+                    if candidatos_do_cargo_atual and template_folha_rosto_pdf and os.path.exists(resource_path(template_folha_rosto_pdf)):
+                        self._log_ui(f"Gerando PDFs individuais com folha de rosto para {len(candidatos_do_cargo_atual)} candidatos ({identificador_variacao_atual})...", "info")
+                        for candidato_data in candidatos_do_cargo_atual:
+                            nome_candidato = candidato_data.get(COLUNA_NOME_COMPLETO_CSV, "NOME_NAO_ENCONTRADO")
+                            id_candidato = candidato_data.get(COLUNA_ID_CANDIDATO_CSV, "ID_NAO_ENCONTRADO")
+                            
+                            nome_pdf_final_candidato = sanitize_filename(f"PROVA_{identificador_variacao_atual}_{id_candidato}_{nome_candidato}.pdf")
+                            path_pdf_final_candidato = os.path.join(dir_saida_cargo, nome_pdf_final_candidato)
+                            
+                            # Dados para preencher a folha de rosto
+                            dados_folha_rosto = {
+                                PDF_FIELD_NOME_CANDIDATO: nome_candidato,
+                                PDF_FIELD_INSCRICAO: id_candidato,
+                                PDF_FIELD_CARGO_TIPO: f"{self.cargo_atual.nome_cargo} ({identificador_variacao_atual})",
+                                # Adicionar mais campos conforme o template da folha de rosto
+                                "DATA_PROVA": datetime.now().strftime("%d/%m/%Y"), # Exemplo
+                                "EVENTO_NOME": self.evento_atual.nome_evento, # Exemplo
+                                PDF_FIELD_FRASE: self.prova_montada_atual.frase_assinatura_folha_rosto if self.prova_montada_atual else ""
+                            }
+                            
+                            temp_folha_rosto_preenchida = os.path.join(dir_saida_cargo, f"temp_capa_{id_candidato}.pdf")
+                            if self.archive_manager.fill_pdf_form(
+                                template_pdf_path=resource_path(template_folha_rosto_pdf),
+                                output_pdf_path=temp_folha_rosto_preenchida,
+                                data_dict=dados_folha_rosto
+                            ):
+                                if self.archive_manager.merge_pdfs([temp_folha_rosto_preenchida, pdf_corpo_path], path_pdf_final_candidato):
+                                    todos_arquivos_finais_gerados_no_lote.append(path_pdf_final_candidato)
+                                    os.remove(temp_folha_rosto_preenchida) # Limpa temporário
+                                else:
+                                    erros_ocorridos.append(f"Falha ao mesclar folha de rosto e corpo PDF para {nome_candidato} ({identificador_variacao_atual}).")
+                            else:
+                                erros_ocorridos.append(f"Falha ao preencher folha de rosto para {nome_candidato} ({identificador_variacao_atual}).")
+                    else: # Sem candidatos, gera a prova por TIPO, com a nova lógica de capa
+                        path_capa_preenchida_temp = None
+                        
+                        # Obtém o caminho do template da capa do objeto do cargo
+                        lista_de_capas = getattr(self.cargo_atual, 'cover_pdf_paths', None)
+                        path_capa_template_do_cargo = lista_de_capas[0] if isinstance(lista_de_capas, list) and lista_de_capas else None
+
+                        # Se um template de capa foi definido para o cargo...
+                        if path_capa_template_do_cargo and os.path.exists(resource_path(path_capa_template_do_cargo)):
+                            # Prepara os dados para o formulário
+                            frase_assinatura = getattr(self.prova_montada_atual, 'frase_assinatura_folha_rosto', '')
+                    
+                            # Este dicionário é a ponte entre os dados do sistema e os nomes dos campos no PDF.
+                            # As chaves aqui (ex: PDF_FIELD_CARGO_TIPO) DEVEM corresponder aos nomes dos campos no seu template de capa.
+                            dados_para_preencher = {
+                                # A constante PDF_FIELD_CARGO_TIPO vale "CargoTipo". Se o nome no seu PDF for diferente, ajuste aqui.
+                                PDF_FIELD_CARGO_TIPO: f"{self.cargo_atual.nome_cargo} - {identificador_variacao_atual}",
+                                
+                                # A constante PDF_FIELD_FRASE vale "Frase".
+                                PDF_FIELD_FRASE: frase_assinatura,
+
+                                # Adicionando outros campos que podem existir no seu template de capa.
+                                # Se os nomes dos campos no seu PDF forem "Data" e "Evento", estas linhas funcionarão.
+                                "Data": datetime.now().strftime("%d/%m/%Y"),
+                                "Evento": self.evento_atual.nome_evento,
+                            }
+                            
+                            path_capa_preenchida_temp = os.path.join(dir_saida_cargo, f"temp_capa_{identificador_variacao_atual}.pdf")
+
+                            # Preenche o formulário da capa
+                            if not self.archive_manager.fill_pdf_form(
+                                template_pdf_path=resource_path(path_capa_template_do_cargo),
+                                output_pdf_path=path_capa_preenchida_temp,
+                                data_dict=dados_para_preencher
+                            ):
+                                self._log_ui(f"Falha ao preencher capa para {identificador_variacao_atual}. Será gerada sem capa.", "warning")
+                                path_capa_preenchida_temp = None
+                            
+                            # #################################################
+                        # # INÍCIO DO CÓDIGO DE TESTE - PAUSA O PROCESSO
+                        # #################################################
+                        if path_capa_preenchida_temp:
+                            from tkinter import messagebox
+                            messagebox.showinfo(
+                                "Pausa para Verificação",
+                                f"O processo foi pausado para você verificar a capa temporária.\n\n"
+                                f"Por favor, abra o seguinte arquivo e veja se o texto está visível:\n\n"
+                                f"{path_capa_preenchida_temp}"
+                            )
+                        # #################################################
+                        # # FIM DO CÓDIGO DE TESTE
+                        # #################################################
+
+                        # Mescla a capa (se existir) com o corpo da prova
+                        nome_pdf_final = sanitize_filename(f"PROVA_{identificador_variacao_atual}.pdf")
+                        path_pdf_final = os.path.join(dir_saida_cargo, nome_pdf_final)
+                        
+                        if self.archive_manager.merge_pdfs(
+                            pdf_paths=[pdf_corpo_path],
+                            output_path=path_pdf_final,
+                            cover_page_path=path_capa_preenchida_temp
+                        ):
+                            todos_arquivos_finais_gerados_no_lote.append(path_pdf_final)
+                        else:
+                            erros_ocorridos.append(f"Falha ao mesclar PDF para {identificador_variacao_atual}")
+
+                        # Limpa o arquivo de capa temporário se ele foi criado
+                        if path_capa_preenchida_temp and os.path.exists(path_capa_preenchida_temp):
+                            try: os.remove(path_capa_preenchida_temp)
+                            except OSError as e: self.logger.warning(f"Não foi possível remover capa temporária preenchida: {e}")
+                        else:
+                            erros_ocorridos.append(f"Falha ao mesclar PDF para {identificador_variacao_atual}.")
+                            self._log_ui(f"Falha ao mesclar PDF para {identificador_variacao_atual}.", "error")
+
+                    # Limpar o PDF do corpo se o DOCX não for mantido e já foi usado
+                    if not manter_docx_corpo_local and os.path.exists(pdf_corpo_path):
+                        # Só remove o corpo PDF se não for o arquivo final (ou seja, se houve merge ou cópia para nome final)
+                        if (candidatos_do_cargo_atual and template_folha_rosto_pdf) or (pdf_corpo_path != path_pdf_final_variacao) :
+                           try: os.remove(pdf_corpo_path); self.logger.debug(f"PDF corpo '{pdf_corpo_path}' removido.")
+                           except OSError as e_rem_pdf_corpo: self.logger.warning(f"Não foi possível remover PDF corpo '{pdf_corpo_path}': {e_rem_pdf_corpo}")
+
+
+            # 5. Limpar DOCX do corpo se não for para manter
+            if not manter_docx_corpo_local:
+                for docx_path_a_remover in lista_corpos_docx_gerados_para_cargo:
+                    if os.path.exists(docx_path_a_remover):
+                        try: os.remove(docx_path_a_remover); self.logger.debug(f"DOCX corpo '{docx_path_a_remover}' removido.")
+                        except OSError as e_rem_docx: self.logger.warning(f"Não foi possível remover DOCX corpo '{docx_path_a_remover}': {e_rem_docx}")
+            else: # Se for para manter, adiciona ao ZIP
+                 todos_arquivos_finais_gerados_no_lote.extend(lista_corpos_docx_gerados_para_cargo)
+
+
+        # Fim do loop de cargos
+        self._log_ui(f"Processamento de todos os cargos concluído. Erros: {len(erros_ocorridos)}", "info", progress=90)
+        if erros_ocorridos:
+            self.logger.warning(f"Resumo dos erros no lote: \n" + "\n".join(erros_ocorridos))
+            self._log_ui("Alguns erros ocorreram durante a geração do lote. Verifique os logs.", "warning")
+        
+        # ==============================================================================
+        # CÓDIGO A SER ADICIONADO AQUI
+        # ==============================================================================
+        # 5.5. Adicionar Capa do Pacote Geral, se fornecida
+        if template_capa_pacote_override and os.path.exists(resource_path(template_capa_pacote_override)):
+            self._log_ui("Adicionando capa geral ao pacote...", "info")
+            # Usa o nome do evento atual, que já deve estar carregado no self.evento_atual
+            nome_evento_curto = getattr(self.evento_atual, 'nome_curto_evento', 'EVENTO')
+            nome_arquivo_capa = f"00_CAPA_DO_PACOTE_{nome_evento_curto}.pdf"
+            caminho_final_capa_pacote = os.path.join(self.output_dir_lote, nome_arquivo_capa)
+            
+            try:
+                # Simplesmente copia o template da capa para o diretório de saída
+                shutil.copy(resource_path(template_capa_pacote_override), caminho_final_capa_pacote)
+                # Adiciona a capa no início da lista de arquivos a serem compactados
+                todos_arquivos_finais_gerados_no_lote.insert(0, caminho_final_capa_pacote)
+                self.logger.info(f"Capa do pacote adicionada com sucesso em: {caminho_final_capa_pacote}")
+            except Exception as e_copy_capa:
+                self.logger.error(f"Erro ao copiar a capa do pacote: {e_copy_capa}")
+                self._log_ui("Erro ao adicionar a capa geral do pacote.", "error")
+        # ==============================================================================
+        # FIM DO CÓDIGO ADICIONADO
+        # ==============================================================================
+
+
+        # 6. Gerar ZIP final se configurado
+        caminho_final_pacote = self.output_dir_lote # Diretório por padrão
+        if gerar_zip_final_global and todos_arquivos_finais_gerados_no_lote:
+            nome_zip_lote = f"{os.path.basename(self.output_dir_lote)}.zip"
+            # Salva o ZIP no diretório PAI do output_dir_lote
+            path_zip_final_lote = os.path.join(os.path.dirname(self.output_dir_lote), nome_zip_lote) 
+            
+            self._log_ui(f"Criando arquivo ZIP do lote: {nome_zip_lote}...", "info")
+            if self.archive_manager.create_zip(todos_arquivos_finais_gerados_no_lote, path_zip_final_lote):
+                self._log_ui(f"Pacote ZIP do lote gerado: {path_zip_final_lote}", "info", progress=100)
+                caminho_final_pacote = path_zip_final_lote
+                # Opcional: remover o diretório self.output_dir_lote se o ZIP foi criado com sucesso
+                # shutil.rmtree(self.output_dir_lote)
+                # self.logger.info(f"Diretório do lote '{self.output_dir_lote}' removido após criação do ZIP.")
+            else:
+                self._log_ui(f"Falha ao criar ZIP do lote. Arquivos permanecem em '{self.output_dir_lote}'.", "error", progress=100)
+        elif not todos_arquivos_finais_gerados_no_lote:
+             self._log_ui("Nenhum arquivo gerado no lote para adicionar ao ZIP.", "warning", progress=100)
+
+        return caminho_final_pacote, todos_gabaritos_gerados_no_lote, todos_arquivos_finais_gerados_no_lote
+
+
+
+
+
+
+
+
+# #################################################
+                            # # INÍCIO DO CÓDIGO DE TESTE - PAUSA O PROCESSO
+                            # #################################################
+                            # REMOVA ESTE BLOCO APÓS A VERIFICAÇÃO!
+                            from tkinter import messagebox
+                            if path_capa_preenchida_temp:
+                                messagebox.showinfo(
+                                    "Pausa para Verificação",
+                                    f"O processo foi pausado para você verificar a capa temporária.\n\n"
+                                    f"Por favor, abra o seguinte arquivo e veja se o texto está visível:\n\n"
+                                    f"{path_capa_preenchida_temp}"
+                                )
+                            # #################################################
+                            # # FIM DO CÓDIGO DE TESTE
+                            # #################################################

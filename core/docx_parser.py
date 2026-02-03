@@ -108,9 +108,9 @@ except ImportError as e_elements:
     elements_TextoReferenciaType = TextoReferenciaStub
     # Fallback para TipoQuestao se a importação real falhar
     class TipoQuestaoStubEnum: # Simula a enumeração
-        MULTIPLA_ESCOLHA = "Múltipla Escolha" # Deve corresponder ao elements.py real
-        DISCURSIVA = "Discursiva"       # Deve corresponder ao elements.py real
-        CERTO_ERRADO = "Certo ou Errado" # <<<--- ADICIONE ESTA LINHA
+        MULTIPLA_ESCOLHA = "MULTIPLA_ESCOLHA" # Deve corresponder ao elements.py real
+        DISCURSIVA = "DISCURSIVA"       # Deve corresponder ao elements.py real
+        CERTO_ERRADO = "CERTO_ERRADO" # <<<--- ADICIONE ESTA LINHA
     elements_TipoQuestao = TipoQuestaoStubEnum
 
 
@@ -435,7 +435,7 @@ class DocxParser:
                     "titulo_parser": parsed_title,
                     "tipo_conteudo": "texto",
                     "conteudo_parser": conteudo_simples_final,
-                    "conteudo_formatado_parser": conteudo_formatado_tags  # <-- CHAVE ADICIONADA!
+                    "conteudo_formatado_parser": conteudo_formatado_tags
                 })
                 self.logger.debug(f"Texto de referência (tipo texto) '{parsed_title}' extraído COM FORMATAÇÃO.")
 
@@ -444,9 +444,8 @@ class DocxParser:
                     parsed_texts_list.append({
                         "titulo_parser": parsed_title,
                         "tipo_conteudo": "imagem",
-                        "caminho_imagem_ref_parser": image_path_for_ref,
+                        "caminho_imagem_relativo": image_path_for_ref,
                         "descricao_imagem_parser": conteudo_simples_final,
-                        # Para imagens, o 'conteudo_formatado' pode ser a descrição formatada
                         "conteudo_formatado_parser": conteudo_formatado_tags
                     })
                     self.logger.debug(f"Texto de referência (imagem) '{parsed_title}' extraído com imagem: {image_path_for_ref}.")
@@ -585,9 +584,10 @@ class DocxParser:
                                     if len(opcoes_atuais_info) < MAX_ALTERNATIVAS_PARSER:
                                         opcoes_atuais_info.append({
                                             "texto": tags_to_plain_text(texto_opcao_tags),
-                                            "texto_formatado": texto_opcao_tags,  # lista de tags!
-                                            "imagem_path": lista_imgs_opcao[0] if lista_imgs_opcao else None
+                                            "texto_formatado": texto_opcao_tags,
+                                            "imagem_path_opcao": lista_imgs_opcao[0] if lista_imgs_opcao else None
                                         })
+                                        
                                     else:
                                         self.logger.warning(
                                             f"Máximo de {MAX_ALTERNATIVAS_PARSER} alternativas atingido para questão com enunciado '{enunciado_final_limpo[:30]}...'."
@@ -629,16 +629,17 @@ class DocxParser:
                         letra_opcao = chr(65 + i)
                         texto_da_opcao_plano = self._remover_endereco_imagem(opt["texto"])
                         texto_da_opcao_formatado = opt["texto_formatado"] if "texto_formatado" in opt else []
-
+                        imagem_path_opcao = opt.get("imagem_path_opcao")
                         opcoes_para_modelo.append(
                             self.OpcaoMultiplaEscolha_Parser(
                                 letra=letra_opcao,
                                 texto_opcao=texto_da_opcao_plano,
-                                texto_opcao_formatado=texto_da_opcao_formatado,  # Passe a lista direta!
-                                imagem_path_opcao=opt["imagem_path"],
+                                texto_opcao_formatado=texto_da_opcao_formatado,
+                                imagem_path_opcao=imagem_path_opcao,
                                 correta=(i == 0)
                             )
                         )
+
             else:
                 opcoes_para_modelo = None
                 gabarito_letra_para_modelo = None
@@ -665,7 +666,15 @@ class DocxParser:
                 else:
                     self.logger.warning(f"Arquivo de imagem original do enunciado não encontrado para renomear: {old_img_full_path}")
             
-            enunciado_formatado = texto_celula_bruto_tags  # Passe a lista direta!
+            enunciado_formatado = texto_celula_bruto_tags  # lista de tuplas [('text', ...), ('img', ...)]
+            enunciado_puro = tags_to_plain_text(enunciado_formatado)
+
+            # Pega a primeira imagem do enunciado (se houver)
+            caminho_imagem_enunciado = None
+            for tag in enunciado_formatado:
+                if tag[0] == 'img' and tag[1]:
+                    caminho_imagem_enunciado = tag[1]
+                    break
 
             nova_questao = self.QuestaoType_Parser(
                 id_questao=q_id_final,

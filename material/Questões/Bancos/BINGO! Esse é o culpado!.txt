@@ -1,0 +1,108 @@
+BINGO! Esse é o culpado!
+
+SQL
+
+CREATE TRIGGER update_textos_referencia_modificacao
+AFTER UPDATE ON TextosReferenciaGeral
+FOR EACH ROW
+BEGIN
+    UPDATE TextosReferenciaGeral 
+    SET data_modificacao = CURRENT_TIMESTAMP 
+    WHERE id_texto_ref_geral = OLD.id_texto_ref_geral; -- <<<< THIS IS THE PROBLEM!
+END
+Este gatilho, chamado update_textos_referencia_modificacao, é executado automaticamente após qualquer UPDATEoperação na sua TextosReferenciaGeraltabela.
+
+O problema é que dentro desse gatilho, o comando SQL que ele tenta executar é:
+UPDATE TextosReferenciaGeral SET data_modificacao = CURRENT_TIMESTAMP WHERE id_texto_ref_geral = OLD.id_texto_ref_geral;
+
+Ele está tentando usar uma coluna chamada id_texto_ref_geral, que não existe na sua TextosReferenciaGeraltabela. Sua tabela usa corretamente id_texto_refcomo chave primária.
+
+Então, quando seu código Python executa sua INSERT ... ON CONFLICT DO UPDATE ...instrução com sucesso, se isso resulta em um UPDATEem uma linha existente em TextosReferenciaGeral:
+
+O SQL do seu código Python (que está correto e usa id_texto_ref) termina.
+Este AFTER UPDATEgatilho então dispara.
+O próprio gatilho tenta executar sua própria UPDATEinstrução interna, que contém o nome de coluna incorreto id_texto_ref_geral.
+É aqui que o sqlite3.OperationalError: no such column: id_texto_ref_geralerro se origina – no gatilho, não mais diretamente no SQL do seu código Python.
+Como corrigir isso:
+
+Você precisa modificar este gatilho para usar o nome de coluna correto, id_texto_ref.
+
+O gatilho corrigido deve ser:
+
+SQL
+
+CREATE TRIGGER update_textos_referencia_modificacao_corrigido  -- Giving it a slightly new name for clarity during recreation
+AFTER UPDATE ON TextosReferenciaGeral
+FOR EACH ROW
+BEGIN
+    UPDATE TextosReferenciaGeral 
+    SET data_modificacao = CURRENT_TIMESTAMP 
+    WHERE id_texto_ref = OLD.id_texto_ref; -- Corrected column name here
+END;
+
+
+CREATE TRIGGER update_textos_referencia_modificacao
+AFTER UPDATE ON TextosReferenciaGeral
+FOR EACH ROW
+BEGIN
+    UPDATE TextosReferenciaGeral 
+    SET data_modificacao = CURRENT_TIMESTAMP 
+    WHERE id_texto_ref_geral = OLD.id_texto_ref_geral; -- <<<< THIS IS THE PROBLEM!
+END;
+
+(Observação: adicionei algo _corrigidoao nome do gatilho. Você pode usar o mesmo nome se preferir, mas certifique-se de que o antigo seja descartado primeiro.)
+
+Etapas para aplicar a correção (é recomendado usar o DB Browser para SQLite):
+
+Abra seu banco de dados no DB Browser para SQLite:
+
+Navegue até C:\Users\vhugo\Documents\DiagProOFF\data\e abra diagpro_default.db.
+Abandone o gatilho antigo e incorreto:
+
+Vá para a aba "Estrutura do Banco de Dados".
+Encontre a seção "Gatilhos" (ou expanda a TextosReferenciaGeraltabela para ver seus gatilhos).
+Clique com o botão direito do mouse no gatilho chamado update_textos_referencia_modificacao.
+Selecione "Excluir Gatilho" ou "Remover Gatilho". Confirme se solicitado.
+Crie o novo gatilho corrigido:
+
+Vá para a aba "Executar SQL" no DB Browser para SQLite.
+Copie e cole o seguinte código SQL na janela do editor SQL:
+SQL
+
+CREATE TRIGGER update_textos_referencia_modificacao -- Or use _corrigido if you prefer
+AFTER UPDATE ON TextosReferenciaGeral
+FOR EACH ROW
+BEGIN
+    UPDATE TextosReferenciaGeral 
+    SET data_modificacao = CURRENT_TIMESTAMP 
+    WHERE id_texto_ref = OLD.id_texto_ref;
+END;
+Clique no botão "Executar SQL" (geralmente um ícone de reprodução). Você deverá ver uma mensagem como "Consulta executada com sucesso".
+Escrever alterações:
+
+Certifique-se de clicar no botão "Gravar alterações" no DB Browser para SQLite para salvar essas modificações no seu arquivo de banco de dados.
+Consideração alternativa e solução de longo prazo em database_setup.py:
+
+INSERT ... ON CONFLICT DO UPDATEA declaração for do seu código Python TextosReferenciaGeraljá inclui data_modificacao = CURRENT_TIMESTAMPem sua UPDATEcláusula:
+
+SQL
+
+-- From your Python code's add_or_update_reference_text method
+ON CONFLICT(id_texto_ref) DO UPDATE SET
+    -- ... other columns ...
+    metadados_texto_ref = excluded.metadados_texto_ref,
+    data_modificacao = CURRENT_TIMESTAMP; -- Already handled here!
+Isso significa que, para atualizações realizadas por essa função Python específica , a ação do gatilho para atualizar data_modificacaoé redundante. O gatilho só seria necessário se você tivesse outras maneiras de atualizar TextosReferenciaGeral(por exemplo, atualizações diretas de SQL de outras partes do seu código ou atualizações manuais) nas quais também desejasse data_modificacaoser atualizado automaticamente.
+
+Opção A (Manter e Corrigir o Gatilho): Siga os passos acima para corrigir o gatilho. Isso é mais seguro se o gatilho servir para outros fins.
+Opção B (Remover gatilho se redundante): Se o único motivo para esse gatilho for uma atualização data_modificacaoe seu código Python já manipula isso para todas as atualizações relevantes desta tabela, você pode simplesmente remover o gatilho e não recriá-lo.
+Para consistência futura, é uma boa prática definir seus gatilhos dentro do seu core/database_setup.pyscript, assim como suas CREATE TABLEinstruções. Isso garante que, se o banco de dados for recriado, os gatilhos também sejam recriados corretamente.
+
+Se você optar por manter o gatilho, você adicionaria a CREATE TRIGGERdeclaração corrigida à sua create_all_tablesfunção em database_setup.py.
+
+Após corrigir/remover o gatilho no seu arquivo de banco de dados:
+
+Não será necessário excluir o diagpro_default.dbarquivo novamente para essa correção específica.
+Remova as print()instruções de depuração que você adicionou a core/event_manager.py.
+Execute main.pye tente a importação.
+Isso deve finalmente resolver o erro "nenhuma coluna desse tipo", pois o SQL incorreto não será mais executado pelo gatilho com falha.

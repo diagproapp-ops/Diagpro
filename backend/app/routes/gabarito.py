@@ -1,0 +1,273 @@
+from fastapi import APIRouter, Query, HTTPException, status, Depends
+from fastapi.responses import FileResponse
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from backend.app.db_models import Evento, Cargo, ProvaMontada
+from backend.app.database import get_db
+from core.document_generator import DocumentGenerator
+from backend.app.utils_crypto import decrypt_text
+import tempfile, os, zipfile, csv, logging, json
+
+router = APIRouter()
+
+document_generator = DocumentGenerator(
+    templates_base_dir="templates",
+    logger=logging.getLogger("core.document_generator"),
+    core_elements_module=None  # ajuste se necessário
+)
+
+def normalize_prova_montada(prova):
+    """Garante que metadados_prova e blocos_questoes sejam dict/list, não string."""
+    if prova is None:
+        return None
+    # metadados_prova sempre dict
+    meta = getattr(prova, "metadados_prova", None)
+    if meta is None or meta == "":
+        prova.metadados_prova = {}
+    elif isinstance(meta, str):
+        try:
+            prova.metadados_prova = json.loads(meta)
+        except Exception:
+            prova.metadados_prova = {}
+    # blocos_questoes sempre lista/dict
+    blocos = getattr(prova, "blocos_questoes", None)
+    if blocos is None or blocos == "":
+        prova.blocos_questoes = []
+    elif isinstance(blocos, str):
+        try:
+            prova.blocos_questoes = json.loads(blocos)
+        except Exception:
+            prova.blocos_questoes = []
+    # campos string importantes
+    if getattr(prova, "identificador_prova", None) is None:
+        prova.identificador_prova = ""
+    if getattr(prova, "titulo_prova", None) is None:
+        prova.titulo_prova = ""
+    if getattr(prova, "nome_prova_montada", None) is None:
+        prova.nome_prova_montada = ""
+    return prova
+
+@router.get("/eventos/{evento_id}/cargos/{cargo_id}/exportacoes")
+async def listar_gabaritos_exportaveis(
+    evento_id: str,
+    cargo_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Lista os arquivos de gabarito disponíveis para o cargo selecionado.
+    """
+    # Monte o diretório de saída dos gabaritos desse cargo
+    from backend.app.routes.exportacao import get_output_dir  # ou ajuste o import conforme seu projeto
+    output_dir = await get_output_dir(evento_id, cargo_id, db)
+    arquivos = []
+    for file in os.listdir(output_dir):
+        if file.lower().endswith('.csv'):
+            arquivos.append({
+                "nome_arquivo": file,
+                "tipo": "gabarito",
+                "url": f"/api/export/download?evento_id={evento_id}&cargo_id={cargo_id}&tipo=gabarito"
+            })
+    return arquivos
+
+@router.post("/eventos/{evento_id}/exportar-gabaritos-zip")
+async def exportar_gabaritos_zip(
+    evento_id: str,
+    senha: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db)
+):
+    import pyzipper  # adicione este import no início do arquivo se ainda não houver
+
+    result = await db.execute(select(Evento).filter(Evento.id_evento == evento_id))
+    evento: Evento = result.scalar_one_or_none()
+    if not evento:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+
+    if not evento.senha_evento_cripto:
+        raise HTTPException(status_code=500, detail="Senha do evento não cadastrada.")
+    try:
+        senha_original = decrypt_text(evento.senha_evento_cripto)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Erro ao descriptografar a senha do evento.")
+
+    if senha != senha_original:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Senha inválida.")
+
+    result_cargos = await db.execute(select(Cargo).filter(Cargo.id_evento_fk == evento_id))
+    cargos = result_cargos.scalars().all()
+    if not cargos:
+        raise HTTPException(status_code=404, detail="Nenhum cargo para este evento.")
+
+    output_dir = tempfile.mkdtemp()
+    arquivos_csv = []
+
+    # Estrutura: { (codigo_cargo, nome_cargo, tipo_prova): [questoes...] }
+    all_gabaritos_por_variacao = {}
+
+    for cargo in cargos:
+        result_prova = await db.execute(
+            select(ProvaMontada).filter(
+                ProvaMontada.id_evento_fk == evento_id,
+                ProvaMontada.id_cargo_fk == cargo.id_cargo
+            )
+        )
+        prova_montada = normalize_prova_montada(result_prova.scalar_one_or_none())
+        if not prova_montada:
+            continue
+
+        # Só processa se há blocos com ao menos uma questão
+        blocos = prova_montada.blocos_questoes
+        if not blocos or not any(bloco.get("questoes") for bloco in blocos):
+            continue
+
+        prova_montada.evento = evento
+        prova_montada.cargo = cargo
+
+        gabaritos_por_variacao = document_generator.gerar_gabaritos_balanceados_por_variacao(prova_montada)
+        for tipo_prova, lista in gabaritos_por_variacao.items():
+            key = (getattr(cargo, "codigo_cargo", ""), getattr(cargo, "nome_cargo", ""), tipo_prova)
+            all_gabaritos_por_variacao[key] = lista
+
+    # GABARITO COMPLETO: uma linha por questão/tipo/cargo
+    completo_csv_path = os.path.join(output_dir, f"GABARITO_COMPLETO_EVENTO_{evento.nome_evento.replace(' ', '_')}.csv")
+    with open(completo_csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f, delimiter=';')
+        writer.writerow([
+            "CódigoCargo", "Cargo", "TipoProva", "Questão", "Disciplina",
+            "LetraCorreta", "TextoAlternativaCorreta", "CodigoCurtoQuestao"
+        ])
+        for (codigo_cargo, cargo_nome, tipo_prova), questoes in all_gabaritos_por_variacao.items():
+            for item in questoes:
+                # Busca o codigo_curto_questao de modo robusto
+                codigo_curto = (
+                    item.get("codigo_curto_questao")
+                    or item.get("codigo_curto")
+                    or (item.get("metadados_questao", {}) or {}).get("codigo_curto_questao")
+                    or ""
+                )
+                writer.writerow([
+                    codigo_cargo,
+                    cargo_nome,
+                    tipo_prova,
+                    item.get("numero_questao_exibido", ""),
+                    item.get("disciplina_nome", ""),
+                    item.get("gabarito_letra_exibida", ""),
+                    item.get("texto_opcao_correta_original", ""),
+                    item.get("codigo_curto_questao", ""),
+                ])
+    arquivos_csv.append(completo_csv_path)
+
+    # GABARITO SIMPLIFICADO: uma linha por (cargo, tipo), colunas Q1, Q2, ...
+    simplificado_csv_path = os.path.join(output_dir, f"GABARITO_SIMPLIFICADO_EVENTO_{evento.nome_evento.replace(' ', '_')}.csv")
+    with open(simplificado_csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        max_q = 0
+        for questoes in all_gabaritos_por_variacao.values():
+            if len(questoes) > max_q:
+                max_q = len(questoes)
+        headers = ["CódigoCargo", "Cargo", "TipoProva"] + [f"Q{i+1}" for i in range(max_q)]
+        writer = csv.writer(f, delimiter=';')
+        writer.writerow(headers)
+        for (codigo_cargo, cargo_nome, tipo_prova), questoes in all_gabaritos_por_variacao.items():
+            row = [codigo_cargo, cargo_nome, tipo_prova]
+            row += [item.get("gabarito_letra_exibida", "") for item in questoes]
+            while len(row) < len(headers):
+                row.append("")
+            writer.writerow(row)
+    arquivos_csv.append(simplificado_csv_path)
+
+    # Compacta tudo em ZIP PROTEGIDO COM SENHA DO EVENTO
+    zip_path = os.path.join(output_dir, f"GABARITOS_EVENTO_{evento.nome_evento.replace(' ','_')}.zip")
+    with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zipf:
+        zipf.setpassword(senha_original.encode('utf-8'))
+        for file in arquivos_csv:
+            zipf.write(file, arcname=os.path.basename(file))
+
+    return FileResponse(zip_path, filename=os.path.basename(zip_path), media_type='application/zip')
+
+@router.get("/eventos/{evento_id}/cargos/{cargo_id}/gabarito")
+async def visualizar_gabarito(
+    evento_id: str,
+    cargo_id: str,
+    tipo_prova: str = "PADRÃO",  # permite escolher variação, se quiser
+    db: AsyncSession = Depends(get_db)
+):
+    # Busca evento, cargo e prova montada (igual já faz)
+    result_evento = await db.execute(select(Evento).filter(Evento.id_evento == evento_id))
+    evento = result_evento.scalar_one_or_none()
+    if not evento:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+
+    result_cargo = await db.execute(select(Cargo).filter(Cargo.id_cargo == cargo_id, Cargo.id_evento_fk == evento_id))
+    cargo = result_cargo.scalar_one_or_none()
+    if not cargo:
+        raise HTTPException(status_code=404, detail="Cargo não encontrado ou não pertence ao evento.")
+
+    result_prova = await db.execute(
+        select(ProvaMontada).filter(
+            ProvaMontada.id_evento_fk == evento_id,
+            ProvaMontada.id_cargo_fk == cargo_id,
+        )
+    )
+    prova_montada = result_prova.scalar_one_or_none()
+    if not prova_montada:
+        return []
+
+    prova_montada = normalize_prova_montada(prova_montada)
+    prova_montada.evento = evento
+    prova_montada.cargo = cargo
+
+    # Usa o generator igual no ZIP
+    gabaritos_por_variacao = document_generator.gerar_gabaritos_balanceados_por_variacao(prova_montada)
+
+    # Seleciona a variação desejada
+    lista_questoes = gabaritos_por_variacao.get(tipo_prova)
+    if not lista_questoes:
+        lista_questoes = next(iter(gabaritos_por_variacao.values()), [])
+
+    # Mapeia para o formato esperado pelo frontend
+    questoes = []
+    for q in lista_questoes:
+        disciplina_nome = (
+            q.get("nome_disciplina_na_prova")
+            or q.get("disciplina_nome")
+            or ""
+        )
+        texto_correto = q.get("texto_opcao_correta_original", "")
+        if texto_correto:
+            try:
+                texto_correto = decrypt_text(texto_correto)
+            except Exception:
+                pass
+
+        questoes.append({
+            "numero_questao": q.get("numero_questao_exibido", ""),
+            "tipo_prova": tipo_prova,
+            "disciplina": disciplina_nome,
+            "letra_correta": q.get("gabarito_letra_exibida", ""),
+            "texto_correto": texto_correto,
+            "codigo_curto": q.get("codigo_curto_questao", ""),
+        })
+
+
+    return questoes
+
+@router.get("/eventos/{evento_id}/cargos/{cargo_id}/variacoes")
+async def listar_variacoes(
+    evento_id: str,
+    cargo_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    result_prova = await db.execute(
+        select(ProvaMontada).filter(
+            ProvaMontada.id_evento_fk == evento_id,
+            ProvaMontada.id_cargo_fk == cargo_id,
+        )
+    )
+    prova_montada = result_prova.scalar_one_or_none()
+    if not prova_montada:
+        return []
+    prova_montada = normalize_prova_montada(prova_montada)
+    # Use o mesmo generator da exportação
+    prova_montada.evento = evento_id  # ou o objeto evento, se necessário para o generator
+    prova_montada.cargo = cargo_id    # ou o objeto cargo, se necessário
+    gabaritos_por_variacao = document_generator.gerar_gabaritos_balanceados_por_variacao(prova_montada)
+    return list(gabaritos_por_variacao.keys())

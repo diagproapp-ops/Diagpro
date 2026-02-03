@@ -1,0 +1,122 @@
+﻿nome_conteudo;descricao;area_conhecimento;turno;nivel;quantidade;professor
+01-Língua Portuguesa - Nível Médio - Manhã;"1.	Ortografia oficial e regras de acentuação.
+2.	Classes de palavras: substantivo, adjetivo, verbo, advérbio, pronome, preposição, conjunção, interjeição.
+3.	Concordância verbal e nominal.
+4.	Regência verbal e nominal.
+5.	Colocação pronominal: ênclise, próclise e mesóclise.
+6.	Pontuação: vírgula, ponto e vírgula, dois-pontos, travessão, aspas, parênteses.
+7.	Sintaxe: termos essenciais e integrantes da oração.
+8.	Tipos de oração: coordenadas e subordinadas.
+9.	Período simples e composto.
+10.	Crase: uso correto do acento indicativo.
+11.	Figuras de linguagem: metáfora, metonímia, antítese, hipérbole, personificação.
+12.	Semântica: significado das palavras, polissemia, homônimos, parônimos.
+13.	Coesão textual: conectivos e encadeamento lógico.
+14.	Coerência textual.
+15.	Interpretação de textos: análise de ideias centrais e secundárias.
+16.	Tipos de textos: narrativo, descritivo, dissertativo, injuntivo, expositivo.
+17.	Leitura crítica e inferência de informações implícitas.
+18.	Gêneros textuais: carta, relatório, artigo, notícia, crônica, poema.
+19.	Pontos de vista e estilo do autor.
+20.	Sintaxe do período composto por subordinação.
+21.	Vozes verbais: ativa, passiva e reflexiva.
+22.	Morfologia: derivação, composição, prefixos e sufixos.
+23.	Uso de maiúsculas e minúsculas.
+24.	Homônimos, parônimos e palavras de uso frequente com grafia confusa.
+25.	Redação oficial: regras e formatação.
+26.	Produção textual: coerência, coesão e clareza.
+27.	Argumentação e persuasão em textos.
+28.	Revisão de texto: erros comuns e estratégias de correção.
+29.	Expressões idiomáticas e popularismos.
+30.	Estilística: variação linguística formal e informal.";Linguagens;Manhã;Médio;10;Victor Hugo Ramos Almeida
+02-Informática - Nível Médio - Manhã;"1.	Conceitos básicos de hardware e software.
+2.	Sistemas operacionais: Windows, Linux, macOS.
+3.	Gerenciamento de arquivos e pastas.
+4.	Noções de redes de computadores.
+5.	Internet: navegação, protocolos e segurança.
+6.	Navegadores e mecanismos de busca.
+7.	E-mail: configuração, envio, recepção e boas práticas.
+8.	Pacote Office: Word – edição de texto.
+9.	Pacote Office: Excel – fórmulas, gráficos, tabelas.
+10.	Pacote Office: PowerPoint – apresentações.
+11.	Conceitos de banco de dados e planilhas eletrônicas.
+12.	Noções de programação: lógica e algoritmos.
+13.	Segurança da informação: senhas, antivírus, backup.
+14.	Criptografia e proteção de dados.
+15.	Computação em nuvem e armazenamento online.
+16.	Sistemas de gerenciamento de conteúdo (CMS).
+17.	Redes sociais: uso profissional e riscos.
+18.	Internet das Coisas (IoT).
+19.	Ferramentas de produtividade online.
+20.	Tipos de softwares: freeware, shareware, open source.
+21.	Impressão e configuração de periféricos.
+22.	Noções de HTML e CSS.
+23.	Conceitos de malware, phishing e ransomware.
+24.	Softwares de segurança: firewall, antivírus, antimalware.
+25.	Backup e recuperação de dados.
+26.	Armazenamento local e em nuvem.
+27.	Sistemas de automação de tarefas.
+28.	Ferramentas de edição de imagens e PDFs.
+29.	Conceitos de inteligência artificial e machine learning.
+30.	Boas práticas em informática e ética digital.";Informática;Manhã;Fácil;5;Victor Hugo Ramos Almeida
+03-Ética - Nível Médio - Manhã;"1.	Conceito de ética e moral.
+2.	Diferença entre ética individual e coletiva.
+3.	Valores humanos e cidadania.
+4.	Direitos e deveres do cidadão.
+5.	Ética profissional e conduta no trabalho.
+6.	Responsabilidade social e corporativa.
+7.	Ética nas relações interpessoais.
+8.	Honestidade, integridade e transparência.
+9.	Corrupção e suas implicações.
+10.	Ética e respeito à diversidade.
+11.	Tolerância e empatia.
+12.	Justiça e igualdade social.
+13.	Princípios éticos em órgãos públicos.
+14.	Ética e tecnologia: privacidade e uso de dados.
+15.	Conflitos éticos e resolução.
+16.	Bioética e questões ambientais.
+17.	Ética no consumo e sustentabilidade.
+18.	Códigos de ética profissional.
+19.	Direitos humanos e ética.
+20.	Ética e legislação.
+21.	Cidadania digital e comportamento online.
+22.	Liderança ética e responsabilidade corporativa.
+23.	Transparência e prestação de contas.
+24.	Ética no serviço público e privado.
+25.	Plágio e propriedade intelectual.
+26.	Ética no atendimento ao cliente.
+27.	Conflito de interesses e dilemas éticos.
+28.	Pressão ética e tomada de decisão.
+29.	Ética e reputação profissional.
+30.	Reflexão sobre valores éticos na sociedade.";Exatas;Manhã;Médio;5;Victor Hugo Ramos Almeida
+04-Conhecimentos Bancários - Nível Médio - Manhã;"1.	Estrutura do sistema financeiro nacional.
+2.	Bancos comerciais, de investimento e múltiplos.
+3.	Banco Central do Brasil: funções e regulamentações.
+4.	Política monetária e instrumentos.
+5.	Tipos de contas bancárias e serviços básicos.
+6.	Canais de atendimento bancário: presencial e digital.
+7.	Produtos de crédito: empréstimos, financiamentos, cheque especial.
+8.	Cartões de crédito, débito e pré-pagos.
+9.	Operações de câmbio e moedas estrangeiras.
+10.	Títulos de capitalização e poupança.
+11.	Fundos de investimento e previdência.
+12.	Títulos públicos e privados.
+13.	Cobrança e negociação de dívidas.
+14.	Juros simples e compostos.
+15.	Taxa Selic e CDI.
+16.	Risco de crédito e análise de perfil do cliente.
+17.	Garantias em operações financeiras.
+18.	Sistema de pagamentos brasileiro (PIX, TED, DOC).
+19.	Produtos de seguro bancário.
+20.	Cartões corporativos e benefícios.
+21.	Compliance bancário e prevenção à lavagem de dinheiro.
+22.	Regulamentações do Banco Central e CMN.
+23.	Educação financeira: orçamento e planejamento.
+24.	Noções de contabilidade bancária.
+25.	Fraudes bancárias e segurança.
+26.	Atendimento ao cliente e qualidade no serviço bancário.
+27.	Ética e responsabilidade no setor financeiro.
+28.	Sistema de compensação de cheques e boletos.
+29.	Indicadores econômicos e impacto no setor bancário.
+30.	Inovação financeira e fintechs.";Bancário;Manhã;Difícil;10;Victor Hugo Ramos Almeida
+05-Discursiva - Nível Médio - Manhã;1.Atualidades;Humanas;Manhã;Médio;1;Victor Hugo Ramos Almeida

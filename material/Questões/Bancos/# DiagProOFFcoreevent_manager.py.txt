@@ -1,0 +1,1188 @@
+# DiagProOFF/core/event_manager.py
+
+import sqlite3
+import json
+import uuid
+from typing import List, Dict, Optional, Any, Tuple, Union
+from datetime import datetime
+import logging
+import os
+
+# Tentativa de importação dos modelos Pydantic reais
+try:
+    from .elements import (
+        EventoType, CargoType, QuestaoType, OpcaoMultiplaEscolha,
+        TextoReferenciaType, DisciplinaType, ConteudoType, ProvaMontadaType,
+        ConfiguracoesProvaType, BlocoQuestoesType, DisciplinaProvaType,
+        EventoSummaryType
+    )
+    # Mapeamento para consistência interna, se necessário
+    # Estas variáveis são usadas para a lógica interna, não para type hints diretos nas funções.
+    _PydanticEventoType = EventoType
+    _PydanticCargoType = CargoType
+    _PydanticQuestaoType = QuestaoType
+    _PydanticOpcaoMultiplaEscolha = OpcaoMultiplaEscolha
+    _PydanticTextoReferenciaType = TextoReferenciaType
+    _PydanticDisciplinaType = DisciplinaType
+    _PydanticProvaMontadaType = ProvaMontadaType
+    # ... outros modelos conforme necessário
+    print("DEBUG: EventManager - Core modules REAIS (..Type) carregados.")
+except ImportError:
+    print("AVISO: EventManager - Falha ao importar modelos Pydantic de .elements. Usando stubs ou dicts.")
+    # Defina stubs ou use dicts se a importação falhar, para manter a funcionalidade básica
+    # Estas são as fallbacks se a importação falhar.
+    _PydanticEventoType = dict # type: ignore
+    _PydanticCargoType = dict # type: ignore
+    _PydanticQuestaoType = dict # type: ignore
+    _PydanticOpcaoMultiplaEscolha = dict # type: ignore
+    _PydanticTextoReferenciaType = dict # type: ignore
+    _PydanticDisciplinaType = dict # type: ignore
+    _PydanticProvaMontadaType = dict # type: ignore
+
+
+# Configuração do logger para este módulo
+# logger = logging.getLogger(__name__) # Será sobrescrito pelo logger injetado se fornecido
+
+def get_db_connection(db_path: str) -> sqlite3.Connection:
+    """Estabelece e retorna uma conexão com o banco de dados SQLite."""
+    # O logger global será usado aqui se o logger do módulo não for configurado antes
+    global_logger = logging.getLogger(__name__) # Logger para esta função específica
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row  # Acessar colunas por nome
+        conn.execute("PRAGMA foreign_keys = ON;") # Habilitar chaves estrangeiras
+        return conn
+    except sqlite3.Error as e:
+        global_logger.error(f"Erro ao conectar ao banco de dados '{db_path}': {e}", exc_info=True)
+        raise
+
+class EventManager:
+    def __init__(self, db_path: str, app_controller: Optional[Any] = None, logger: Optional[logging.Logger] = None):
+        self.db_path = db_path
+        self.app_controller = app_controller # Armazena a referência se necessário para callbacks, etc.
+        
+        # Usa o logger injetado, ou cria um novo se não for fornecido
+        if logger:
+            self.logger = logger
+        else:
+            self.logger = logging.getLogger(__name__ + ".EventManagerInstance") # Nome mais específico
+            if not self.logger.hasHandlers(): # Configura um handler básico se nenhum existir
+                logging.basicConfig(level=logging.INFO)
+                self.logger.info("Logger do EventManager configurado com basicConfig pois nenhum logger foi injetado ou configurado globalmente.")
+
+        if not os.path.exists(self.db_path):
+            self.logger.warning(f"Arquivo de banco de dados '{self.db_path}' não encontrado. Será criado na primeira conexão.")
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir and not os.path.exists(db_dir):
+                try:
+                    os.makedirs(db_dir, exist_ok=True)
+                    self.logger.info(f"Diretório para o banco de dados criado: {db_dir}")
+                except OSError as e:
+                    self.logger.error(f"Não foi possível criar o diretório para o banco de dados '{db_dir}': {e}")
+
+        try:
+            from .database_setup import create_all_tables_if_not_exists
+            create_all_tables_if_not_exists() 
+            self.logger.info("Rotina de criação/verificação de tabelas executada com sucesso via EventManager.")
+        except ImportError:
+            self.logger.error("Falha ao importar 'database_setup'. As tabelas podem não ser criadas/verificadas.")
+        except Exception as e_db_setup:
+            self.logger.error(f"Erro ao executar database_setup: {e_db_setup}", exc_info=True)
+
+        try:
+            with get_db_connection(self.db_path) as conn:
+                self.logger.info(f"EventManager: Conectado ao banco de dados: {self.db_path}")
+        except sqlite3.Error as e:
+            self.logger.error(f"EventManager: Falha na conexão inicial com o banco de dados: {e}", exc_info=True)
+
+
+    def _execute_query(self, query: str, params: tuple = (), fetch_one: bool = False, fetch_all: bool = False, commit: bool = False) -> Optional[Union[sqlite3.Row, List[sqlite3.Row], int]]:
+        """
+        Executa uma query SQL.
+        Retorna um único resultado, todos os resultados, o ID da linha inserida, ou None.
+        """
+        conn = None
+        try:
+            conn = get_db_connection(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+
+            if commit:
+                conn.commit()
+                return cursor.lastrowid
+            
+            if fetch_one:
+                return cursor.fetchone()
+            if fetch_all:
+                return cursor.fetchall()
+            return None 
+        except sqlite3.Error as e:
+            error_msg = f"Erro SQLite ao executar query:\nQuery:\n{query}\nParams: {params}\nErro: {e}"
+            self.logger.error(error_msg, exc_info=True) # Usa o logger da instância
+            return None 
+        finally:
+            if conn:
+                conn.close()
+
+    # --- Métodos para Eventos ---
+    def create_event(self, evento_data: Union[EventoType, Dict[str, Any]]) -> Optional[str]: 
+        """Cria um novo evento no banco de dados."""
+        self.logger.info(f"Criando novo evento: {evento_data.get('nome_evento') if isinstance(evento_data, dict) else evento_data.nome_evento}")
+
+        if isinstance(evento_data, dict):
+            event_id = evento_data.get('id_evento', str(uuid.uuid4()))
+            nome_evento = evento_data.get('nome_evento')
+            data_prova = evento_data.get('data_prova')
+            numero_edital = evento_data.get('numero_edital')
+            local_prova = evento_data.get('local_prova')
+            instituicao_organizadora = evento_data.get('instituicao_organizadora')
+            logo_path = evento_data.get('logo_path')
+            observacoes = evento_data.get('observacoes')
+            status = evento_data.get('status', 'Planejado')
+            qtd_cargos_estimada = evento_data.get('qtd_cargos_estimada', 0)
+        else: # Assume EventoType
+            event_id = evento_data.id_evento
+            nome_evento = evento_data.nome_evento
+            data_prova = str(evento_data.data_prova) if evento_data.data_prova else None
+            numero_edital = evento_data.numero_edital
+            local_prova = evento_data.local_prova
+            instituicao_organizadora = evento_data.instituicao_organizadora
+            logo_path = evento_data.logo_path
+            observacoes = evento_data.observacoes
+            status = evento_data.status
+            qtd_cargos_estimada = evento_data.qtd_cargos_estimada
+            
+        sql = """
+            INSERT INTO Eventos (
+                id_evento, nome_evento, data_prova, numero_edital, local_prova, 
+                instituicao_organizadora, logo_path, observacoes, status, qtd_cargos_estimada
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            event_id, nome_evento, data_prova, numero_edital, local_prova,
+            instituicao_organizadora, logo_path, observacoes, status, qtd_cargos_estimada
+        )
+        
+        inserted_row_id = self._execute_query(sql, params, commit=True)
+        if inserted_row_id is not None: 
+            self.logger.info(f"Evento '{nome_evento}' (ID: {event_id}) criado com sucesso.")
+            return event_id
+        else:
+            self.logger.error(f"Falha ao criar evento '{nome_evento}'.")
+            return None
+
+    def get_event_by_id(self, event_id: str) -> Optional[Dict[str, Any]]:
+        """Busca um evento pelo ID."""
+        sql = "SELECT * FROM Eventos WHERE id_evento = ?"
+        row = self._execute_query(sql, (event_id,), fetch_one=True)
+        if row:
+            evento_dict = dict(row)
+            
+            sql_cargos = "SELECT * FROM Cargos WHERE id_evento_fk = ? ORDER BY nome_cargo;"
+            cargos_rows = self._execute_query(sql_cargos, (event_id,), fetch_all=True)
+
+            cargos_list = []
+            if cargos_rows:
+                for cargo_row_dict in [dict(cr) for cr in cargos_rows]: # Converte cada linha para dict primeiro
+                    # Desserializar campos JSON para CargoType
+                    if 'disciplinas_prova' in cargo_row_dict and isinstance(cargo_row_dict['disciplinas_prova'], str):
+                        try:
+                            cargo_row_dict['disciplinas_prova'] = json.loads(cargo_row_dict['disciplinas_prova'])
+                        except json.JSONDecodeError:
+                            self.logger.error(f"Erro ao desserializar 'disciplinas_prova' para o cargo ID {cargo_row_dict.get('id_cargo')}: {cargo_row_dict['disciplinas_prova']}")
+                            cargo_row_dict['disciplinas_prova'] = [] # Ou outro valor padrão apropriado
+
+                    if 'cover_pdf_paths' in cargo_row_dict and isinstance(cargo_row_dict['cover_pdf_paths'], str):
+                        try:
+                            cargo_row_dict['cover_pdf_paths'] = json.loads(cargo_row_dict['cover_pdf_paths'])
+                        except json.JSONDecodeError:
+                            self.logger.error(f"Erro ao desserializar 'cover_pdf_paths' para o cargo ID {cargo_row_dict.get('id_cargo')}: {cargo_row_dict['cover_pdf_paths']}")
+                            cargo_row_dict['cover_pdf_paths'] = []
+
+                    if 'metadados_cargo' in cargo_row_dict and isinstance(cargo_row_dict['metadados_cargo'], str):
+                        try:
+                            cargo_row_dict['metadados_cargo'] = json.loads(cargo_row_dict['metadados_cargo'])
+                        except json.JSONDecodeError:
+                            self.logger.error(f"Erro ao desserializar 'metadados_cargo' para o cargo ID {cargo_row_dict.get('id_cargo')}: {cargo_row_dict['metadados_cargo']}")
+                            cargo_row_dict['metadados_cargo'] = {}
+
+                    # Adicione desserialização similar para outros campos JSON em CargoType se houver
+                    cargos_list.append(cargo_row_dict)
+
+            evento_dict['cargos'] = cargos_list
+
+            # Faça o mesmo para 'textos_referencia' e 'provas_montadas' se eles contiverem campos JSON stringificados
+            # Exemplo para provas_montadas, se 'questoes_por_disciplina' ou 'metadados_prova' forem JSON strings:
+            sql_provas = "SELECT * FROM ProvasMontadas WHERE id_evento_fk = ? ORDER BY id_cargo_fk, nome_prova_montada;"
+            provas_rows = self._execute_query(sql_provas, (event_id,), fetch_all=True)
+            provas_list = []
+            if provas_rows:
+                for prova_row_dict in [dict(pr) for pr in provas_rows]:
+                    if 'questoes_por_disciplina' in prova_row_dict and isinstance(prova_row_dict['questoes_por_disciplina'], str):
+                        try:
+                            prova_row_dict['questoes_por_disciplina'] = json.loads(prova_row_dict['questoes_por_disciplina'])
+                        except json.JSONDecodeError:
+                            prova_row_dict['questoes_por_disciplina'] = {}
+
+                    if 'metadados_prova' in prova_row_dict and isinstance(prova_row_dict['metadados_prova'], str):
+                        try:
+                            prova_row_dict['metadados_prova'] = json.loads(prova_row_dict['metadados_prova'])
+                        except json.JSONDecodeError:
+                            prova_row_dict['metadados_prova'] = {}
+
+                    if 'ordem_disciplinas_na_prova' in prova_row_dict and isinstance(prova_row_dict['ordem_disciplinas_na_prova'], str):
+                        try:
+                            prova_row_dict['ordem_disciplinas_na_prova'] = json.loads(prova_row_dict['ordem_disciplinas_na_prova'])
+                        except json.JSONDecodeError:
+                            prova_row_dict['ordem_disciplinas_na_prova'] = []
+                    provas_list.append(prova_row_dict)
+            evento_dict['provas_montadas_por_cargo'] = {p['id_cargo_fk']: p for p in provas_list} # Ajuste para o formato esperado por EventoType
+
+            return evento_dict
+        return None
+
+    def get_all_events_summary(self) -> List[Dict[str, Any]]:
+        """Retorna uma lista de resumos de todos os eventos."""
+        sql = """
+            SELECT 
+                e.id_evento, 
+                e.nome_evento, 
+                e.data_prova, 
+                e.status,
+                (SELECT COUNT(*) FROM Cargos c WHERE c.id_evento_fk = e.id_evento) as numero_cargos,
+                (SELECT COUNT(*) FROM ProvasMontadas pm WHERE pm.id_evento_fk = e.id_evento) as numero_provas_montadas
+            FROM Eventos e
+            ORDER BY e.data_modificacao DESC;
+        """ 
+        rows = self._execute_query(sql, fetch_all=True)
+        return [dict(row) for row in rows] if rows else []
+
+    def update_event(self, event_id: str, evento_data: Union[EventoType, Dict[str, Any]]) -> bool: 
+        """Atualiza um evento existente."""
+        if isinstance(evento_data, dict):
+            pass 
+        else: 
+            pass 
+
+        sql = """
+            UPDATE Eventos SET 
+                nome_evento = ?, 
+                data_prova = ?, 
+                numero_edital = ?, 
+                local_prova = ?, 
+                instituicao_organizadora = ?, 
+                logo_path = ?, 
+                observacoes = ?, 
+                status = ?, 
+                qtd_cargos_estimada = ?,
+                data_modificacao = CURRENT_TIMESTAMP 
+            WHERE id_evento = ?
+        """
+        if isinstance(evento_data, dict):
+            params = (
+                evento_data.get('nome_evento'), evento_data.get('data_prova'), evento_data.get('numero_edital'),
+                evento_data.get('local_prova'), evento_data.get('instituicao_organizadora'), evento_data.get('logo_path'),
+                evento_data.get('observacoes'), evento_data.get('status'), evento_data.get('qtd_cargos_estimada'),
+                event_id
+            )
+        else: # EventoType
+             params = (
+                evento_data.nome_evento, str(evento_data.data_prova) if evento_data.data_prova else None, evento_data.numero_edital,
+                evento_data.local_prova, evento_data.instituicao_organizadora, evento_data.logo_path,
+                evento_data.observacoes, evento_data.status, evento_data.qtd_cargos_estimada,
+                event_id
+            )
+        
+        conn = get_db_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, params)
+            conn.commit()
+            if cursor.rowcount > 0:
+                self.logger.info(f"Evento ID {event_id} atualizado com sucesso ({cursor.rowcount} linha(s) afetada(s)).")
+                return True
+            else:
+                self.logger.info(f"Evento ID {event_id} não encontrado ou nenhum dado alterado.")
+                return False 
+        except sqlite3.Error as e_update:
+            self.logger.error(f"Falha ao atualizar evento ID {event_id}: {e_update}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+
+    def delete_event(self, event_id: str) -> bool:
+        """Deleta um evento e todos os dados associados (cargos, questões, etc.) devido ao ON DELETE CASCADE."""
+        sql = "DELETE FROM Eventos WHERE id_evento = ?"
+        conn = get_db_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, (event_id,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                self.logger.info(f"Evento ID {event_id} e dados associados deletados com sucesso.")
+                return True
+            else:
+                self.logger.warning(f"Evento ID {event_id} não encontrado para deleção.")
+                return False
+        except sqlite3.Error as e_delete:
+            self.logger.error(f"Falha ao deletar evento ID {event_id}: {e_delete}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    # --- Métodos para Cargos ---
+    def add_cargo_to_event(self, event_id: str, cargo_data: Union[CargoType, Dict[str, Any]]) -> Optional[str]: 
+        """Adiciona um novo cargo a um evento existente."""
+        if isinstance(cargo_data, dict):
+            cargo_id = cargo_data.get('id_cargo', str(uuid.uuid4()))
+            nome_cargo = cargo_data.get('nome_cargo')
+        else: # Assume CargoType
+            cargo_id = cargo_data.id_cargo
+            nome_cargo = cargo_data.nome_cargo
+
+        sql = """
+            INSERT INTO Cargos (
+                id_cargo, id_evento_fk, nome_cargo, codigo_cargo, nivel, turno, vagas, salario, 
+                requisitos, tem_discursiva, letterhead_pdf_path, cover_pdf_paths, 
+                peso_total_prova, metadados_cargo
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        if isinstance(cargo_data, dict):
+            params = (
+                cargo_id, event_id, cargo_data.get('nome_cargo'), cargo_data.get('codigo_cargo'),
+                cargo_data.get('nivel'), cargo_data.get('turno'), cargo_data.get('vagas'), cargo_data.get('salario'),
+                cargo_data.get('requisitos'), cargo_data.get('tem_discursiva', 0),
+                cargo_data.get('letterhead_pdf_path'), json.dumps(cargo_data.get('cover_pdf_paths', [])),
+                cargo_data.get('peso_total_prova'), json.dumps(cargo_data.get('metadados_cargo', {}))
+            )
+        else: # CargoType
+            params = (
+                cargo_data.id_cargo, event_id, cargo_data.nome_cargo, cargo_data.codigo_cargo,
+                cargo_data.nivel, cargo_data.turno, cargo_data.vagas, cargo_data.salario,
+                cargo_data.requisitos, 1 if cargo_data.tem_discursiva else 0,
+                cargo_data.letterhead_pdf_path, json.dumps(cargo_data.cover_pdf_paths or []),
+                cargo_data.peso_total_prova, json.dumps(cargo_data.metadados_cargo or {})
+            )
+
+        inserted_id = self._execute_query(sql, params, commit=True)
+        if inserted_id is not None:
+             self.logger.info(f"Cargo '{nome_cargo}' (ID: {cargo_id}) adicionado ao evento ID {event_id}.")
+             return cargo_id
+        else:
+            self.logger.error(f"Falha ao adicionar cargo '{nome_cargo}' ao evento ID {event_id}.")
+            return None
+
+    def get_cargos_by_event_id(self, event_id: str) -> List[Dict[str, Any]]:
+        """Busca todos os cargos de um evento específico."""
+        sql = "SELECT * FROM Cargos WHERE id_evento_fk = ? ORDER BY nome_cargo;" 
+        rows = self._execute_query(sql, (event_id,), fetch_all=True)
+        
+        cargos_list = []
+        if rows:
+            for row in rows:
+                cargo_dict = dict(row)
+                try:
+                    cargo_dict['cover_pdf_paths'] = json.loads(cargo_dict.get('cover_pdf_paths', '[]')) if cargo_dict.get('cover_pdf_paths') else []
+                    cargo_dict['metadados_cargo'] = json.loads(cargo_dict.get('metadados_cargo', '{}')) if cargo_dict.get('metadados_cargo') else {}
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Falha ao desserializar JSON para o cargo ID {cargo_dict.get('id_cargo')}")
+                    cargo_dict['cover_pdf_paths'] = []
+                    cargo_dict['metadados_cargo'] = {}
+                cargos_list.append(cargo_dict)
+        return cargos_list
+
+
+    def get_cargo_by_id(self, cargo_id: str) -> Optional[Dict[str, Any]]:
+        """Busca um cargo pelo seu ID."""
+        sql = "SELECT * FROM Cargos WHERE id_cargo = ?"
+        row = self._execute_query(sql, (cargo_id,), fetch_one=True)
+        if row:
+            cargo_dict = dict(row)
+            try:
+                cargo_dict['cover_pdf_paths'] = json.loads(cargo_dict.get('cover_pdf_paths', '[]')) if cargo_dict.get('cover_pdf_paths') else []
+                cargo_dict['metadados_cargo'] = json.loads(cargo_dict.get('metadados_cargo', '{}')) if cargo_dict.get('metadados_cargo') else {}
+            except json.JSONDecodeError:
+                self.logger.warning(f"Falha ao desserializar JSON para o cargo ID {cargo_dict.get('id_cargo')}")
+                cargo_dict['cover_pdf_paths'] = []
+                cargo_dict['metadados_cargo'] = {}
+            sql_disciplinas_prova = "SELECT * FROM DisciplinasDaProva WHERE id_cargo_fk = ? ORDER BY ordem_na_prova, nome_disciplina_na_prova;"
+            disciplinas_rows = self._execute_query(sql_disciplinas_prova, (cargo_id,), fetch_all=True)
+            cargo_dict['disciplinas_prova'] = [dict(dp_row) for dp_row in disciplinas_rows] if disciplinas_rows else []
+            return cargo_dict
+        return None
+
+    def update_cargo(self, cargo_id: str, cargo_data: Union[CargoType, Dict[str, Any]]) -> bool: 
+        """Atualiza um cargo existente."""
+        sql = """
+            UPDATE Cargos SET
+                nome_cargo = ?, codigo_cargo = ?, nivel = ?, turno = ?, vagas = ?, salario = ?,
+                requisitos = ?, tem_discursiva = ?, letterhead_pdf_path = ?, cover_pdf_paths = ?,
+                peso_total_prova = ?, metadados_cargo = ?, data_modificacao = CURRENT_TIMESTAMP
+            WHERE id_cargo = ?
+        """
+        if isinstance(cargo_data, dict):
+            params = (
+                cargo_data.get('nome_cargo'), cargo_data.get('codigo_cargo'),
+                cargo_data.get('nivel'), cargo_data.get('turno'), cargo_data.get('vagas'), cargo_data.get('salario'),
+                cargo_data.get('requisitos'), cargo_data.get('tem_discursiva', 0),
+                cargo_data.get('letterhead_pdf_path'), json.dumps(cargo_data.get('cover_pdf_paths', [])),
+                cargo_data.get('peso_total_prova'), json.dumps(cargo_data.get('metadados_cargo', {})),
+                cargo_id
+            )
+        else: # CargoType
+            params = (
+                cargo_data.nome_cargo, cargo_data.codigo_cargo,
+                cargo_data.nivel, cargo_data.turno, cargo_data.vagas, cargo_data.salario,
+                cargo_data.requisitos, 1 if cargo_data.tem_discursiva else 0,
+                cargo_data.letterhead_pdf_path, json.dumps(cargo_data.cover_pdf_paths or []),
+                cargo_data.peso_total_prova, json.dumps(cargo_data.metadados_cargo or {}),
+                cargo_id
+            )
+        
+        conn = get_db_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, params)
+            conn.commit()
+            if cursor.rowcount > 0:
+                self.logger.info(f"Cargo ID {cargo_id} atualizado com sucesso.")
+                return True
+            else:
+                self.logger.info(f"Cargo ID {cargo_id} não encontrado ou nenhum dado alterado.")
+                return False
+        except sqlite3.Error as e_update:
+            self.logger.error(f"Falha ao atualizar cargo ID {cargo_id}: {e_update}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_cargo(self, cargo_id: str) -> bool:
+        """Deleta um cargo."""
+        sql = "DELETE FROM Cargos WHERE id_cargo = ?"
+        conn = get_db_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, (cargo_id,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                self.logger.info(f"Cargo ID {cargo_id} deletado com sucesso.")
+                return True
+            else:
+                self.logger.warning(f"Cargo ID {cargo_id} não encontrado para deleção.")
+                return False
+        except sqlite3.Error as e_delete:
+            self.logger.error(f"Falha ao deletar cargo ID {cargo_id}: {e_delete}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    
+    def _cargo_to_dict_for_update(self, cargo_obj: CargoType) -> Dict[str, Any]:
+        """Converte um objeto CargoType em um dicionário para UPDATE, serializando JSON."""
+        cargo_dict = cargo_obj.model_dump(exclude={'id_evento', 'id_cargo'}) # Exclui chaves que não devem ser atualizadas diretamente ou não são colunas
+
+        # Serializa campos que são listas/dicionários para strings JSON
+        # (Similar ao que fizemos para add_cargo_to_event ou _cargo_to_dict)
+        for field_name, field_value in cargo_dict.items():
+            if isinstance(field_value, (list, dict)):
+                try:
+                    cargo_dict[field_name] = json.dumps(field_value)
+                except TypeError:
+                    self.logger.warning(f"Não foi possível serializar o campo '{field_name}' para JSON no cargo ID {getattr(cargo_obj, 'id_cargo', 'N/A')}")
+                    # Decida um valor padrão ou como lidar com isso
+                    if isinstance(field_value, list): cargo_dict[field_name] = "[]"
+                    elif isinstance(field_value, dict): cargo_dict[field_name] = "{}"
+        return cargo_dict
+
+    def update_cargo_in_event(self, id_evento: str, cargo_to_update: CargoType) -> bool:
+        """
+        Atualiza um cargo existente no evento.
+        O objeto cargo_to_update já deve ter seu id_cargo definido.
+        """
+        if not cargo_to_update.id_cargo:
+            self.logger.error("Tentativa de atualizar cargo sem id_cargo.")
+            return False
+
+        # Converte o objeto CargoType para um dicionário, serializando campos JSON
+        cargo_dict_for_db = self._cargo_to_dict_for_update(cargo_to_update)
+
+        # Remove campos que não devem ser atualizados ou não existem na tabela (como o ID do evento se não for FK direta)
+        # ou campos de data de criação, etc.
+        # id_evento_fk = cargo_dict_for_db.pop('id_evento_fk', id_evento) # Se o campo é id_evento_fk
+
+        fields = []
+        values = []
+        for key, value in cargo_dict_for_db.items():
+            # Adicione aqui uma verificação se 'key' é uma coluna válida da tabela Cargos
+            # para evitar erros de SQL. Ex: if key in VALID_CARGO_COLUMNS_FOR_UPDATE:
+            fields.append(f"{key} = ?")
+            values.append(value)
+
+        if not fields:
+            self.logger.warning(f"Nenhum campo para atualizar para o cargo ID {cargo_to_update.id_cargo}.")
+            return False # Ou True, se considerar que "nada a fazer" é um sucesso.
+
+        values.append(cargo_to_update.id_cargo) # Para a cláusula WHERE
+        values.append(id_evento) # Para a cláusula WHERE (garante que o cargo pertence ao evento)
+
+        sql = f"UPDATE Cargos SET {', '.join(fields)} WHERE id_cargo = ? AND id_evento_fk = ?"
+
+        try:
+            # self.logger.debug(f"Executando SQL para atualizar cargo: {sql} com valores: {values}")
+            rows_affected = self._execute_query(sql, tuple(values), fetch_all=False, commit=True, is_update_delete=True)
+            if rows_affected is not None and rows_affected > 0:
+                self.logger.info(f"Cargo ID {cargo_to_update.id_cargo} atualizado com sucesso no evento ID {id_evento}.")
+                # Atualizar data_modificacao do evento pai
+                self.update_event_modification_timestamp(id_evento)
+                return True
+            elif rows_affected == 0:
+                self.logger.warning(f"Nenhum cargo encontrado com ID {cargo_to_update.id_cargo} no evento {id_evento} para atualizar, ou os dados eram os mesmos.")
+                return False # Ou True, dependendo se "nenhuma mudança" é erro.
+            else: # rows_affected is None (erro na execução)
+                self.logger.error(f"Falha ao atualizar o cargo ID {cargo_to_update.id_cargo}. _execute_query retornou None.")
+                return False
+        except Exception as e:
+            self.logger.error(f"Exceção ao atualizar cargo ID {cargo_to_update.id_cargo}: {e}", exc_info=True)
+            return False
+
+    # --- Métodos para Disciplinas (Exemplo) ---
+    def save_disciplina(self, disciplina_data: Union[DisciplinaType, Dict[str, Any]], event_id: Optional[str] = None) -> Optional[str]: 
+        """Salva (cria ou atualiza) uma disciplina."""
+        if isinstance(disciplina_data, dict):
+            id_disciplina = disciplina_data.get('id_disciplina', str(uuid.uuid4()))
+            nome_disciplina = disciplina_data.get('nome_disciplina')
+            codigo_disciplina = disciplina_data.get('codigo_disciplina')
+            descricao = disciplina_data.get('descricao')
+            id_evento_fk = event_id or disciplina_data.get('id_evento_fk')
+        else: # DisciplinaType
+            id_disciplina = disciplina_data.id_disciplina
+            nome_disciplina = disciplina_data.nome_disciplina
+            codigo_disciplina = disciplina_data.codigo_disciplina
+            descricao = disciplina_data.descricao
+            id_evento_fk = event_id or disciplina_data.id_evento_fk
+
+        sql = """
+            INSERT OR REPLACE INTO Disciplinas (
+                id_disciplina, id_evento_fk, nome_disciplina, codigo_disciplina, descricao, data_modificacao
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        params = (id_disciplina, id_evento_fk, nome_disciplina, codigo_disciplina, descricao)
+        
+        inserted_id = self._execute_query(sql, params, commit=True)
+        if inserted_id is not None: 
+            self.logger.info(f"Disciplina '{nome_disciplina}' (ID: {id_disciplina}) salva para evento ID '{id_evento_fk}'.")
+            return id_disciplina
+        else:
+            self.logger.error(f"Falha ao salvar disciplina '{nome_disciplina}'.")
+            return None
+
+    def get_disciplinas_by_event_id(self, event_id: str) -> List[Dict[str, Any]]:
+        """Busca todas as disciplinas de um evento específico."""
+        sql = "SELECT * FROM Disciplinas WHERE id_evento_fk = ? ORDER BY nome_disciplina;"
+        rows = self._execute_query(sql, (event_id,), fetch_all=True)
+        return [dict(row) for row in rows] if rows else []
+    
+    def get_disciplina_by_id(self, disciplina_id: str) -> Optional[Dict[str, Any]]:
+        """Busca uma disciplina pelo ID."""
+        sql = "SELECT * FROM Disciplinas WHERE id_disciplina = ?"
+        row = self._execute_query(sql, (disciplina_id,), fetch_one=True)
+        return dict(row) if row else None
+
+    # --- Métodos para Questões ---
+    def save_questao_banco(self, questao_obj: Union[QuestaoType, Dict[str, Any]], event_id: Optional[str] = None) -> Optional[str]: 
+        """
+        Salva uma questão (QuestaoType) e suas opções no banco de dados.
+        Se a questão já existir (mesmo ID), ela é atualizada (UPSERT).
+        As opções são deletadas e recriadas para garantir consistência.
+        """
+        if isinstance(questao_obj, dict):
+            q_id = questao_obj.get('id_questao', str(uuid.uuid4()))
+            q_event_id = event_id or questao_obj.get('id_evento_fk') 
+            q_enunciado = questao_obj.get('enunciado')
+            q_tipo = questao_obj.get('tipo')
+            q_disciplina_banco = questao_obj.get('disciplina_banco') 
+            q_resposta_correta = questao_obj.get('resposta_correta')
+            q_gabarito_preliminar = questao_obj.get('gabarito_preliminar', q_resposta_correta)
+            q_gabarito_definitivo = questao_obj.get('gabarito_definitivo', q_resposta_correta)
+            q_nivel_dificuldade = questao_obj.get('nivel_dificuldade', 'Médio')
+            q_tempo_esperado = questao_obj.get('tempo_esperado_resposta_segundos')
+            q_tags = json.dumps(questao_obj.get('tags', []))
+            q_id_texto_ref = questao_obj.get('id_texto_ref_vinculado') 
+            q_status_revisao = questao_obj.get('status_revisao')
+            q_justificativa_anulacao = questao_obj.get('justificativa_anulacao')
+            q_criador_id = questao_obj.get('criador_id')
+            q_metadados = json.dumps(questao_obj.get('metadados_questao', {}))
+            q_disciplina_id = questao_obj.get('disciplina_id') 
+            q_conteudo_id = questao_obj.get('conteudo_id') 
+            q_conteudo_nome = questao_obj.get('conteudo_nome') 
+            q_pontuacao = questao_obj.get('pontuacao', 1.0)
+            q_feedback_geral = questao_obj.get('feedback_geral_questao')
+            q_revisada = 1 if questao_obj.get('revisada') else 0
+            q_autor_elaborador = questao_obj.get('autor_elaborador')
+            q_num_original_docx = questao_obj.get('numero_questao_original_docx')
+            q_hash_conteudo = questao_obj.get('hash_conteudo_questao')
+            q_fonte = questao_obj.get('fonte_questao')
+            q_opcoes = questao_obj.get('opcoes', [])
+        else: # Assume QuestaoType
+            q_id = questao_obj.id_questao
+            q_event_id = event_id or questao_obj.id_evento_fk 
+            q_enunciado = questao_obj.enunciado
+            q_tipo = questao_obj.tipo
+            q_disciplina_banco = questao_obj.disciplina_banco
+            q_resposta_correta = questao_obj.resposta_correta
+            q_gabarito_preliminar = questao_obj.gabarito_preliminar
+            q_gabarito_definitivo = questao_obj.gabarito_definitivo
+            q_nivel_dificuldade = questao_obj.nivel_dificuldade
+            q_tempo_esperado = questao_obj.tempo_esperado_resposta_segundos
+            q_tags = json.dumps(questao_obj.tags or [])
+            q_id_texto_ref = questao_obj.id_texto_ref_vinculado
+            q_status_revisao = questao_obj.status_revisao
+            q_justificativa_anulacao = questao_obj.justificativa_anulacao
+            q_criador_id = questao_obj.criador_id
+            q_metadados = json.dumps(questao_obj.metadados_questao or {})
+            q_disciplina_id = questao_obj.disciplina_id
+            q_conteudo_id = questao_obj.conteudo_id
+            q_conteudo_nome = questao_obj.conteudo_nome
+            q_pontuacao = questao_obj.pontuacao
+            q_feedback_geral = questao_obj.feedback_geral_questao
+            q_revisada = 1 if questao_obj.revisada else 0
+            q_autor_elaborador = questao_obj.autor_elaborador
+            q_num_original_docx = questao_obj.numero_questao_original_docx
+            q_hash_conteudo = questao_obj.hash_conteudo_questao
+            q_fonte = questao_obj.fonte_questao
+            q_opcoes = questao_obj.opcoes or []
+
+        self.logger.info(f"EventManager: Tentando salvar questão ID {q_id} para disciplina '{q_disciplina_banco}' no evento '{q_event_id}'")
+
+        conn = None
+        try:
+            conn = get_db_connection(self.db_path)
+            cursor = conn.cursor()
+            conn.execute("PRAGMA foreign_keys = ON;") 
+
+            sql_insert_questao = """
+                INSERT OR REPLACE INTO QuestoesBanco (
+                    id_questao, id_evento_fk, enunciado, tipo, disciplina_banco, resposta_correta,
+                    gabarito_preliminar, gabarito_definitivo, nivel_dificuldade, 
+                    tempo_esperado_resposta_segundos, tags_keywords, id_texto_ref_vinculado, 
+                    status_revisao, justificativa_anulacao, criador_id, metadados_questao, 
+                    disciplina_id, conteudo_id, conteudo_nome, pontuacao, feedback_geral_questao, 
+                    revisada, autor_elaborador, data_modificacao, numero_questao_original_docx,
+                    hash_conteudo_questao, fonte_questao
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+            """
+            params_questoes = (
+                q_id, q_event_id, q_enunciado, q_tipo, q_disciplina_banco, q_resposta_correta,
+                q_gabarito_preliminar, q_gabarito_definitivo, q_nivel_dificuldade,
+                q_tempo_esperado, q_tags, q_id_texto_ref,
+                q_status_revisao, q_justificativa_anulacao, q_criador_id, q_metadados,
+                q_disciplina_id, q_conteudo_id, q_conteudo_nome, q_pontuacao, q_feedback_geral,
+                q_revisada, q_autor_elaborador, q_num_original_docx,
+                q_hash_conteudo, q_fonte
+            )
+            cursor.execute(sql_insert_questao, params_questoes)
+            self.logger.debug(f"Questão ID {q_id} inserida/atualizada na tabela QuestoesBanco.")
+
+            if q_tipo == "Múltipla Escolha" and q_opcoes:
+                cursor.execute("DELETE FROM OpcoesQuestao WHERE id_questao_fk = ?", (q_id,))
+                self.logger.debug(f"Opções antigas para questão ID {q_id} deletadas.")
+
+                sql_insert_opcao = """
+                    INSERT INTO OpcoesQuestao (
+                        id_opcao_questao, id_questao_fk, letra, texto_opcao, correta, feedback_opcao, imagem_path_opcao
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """
+                for opcao_item in q_opcoes:
+                    if isinstance(opcao_item, dict):
+                        id_opcao = opcao_item.get('id_opcao', str(uuid.uuid4()))
+                        letra = opcao_item.get('letra')
+                        texto_opcao = opcao_item.get('texto_opcao') 
+                        correta = 1 if opcao_item.get('correta') else 0
+                        feedback = opcao_item.get('feedback')
+                        img_path = opcao_item.get('imagem_path_opcao')
+                    else: # Assume OpcaoMultiplaEscolha
+                        id_opcao = opcao_item.id_opcao
+                        letra = opcao_item.letra
+                        texto_opcao = opcao_item.texto_opcao
+                        correta = 1 if opcao_item.correta else 0
+                        feedback = opcao_item.feedback
+                        img_path = opcao_item.imagem_path_opcao
+                    
+                    params_opcao = (id_opcao, q_id, letra, texto_opcao, correta, feedback, img_path)
+                    cursor.execute(sql_insert_opcao, params_opcao)
+                self.logger.debug(f"{len(q_opcoes)} opções salvas para questão ID {q_id}.")
+
+            conn.commit()
+            self.logger.info(f"Questão ID {q_id} e suas opções (se aplicável) salvas com sucesso.")
+            return q_id
+
+        except sqlite3.Error as e:
+            if conn:
+                conn.rollback() 
+            self.logger.error(f"Erro Operacional SQLite ao salvar questão ID {q_id} (verifique o schema, ex: colunas ausentes, tipos de dados): {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def save_reference_text(self, texto_ref_obj: Union[TextoReferenciaType, Dict[str, Any]], event_id: str) -> Optional[int]: 
+        """Salva um TextoReferenciaType no banco, associado a um evento."""
+        if isinstance(texto_ref_obj, dict):
+            tr_codigo_ref = texto_ref_obj.get('codigo_ref')
+            tr_titulo = texto_ref_obj.get('titulo')
+            tr_conteudo = texto_ref_obj.get('conteudo')
+            tr_caminho_imagem = texto_ref_obj.get('caminho_imagem_relativo')
+            tr_descricao_imagem = texto_ref_obj.get('descricao_imagem')
+            tr_tipo_conteudo = texto_ref_obj.get('tipo_conteudo')
+            tr_metadados = json.dumps(texto_ref_obj.get('metadados_texto_ref', {}))
+            tr_fonte = texto_ref_obj.get('fonte_referencia')
+        else: # Assume TextoReferenciaType
+            tr_codigo_ref = texto_ref_obj.codigo_ref
+            tr_titulo = texto_ref_obj.titulo
+            tr_conteudo = texto_ref_obj.conteudo
+            tr_caminho_imagem = texto_ref_obj.caminho_imagem_relativo
+            tr_descricao_imagem = texto_ref_obj.descricao_imagem
+            tr_tipo_conteudo = texto_ref_obj.tipo_conteudo
+            tr_metadados = json.dumps(texto_ref_obj.metadados_texto_ref or {})
+            tr_fonte = texto_ref_obj.fonte_referencia
+
+        self.logger.info(f"EventManager: Tentando salvar texto de referência código '{tr_codigo_ref}' para evento ID '{event_id}'")
+        
+        conn = None
+        try:
+            conn = get_db_connection(self.db_path)
+            cursor = conn.cursor()
+            conn.execute("PRAGMA foreign_keys = ON;")
+
+            cursor.execute("SELECT id_texto_ref_geral FROM TextosReferenciaGeral WHERE id_evento_fk = ? AND codigo_ref = ?",
+                           (event_id, tr_codigo_ref))
+            existing = cursor.fetchone()
+
+            if existing:
+                sql_update = """
+                    UPDATE TextosReferenciaGeral SET
+                        titulo = ?, conteudo = ?, caminho_imagem_relativo = ?, descricao_imagem = ?,
+                        tipo_conteudo = ?, metadados_texto_ref = ?, fonte_referencia = ?,
+                        data_modificacao = CURRENT_TIMESTAMP
+                    WHERE id_texto_ref_geral = ?
+                """
+                params_update = (
+                    tr_titulo, tr_conteudo, tr_caminho_imagem, tr_descricao_imagem,
+                    tr_tipo_conteudo, tr_metadados, tr_fonte,
+                    existing['id_texto_ref_geral']
+                )
+                cursor.execute(sql_update, params_update)
+                conn.commit()
+                self.logger.info(f"Texto de referência código '{tr_codigo_ref}' (ID: {existing['id_texto_ref_geral']}) atualizado para o evento '{event_id}'.")
+                return existing['id_texto_ref_geral']
+            else:
+                sql_insert = """
+                    INSERT INTO TextosReferenciaGeral (
+                        id_evento_fk, codigo_ref, titulo, conteudo, caminho_imagem_relativo,
+                        descricao_imagem, tipo_conteudo, metadados_texto_ref, fonte_referencia
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                params_insert = (
+                    event_id, tr_codigo_ref, tr_titulo, tr_conteudo, tr_caminho_imagem,
+                    tr_descricao_imagem, tr_tipo_conteudo, tr_metadados, tr_fonte
+                )
+                cursor.execute(sql_insert, params_insert)
+                inserted_id = cursor.lastrowid 
+                conn.commit()
+                self.logger.info(f"Texto de referência '{tr_codigo_ref}' salvo com ID {inserted_id} para o evento {event_id}.")
+                return inserted_id
+
+        except sqlite3.Error as e:
+            if conn:
+                conn.rollback()
+            self.logger.error(f"Erro Operacional SQLite ao salvar texto de referência '{tr_codigo_ref}' (verifique o schema, ex: coluna 'descricao_imagem'): {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+    def get_textos_referencia_by_event_id(self, event_id: str) -> Dict[str, Dict[str, Any]]:
+        """Busca todos os textos de referência de um evento, retornando um dict indexado pelo codigo_ref."""
+        sql = "SELECT * FROM TextosReferenciaGeral WHERE id_evento_fk = ? ORDER BY codigo_ref;"
+        rows = self._execute_query(sql, (event_id,), fetch_all=True)
+        
+        textos_dict = {}
+        if rows:
+            for row in rows:
+                texto_data = dict(row)
+                try:
+                    if texto_data.get('metadados_texto_ref'):
+                        texto_data['metadados_texto_ref'] = json.loads(texto_data['metadados_texto_ref'])
+                except json.JSONDecodeError:
+                     self.logger.warning(f"Falha ao desserializar metadados_texto_ref para {texto_data.get('codigo_ref')}")
+                     texto_data['metadados_texto_ref'] = {}
+                textos_dict[texto_data['codigo_ref']] = texto_data
+        return textos_dict
+
+
+    def get_questoes_by_disciplina_and_event(self, disciplina_banco: str, event_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Busca questões por disciplina_banco e, opcionalmente, por id_evento_fk.
+        Retorna uma lista de dicionários, onde cada dicionário representa uma questão
+        e inclui suas opções (se for múltipla escolha).
+        """
+        if event_id:
+            sql_questoes = "SELECT * FROM QuestoesBanco WHERE disciplina_banco = ? AND id_evento_fk = ? ORDER BY data_criacao DESC;"
+            params_questoes = (disciplina_banco, event_id)
+        else:
+            sql_questoes = "SELECT * FROM QuestoesBanco WHERE disciplina_banco = ? ORDER BY data_criacao DESC;"
+            params_questoes = (disciplina_banco,)
+
+        questoes_rows = self._execute_query(sql_questoes, params_questoes, fetch_all=True)
+        
+        lista_completa_questoes = []
+        if questoes_rows:
+            for q_row_data in questoes_rows:
+                questao_dict = dict(q_row_data)
+                
+                try:
+                    questao_dict['tags_keywords'] = json.loads(questao_dict.get('tags_keywords', '[]')) if questao_dict.get('tags_keywords') else []
+                    questao_dict['metadados_questao'] = json.loads(questao_dict.get('metadados_questao', '{}')) if questao_dict.get('metadados_questao') else {}
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Falha ao desserializar JSON para questão ID {questao_dict.get('id_questao')}")
+                    questao_dict['tags_keywords'] = []
+                    questao_dict['metadados_questao'] = {}
+
+                if questao_dict.get('tipo') == "Múltipla Escolha":
+                    sql_opcoes = "SELECT * FROM OpcoesQuestao WHERE id_questao_fk = ? ORDER BY letra;"
+                    opcoes_rows = self._execute_query(sql_opcoes, (questao_dict['id_questao'],), fetch_all=True)
+                    questao_dict['opcoes'] = [dict(opt_row) for opt_row in opcoes_rows] if opcoes_rows else []
+                else:
+                    questao_dict['opcoes'] = [] 
+                
+                lista_completa_questoes.append(questao_dict)
+        
+        return lista_completa_questoes
+
+    def get_questao_by_id(self, id_questao: str) -> Optional[Dict[str, Any]]:
+        """Busca uma questão específica pelo ID, incluindo suas opções se aplicável."""
+        sql_questao = "SELECT * FROM QuestoesBanco WHERE id_questao = ?;"
+        q_row = self._execute_query(sql_questao, (id_questao,), fetch_one=True)
+
+        if q_row:
+            questao_dict = dict(q_row)
+            try:
+                questao_dict['tags_keywords'] = json.loads(questao_dict.get('tags_keywords', '[]')) if questao_dict.get('tags_keywords') else []
+                questao_dict['metadados_questao'] = json.loads(questao_dict.get('metadados_questao', '{}')) if questao_dict.get('metadados_questao') else {}
+            except json.JSONDecodeError:
+                self.logger.warning(f"Falha ao desserializar JSON para questão ID {id_questao}")
+                questao_dict['tags_keywords'] = []
+                questao_dict['metadados_questao'] = {}
+
+            if questao_dict.get('tipo') == "Múltipla Escolha":
+                sql_opcoes = "SELECT * FROM OpcoesQuestao WHERE id_questao_fk = ? ORDER BY letra;"
+                opcoes_rows = self._execute_query(sql_opcoes, (id_questao,), fetch_all=True)
+                questao_dict['opcoes'] = [dict(opt_row) for opt_row in opcoes_rows] if opcoes_rows else []
+            else:
+                questao_dict['opcoes'] = []
+            
+            return questao_dict
+        return None
+
+    def delete_questao_banco(self, id_questao: str) -> bool:
+        """Deleta uma questão do banco e suas opções associadas (via ON DELETE CASCADE)."""
+        sql = "DELETE FROM QuestoesBanco WHERE id_questao = ?"
+        conn = get_db_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, (id_questao,))
+            conn.commit()
+            if cursor.rowcount > 0:
+                self.logger.info(f"Questão ID {id_questao} e suas opções deletadas com sucesso.")
+                return True
+            else:
+                self.logger.warning(f"Questão ID {id_questao} não encontrada para deleção.")
+                return False
+        except sqlite3.Error as e_delete:
+            self.logger.error(f"Falha ao deletar questão ID {id_questao}: {e_delete}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    # --- Métodos para Provas Montadas ---
+    def save_prova_montada(self, prova_data: Union[ProvaMontadaType, Dict[str, Any]]) -> Optional[str]: 
+        """Salva (cria ou atualiza) uma ProvaMontada."""
+        if isinstance(prova_data, dict):
+            pm_id = prova_data.get('id_prova_montada', str(uuid.uuid4()))
+        else: # Assume ProvaMontadaType
+            pm_id = prova_data.id_prova_montada
+
+        sql = """
+            INSERT OR REPLACE INTO ProvasMontadas (
+                id_prova_montada, id_evento_fk, id_cargo_fk, nome_prova_montada, identificador_prova,
+                titulo_prova, instrucoes_gerais, texto_cabecalho_prova_docx, texto_rodape_prova_docx,
+                frase_assinatura_folha_rosto, status_montagem, responsavel_montagem,
+                data_ultima_geracao, caminho_arquivo_gerado, hash_prova_gerada, configuracoes_prova,
+                data_modificacao 
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) 
+        """
+        if isinstance(prova_data, dict):
+            config_prova_json = json.dumps(prova_data.get('configuracoes', {})) 
+            params = (
+                pm_id, prova_data.get('id_evento_fk'), prova_data.get('id_cargo_fk'), 
+                prova_data.get('nome_prova_montada'), prova_data.get('identificador_prova'),
+                prova_data.get('titulo_prova'), prova_data.get('instrucoes_gerais'),
+                prova_data.get('texto_cabecalho_prova_docx'), prova_data.get('texto_rodape_prova_docx'),
+                prova_data.get('frase_assinatura_folha_rosto'), prova_data.get('status_montagem', 'Em Elaboração'),
+                prova_data.get('responsavel_montagem'), prova_data.get('data_ultima_geracao'),
+                prova_data.get('caminho_arquivo_gerado'), prova_data.get('hash_prova_gerada'),
+                config_prova_json
+            )
+        else: # ProvaMontadaType
+            config_prova_json = json.dumps(prova_data.configuracoes.__dict__ if hasattr(prova_data.configuracoes, '__dict__') else {})
+            params = (
+                prova_data.id_prova_montada, prova_data.id_evento_fk, prova_data.id_cargo_fk, 
+                prova_data.nome_prova_montada, prova_data.identificador_prova,
+                prova_data.titulo_prova, prova_data.instrucoes_gerais,
+                prova_data.texto_cabecalho_prova_docx, prova_data.texto_rodape_prova_docx,
+                prova_data.frase_assinatura_folha_rosto, prova_data.status_montagem,
+                prova_data.responsavel_montagem, str(prova_data.data_ultima_geracao) if prova_data.data_ultima_geracao else None,
+                prova_data.caminho_arquivo_gerado, prova_data.hash_prova_gerada,
+                config_prova_json
+            )
+        
+        result = self._execute_query(sql, params, commit=True)
+        if result is not None:
+            self.logger.info(f"Prova Montada ID {pm_id} salva com sucesso.")
+            return pm_id
+        else:
+            self.logger.error(f"Falha ao salvar Prova Montada ID {pm_id}.")
+            return None
+
+    def get_provas_montadas_by_cargo_id(self, cargo_id: str) -> List[Dict[str, Any]]:
+        """Busca todas as provas montadas para um cargo específico."""
+        sql = "SELECT * FROM ProvasMontadas WHERE id_cargo_fk = ? ORDER BY nome_prova_montada, identificador_prova;"
+        rows = self._execute_query(sql, (cargo_id,), fetch_all=True)
+        provas = []
+        if rows:
+            for row_data in rows:
+                prova_dict = dict(row_data)
+                try:
+                    if prova_dict.get('configuracoes_prova'):
+                        prova_dict['configuracoes'] = json.loads(prova_dict['configuracoes_prova'])
+                    else:
+                        prova_dict['configuracoes'] = {}
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Falha ao desserializar configuracoes_prova para Prova ID {prova_dict.get('id_prova_montada')}")
+                    prova_dict['configuracoes'] = {}
+                provas.append(prova_dict)
+        return provas
+
+    def get_prova_montada_by_id(self, id_prova_montada: str) -> Optional[Dict[str, Any]]:
+        """Busca uma prova montada específica pelo seu ID, incluindo sua estrutura."""
+        sql = "SELECT * FROM ProvasMontadas WHERE id_prova_montada = ?;"
+        row = self._execute_query(sql, (id_prova_montada,), fetch_one=True)
+        if row:
+            prova_dict = dict(row)
+            try:
+                if prova_dict.get('configuracoes_prova'):
+                    prova_dict['configuracoes'] = json.loads(prova_dict['configuracoes_prova'])
+                else:
+                    prova_dict['configuracoes'] = {} 
+            except json.JSONDecodeError:
+                self.logger.warning(f"Falha ao desserializar configuracoes_prova para Prova ID {id_prova_montada}")
+                prova_dict['configuracoes'] = {}
+            
+            sql_blocos = "SELECT * FROM BlocosQuestoesProva WHERE id_prova_montada_fk = ? ORDER BY ordem_bloco;"
+            blocos_rows = self._execute_query(sql_blocos, (id_prova_montada,), fetch_all=True)
+            prova_dict['blocos_questoes'] = []
+            if blocos_rows:
+                for bloco_row_data in blocos_rows:
+                    bloco_dict = dict(bloco_row_data)
+                    sql_questoes_bloco = """
+                        SELECT qbp.*, qb.enunciado, qb.tipo, qb.disciplina_banco 
+                        FROM QuestoesPorBlocoProva qbp
+                        JOIN QuestoesBanco qb ON qbp.id_questao_banco_fk = qb.id_questao
+                        WHERE qbp.id_bloco_prova_fk = ? 
+                        ORDER BY qbp.numero_questao_na_prova;
+                    """ 
+                    questoes_bloco_rows = self._execute_query(sql_questoes_bloco, (bloco_dict['id_bloco_prova'],), fetch_all=True)
+                    bloco_dict['questoes'] = [dict(q_b_row) for q_b_row in questoes_bloco_rows] if questoes_bloco_rows else []
+                    prova_dict['blocos_questoes'].append(bloco_dict)
+            return prova_dict
+        return None
+
+    def delete_prova_montada(self, id_prova_montada: str) -> bool:
+        """Deleta uma prova montada e sua estrutura associada (blocos, questões no bloco)."""
+        sql = "DELETE FROM ProvasMontadas WHERE id_prova_montada = ?"
+        conn = get_db_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, (id_prova_montada,)) 
+            conn.commit()
+            if cursor.rowcount > 0:
+                self.logger.info(f"Prova Montada ID {id_prova_montada} deletada com sucesso.")
+                return True
+            else:
+                self.logger.warning(f"Prova Montada ID {id_prova_montada} não encontrada para deleção.")
+                return False
+        except sqlite3.Error as e_delete:
+            self.logger.error(f"Falha ao deletar Prova Montada ID {id_prova_montada}: {e_delete}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_disciplinas_from_event_question_bank(self, event_id: str) -> List[str]:
+        """
+        Retorna uma lista de nomes de disciplinas únicas presentes no banco de questões
+        para um determinado evento.
+        """
+        sql = """
+            SELECT DISTINCT disciplina_banco 
+            FROM QuestoesBanco 
+            WHERE id_evento_fk = ? AND disciplina_banco IS NOT NULL AND disciplina_banco != ''
+            ORDER BY disciplina_banco;
+        """
+        rows = self._execute_query(sql, (event_id,), fetch_all=True)
+        return [row['disciplina_banco'] for row in rows] if rows else []
+
+
+    def get_all_disciplinas_in_event_question_bank(self, event_id: str) -> List[Dict[str, Any]]:
+        """
+        Retorna uma lista de dicionários com informações das disciplinas
+        (nome e contagem de questões) para um determinado evento.
+        """
+        sql = """
+            SELECT 
+                disciplina_banco, 
+                COUNT(id_questao) as quantidade_questoes
+            FROM QuestoesBanco
+            WHERE id_evento_fk = ? AND disciplina_banco IS NOT NULL AND disciplina_banco != ''
+            GROUP BY disciplina_banco
+            ORDER BY disciplina_banco;
+        """
+        rows = self._execute_query(sql, (event_id,), fetch_all=True)
+        return [dict(row) for row in rows] if rows else []
+
+
+if __name__ == '__main__':
+    # Exemplo de uso (requer que o DB exista e as tabelas estejam criadas)
+    # Este bloco é mais para teste e depuração.
+    print("Executando EventManager diretamente para testes...")
+    
+    # Determinar o caminho do DB a partir da localização deste script
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root_dir = os.path.dirname(current_dir) # Assume que 'core' está um nível abaixo do root
+    DB_FILE = os.path.join(project_root_dir, 'diagprooff.db')
+
+    print(f"Usando banco de dados em: {DB_FILE}")
+
+    if not os.path.exists(DB_FILE):
+        print(f"AVISO: Arquivo de banco de dados '{DB_FILE}' não encontrado. Execute database_setup.py primeiro.")
+    else:
+        # Para teste direto, criar um logger simples
+        test_logger = logging.getLogger("EventManagerTest")
+        logging.basicConfig(level=logging.DEBUG) # Configura o root logger
+        test_logger.info("Logger de teste para EventManager ativado.")
+
+        event_manager = EventManager(db_path=DB_FILE, logger=test_logger)
+        
+        # Testar listagem de eventos
+        print("\n--- Resumo dos Eventos ---")
+        eventos_summary = event_manager.get_all_events_summary()
+        if eventos_summary:
+            for ev_sum in eventos_summary:
+                print(f"ID: {ev_sum['id_evento']}, Nome: {ev_sum['nome_evento']}, Cargos: {ev_sum['numero_cargos']}, Provas: {ev_sum['numero_provas_montadas']}")
+        else:
+            print("Nenhum evento encontrado.")
+
+        # Adicionar um evento de teste se não houver nenhum
+        test_event_id = None
+        if not eventos_summary:
+            print("\n--- Criando Evento de Teste ---")
+            novo_evento_data_dict = { # Usando dict para teste
+                "id_evento": str(uuid.uuid4()),
+                "nome_evento": "Evento de Teste Automatizado",
+                "data_prova": datetime.now().strftime("%Y-%m-%d"),
+                "status": "Em Planejamento"
+            }
+            test_event_id = event_manager.create_event(novo_evento_data_dict) 
+            if test_event_id:
+                print(f"Evento de teste criado com ID: {test_event_id}")
+            else:
+                print("Falha ao criar evento de teste.")
+        else:
+            test_event_id = eventos_summary[0]['id_evento'] 
+
+        if test_event_id:
+            print(f"\n--- Detalhes do Evento ID: {test_event_id} ---")
+            evento_detalhe = event_manager.get_event_by_id(test_event_id)
+            if evento_detalhe:
+                print(f"Nome: {evento_detalhe['nome_evento']}")
+                print(f"  Cargos: {len(evento_detalhe.get('cargos', []))}")
+                print(f"  Textos Ref.: {len(evento_detalhe.get('textos_referencia', {}))}")
+                print(f"  Provas Montadas: {len(evento_detalhe.get('provas_montadas', []))}")
+
+                print("\n--- Adicionando Cargo de Teste ---")
+                novo_cargo_data_dict = { 
+                    "id_cargo": str(uuid.uuid4()),
+                    "nome_cargo": "Analista de Testes Jr.",
+                    "codigo_cargo": "ATJ001",
+                    "nivel": "Júnior"
+                }
+                cargo_id_criado = event_manager.add_cargo_to_event(test_event_id, novo_cargo_data_dict)
+                if cargo_id_criado:
+                    print(f"Cargo de teste adicionado com ID: {cargo_id_criado}")
+                    
+                    print(f"\n--- Cargos do Evento ID: {test_event_id} ---")
+                    cargos_do_evento = event_manager.get_cargos_by_event_id(test_event_id)
+                    for cargo in cargos_do_evento:
+                        print(f"  ID Cargo: {cargo['id_cargo']}, Nome: {cargo['nome_cargo']}")
+                else:
+                    print("Falha ao adicionar cargo de teste.")
+            
+            print("\n--- Adicionando Texto de Referência de Teste ---")
+            texto_ref_data_dict = { 
+                "codigo_ref": "TR_TESTE_001",
+                "titulo": "Texto de Exemplo para Testes",
+                "conteudo": "Este é o conteúdo do texto de referência.",
+                "tipo_conteudo": "texto",
+                "fonte_referencia": "Manual de Testes DiagProOFF"
+            }
+            tr_id_db = event_manager.save_reference_text(texto_ref_data_dict, test_event_id)
+            if tr_id_db is not None: 
+                print(f"Texto de referência salvo com ID de tabela: {tr_id_db}")
+                
+                textos_do_evento = event_manager.get_textos_referencia_by_event_id(test_event_id)
+                print(f"Textos de Referência no evento ({len(textos_do_evento)}):")
+                for codigo, tr_data in textos_do_evento.items():
+                    print(f"  Código: {codigo}, Título: {tr_data.get('titulo')}")
+            else:
+                print("Falha ao salvar texto de referência.")
+
+            print("\n--- Adicionando Questão de Teste ---")
+            questao_teste_data_dict = { 
+                "id_questao": str(uuid.uuid4()),
+                "id_evento_fk": test_event_id, 
+                "enunciado": "Qual é a capital do Brasil?",
+                "tipo": "Múltipla Escolha",
+                "disciplina_banco": "Conhecimentos Gerais",
+                "resposta_correta": "A",
+                "opcoes": [
+                    {"id_opcao": str(uuid.uuid4()), "letra": "A", "texto_opcao": "Brasília", "correta": True},
+                    {"id_opcao": str(uuid.uuid4()), "letra": "B", "texto_opcao": "Rio de Janeiro", "correta": False},
+                    {"id_opcao": str(uuid.uuid4()), "letra": "C", "texto_opcao": "São Paulo", "correta": False}
+                ]
+            }
+            q_id_salva = event_manager.save_questao_banco(questao_teste_data_dict) 
+            if q_id_salva:
+                print(f"Questão de teste salva com ID: {q_id_salva}")
+                
+                questoes_cg = event_manager.get_questoes_by_disciplina_and_event("Conhecimentos Gerais", test_event_id)
+                print(f"Questões de 'Conhecimentos Gerais' no evento ({len(questoes_cg)}):")
+                for q_data in questoes_cg:
+                    print(f"  ID: {q_data['id_questao']}, Enunciado: {q_data['enunciado'][:30]}...")
+            else:
+                print("Falha ao salvar questão de teste.")
+

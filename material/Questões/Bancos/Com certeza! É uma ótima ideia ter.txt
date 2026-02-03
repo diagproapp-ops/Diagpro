@@ -1,0 +1,105 @@
+Com certeza! É uma ótima ideia ter modelos claros para garantir que a importação funcione perfeitamente. Criei um guia completo abaixo com exemplos de como estruturar seu arquivo Word para cada tipo de questão, baseado nas regras do docx_parser.py que ajustamos.
+
+Estrutura Fundamental: O Uso de Tabelas
+O parser funciona identificando tabelas no documento do Word. A regra principal é:
+
+Tabela 1: Enunciado da Questão. Uma tabela simples de 1 linha e 1 coluna que contém o enunciado e todos os metadados da questão.
+Tabela 2: Alternativas. (Apenas para múltipla escolha) Uma tabela de 1 coluna e múltiplas linhas, onde cada célula de cada linha é uma alternativa.
+Modelo 1: Questão de Múltipla Escolha
+Este é o formato mais comum. O parser o identifica automaticamente pela presença da tabela de alternativas logo após a tabela do enunciado.
+
+Como fazer no Word:
+
+Insira uma tabela 1x1. Dentro dela, digite o enunciado da questão.
+Você pode adicionar as tags de metadados dentro desta mesma célula.
+Logo abaixo, insira outra tabela com 1 coluna e até 5 linhas (o parser está configurado para um máximo de 5 alternativas).
+Digite cada alternativa em uma célula/linha separada.
+Importante: Por padrão, o parser considera a primeira alternativa (letra A) como a correta.
+
+Exemplo Visual no Word:
+
+(Início do Documento)
+
+[ Tabela 1x1 ]
+
+A respeito da Crise de 1929, qual evento é considerado seu marco inicial?
+[NIVEL: Médio] [PONTOS: 1.5] [TAGS: História, Economia, Século XX]
+
+[ Tabela 1 Coluna x 4 Linhas ]
+
+[ Linha 1 ] A Quebra da Bolsa de Valores de Nova York.
+
+[ Linha 2 ] A eleição de Franklin D. Roosevelt.
+
+[ Linha 3 ] O início da Segunda Guerra Mundial.
+
+[ Linha 4 ] A criação da Liga das Nações.
+
+[ Tabela 1x1 ]
+
+(Enunciado da próxima questão...)
+
+Modelo 2: Questão Discursiva
+Existem duas maneiras de criar uma questão discursiva:
+
+Modo Implícito (Recomendado): Simplesmente não adicione uma tabela de alternativas. Se o parser encontrar um enunciado sem uma tabela de alternativas logo em seguida, ele a classificará como discursiva.
+Modo Explícito: Você pode adicionar a tag [TIPO: Discursiva] no enunciado para deixar claro, mas não é obrigatório.
+Exemplo Visual no Word (Modo Implícito):
+
+[ Tabela 1x1 ]
+
+Discorra sobre as principais consequências econômicas e sociais da Revolução Industrial para a classe trabalhadora europeia. [PONTOS: 5.0] [COMENTARIOS: O aluno deve mencionar as condições de trabalho, a urbanização e o surgimento de movimentos operários.]
+
+[ Tabela 1x1 ]
+
+(Enunciado da próxima questão, que pode ser de qualquer tipo)
+
+Modelo 3: Questão de Certo ou Errado
+Para este tipo, é obrigatório o uso da tag [TIPO: ...], pois é a única forma de o parser diferenciá-la de uma questão discursiva.
+
+Como fazer no Word:
+
+Insira uma tabela 1x1 para o enunciado.
+Dentro da célula, digite a afirmativa a ser julgada e adicione a tag [TIPO: Certo ou Errado].
+Não adicione uma tabela de alternativas.
+Exemplo Visual no Word:
+
+[ Tabela 1x1 ]
+
+O Tratado de Tordesilhas, assinado em 1494, dividiu o mundo a ser descoberto entre Portugal e Espanha, utilizando um meridiano a 370 léguas a oeste das ilhas de Cabo Verde. [TIPO: Certo ou Errado] [NIVEL: Fácil]
+
+Modelo 4: Usando Textos de Referência
+Este modelo permite criar um texto (ou imagem) de apoio e vincular várias questões a ele.
+
+Passo A: Definir o Texto de Referência
+
+Use os marcadores especiais para delimitar o texto. O título que você define aqui será usado para vincular as questões.
+
+###TEXTO_REFERENCIA_INICIO###
+
+A Era da Informação
+
+A Era da Informação, também conhecida como Era Digital, é o período que sucede a era industrial e se caracteriza pela capacidade dos indivíduos de transferir informação livremente e ter acesso instantâneo ao conhecimento. [...mais texto...]
+
+###TEXTO_REFERENCIA_FIM###
+
+Passo B: Vincular Questões ao Texto
+
+Na tabela do enunciado de cada questão que depende desse texto, adicione a tag [USA_TEXTO_REF: ...], usando o título exato que você definiu.
+
+[ Tabela 1x1 ]
+
+De acordo com o texto "A Era da Informação", qual é a principal característica do período? [USA_TEXTO_REF: A Era da Informação]
+
+[ Tabela 1 Coluna x 3 Linhas ]
+
+[ Linha 1 ] A capacidade de transferir informação livremente.
+
+[ Linha 2 ] O desenvolvimento da máquina a vapor.
+
+[ Linha 3 ] A produção em massa de automóveis.
+
+Dicas Finais
+Imagens: Para adicionar uma imagem a um enunciado ou a uma alternativa, simplesmente cole a imagem dentro da célula correspondente da tabela.
+Simplicidade: Mantenha a formatação do texto (fonte, cor, etc.) simples dentro do Word. O parser foi projetado para extrair o conteúdo textual e estrutural, não a formatação cosmética.
+Tags: Use as tags [NIVEL:], [PONTOS:], [TAGS:], [COMENTARIOS:] e [TIPO:] livremente dentro da célula do enunciado para enriquecer os dados de cada questão.

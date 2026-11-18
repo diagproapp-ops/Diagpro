@@ -13,7 +13,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Importa Base e todos os modelos para autogenerate
-from backend.app.database import Base  # noqa: E402
+from backend.app.database import Base, sync_ssl_query  # noqa: E402
 import backend.app.db_models  # noqa: E402, F401
 
 target_metadata = Base.metadata
@@ -23,11 +23,13 @@ def get_sync_url() -> str:
     url = os.getenv("ALEMBIC_DATABASE_URL") or os.getenv("DATABASE_URL", "")
     if not url:
         raise RuntimeError("DATABASE_URL não configurada no ambiente/.env para executar o Alembic.")
-    # Converte driver assíncrono para síncrono para o Alembic
-    return (
-        url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-           .replace("sqlite+aiosqlite:///", "sqlite:///")
-    )
+    # Converte driver assíncrono para síncrono para o Alembic (somente PostgreSQL)
+    url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    if not url.startswith("postgresql+psycopg2://"):
+        raise RuntimeError("O Alembic do DiagPro só opera com PostgreSQL (postgresql+psycopg2://).")
+    if "sslmode=" not in url:
+        url += ("&" if "?" in url else "?") + sync_ssl_query()
+    return url
 
 
 def run_migrations_offline() -> None:

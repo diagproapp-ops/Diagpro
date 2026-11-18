@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from backend.app import secure_files
 from backend.app.db_models import TextoReferenciaGeral
 from backend.app.models import TextoReferenciaOut
 from backend.app.security import get_tenant_db
@@ -157,14 +158,7 @@ async def criar_texto_referencia(
 
     caminho_imagem_relativo = None
     if imagem:
-        ext = os.path.splitext(imagem.filename)[1]
-        nome_arquivo = f"{uuid.uuid4()}{ext}"
-        pasta = "static/textos_referencia"
-        os.makedirs(pasta, exist_ok=True)
-        file_path = os.path.join(pasta, nome_arquivo)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(imagem.file, buffer)
-        caminho_imagem_relativo = file_path
+        caminho_imagem_relativo = await secure_files.save_upload_http(imagem, evento.tenant_id, "image")
 
     titulo_criptografado = encrypt_text(titulo) if titulo else None
     conteudo_criptografado = encrypt_text(conteudo) if conteudo else None
@@ -303,14 +297,7 @@ async def atualizar_texto_referencia(
 
     # Atualizar imagem se enviada
     if imagem is not None:
-        ext = os.path.splitext(imagem.filename)[1]
-        nome_arquivo = f"{uuid.uuid4()}{ext}"
-        pasta = "static/textos_referencia"
-        os.makedirs(pasta, exist_ok=True)
-        file_path = os.path.join(pasta, nome_arquivo)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(imagem.file, buffer)
-        texto.caminho_imagem_relativo = file_path
+        texto.caminho_imagem_relativo = await secure_files.save_upload_http(imagem, evento.tenant_id, "image")
 
     texto.data_modificacao = str(datetime.now())
     await db.commit()

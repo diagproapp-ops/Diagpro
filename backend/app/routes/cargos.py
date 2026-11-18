@@ -6,6 +6,8 @@ import uuid
 from sqlalchemy import func, asc
 import os
 
+from backend.app import secure_files
+from backend.app.field_crypto import blind_eq
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import Cargo as DBCargo, DisciplinaDaProva as DBDisciplinaDaProva, Disciplina as DBDisciplina
@@ -86,6 +88,8 @@ async def create_cargo_for_event(
         cover_pdf_paths = [cover_pdf_paths]
     elif not isinstance(cover_pdf_paths, list):
         cover_pdf_paths = []
+    # Só aceita referências cifradas válidas do próprio cliente (descarta caminhos arbitrários)
+    cover_pdf_paths = [r for r in (secure_files.ref_from_client(p, current_user.tenant_id) for p in cover_pdf_paths) if r]
 
     db_cargo = DBCargo(
         id_cargo=new_id,
@@ -100,7 +104,7 @@ async def create_cargo_for_event(
         salario=cargo.get("salario", 0.0),
         requisitos=cargo.get("requisitos"),
         tem_discursiva=bool(cargo.get("tem_discursiva")),
-        letterhead_pdf_path=cargo.get("letterhead_pdf_path"),
+        letterhead_pdf_path=secure_files.ref_from_client(cargo.get("letterhead_pdf_path"), current_user.tenant_id),
         cover_pdf_paths=cover_pdf_paths,
         peso_total_prova=cargo.get("peso_total_prova", 0.0),
     )
@@ -114,7 +118,7 @@ async def create_cargo_for_event(
         if not disc_base_id:
             result = await db.execute(
                 select(DBDisciplina)
-                .where(DBDisciplina.nome_disciplina == nome_disciplina)
+                .where(blind_eq(DBDisciplina.nome_disciplina, nome_disciplina, current_user.tenant_id))
                 .where(DBDisciplina.id_evento_fk == event_id)
             )
             db_disc = result.scalar_one_or_none()
@@ -126,6 +130,7 @@ async def create_cargo_for_event(
                     id_disciplina=disc_base_id,
                     id_evento_fk=event_id,
                     nome_disciplina=nome_disciplina,
+                    tenant_id=current_user.tenant_id,
                 )
                 db.add(db_disc_new)
                 await db.commit()
@@ -179,6 +184,8 @@ async def update_cargo(
         cover_pdf_paths = [cover_pdf_paths]
     elif not isinstance(cover_pdf_paths, list):
         cover_pdf_paths = []
+    # Só aceita referências cifradas válidas do próprio cliente (descarta caminhos arbitrários)
+    cover_pdf_paths = [r for r in (secure_files.ref_from_client(p, current_user.tenant_id) for p in cover_pdf_paths) if r]
 
     event_id = db_cargo.id_evento_fk
     saved_cargo_id = db_cargo.id_cargo
@@ -195,7 +202,8 @@ async def update_cargo(
         "salario": cargo.get("salario", db_cargo.salario),
         "requisitos": cargo.get("requisitos", db_cargo.requisitos),
         "tem_discursiva": cargo.get("tem_discursiva", db_cargo.tem_discursiva),
-        "letterhead_pdf_path": cargo.get("letterhead_pdf_path", db_cargo.letterhead_pdf_path),
+        "letterhead_pdf_path": (secure_files.ref_from_client(cargo["letterhead_pdf_path"], current_user.tenant_id)
+                                if "letterhead_pdf_path" in cargo else db_cargo.letterhead_pdf_path),
         "cover_pdf_paths": cover_pdf_paths,
         "peso_total_prova": cargo.get("peso_total_prova", db_cargo.peso_total_prova),
         "disciplinas_prova": []  # Preencher depois
@@ -221,7 +229,7 @@ async def update_cargo(
         if not disc_base_id:
             result = await db.execute(
                 select(DBDisciplina)
-                .where(DBDisciplina.nome_disciplina == nome_disciplina)
+                .where(blind_eq(DBDisciplina.nome_disciplina, nome_disciplina, current_user.tenant_id))
                 .where(DBDisciplina.id_evento_fk == event_id)
             )
             db_disc = result.scalar_one_or_none()
@@ -233,6 +241,7 @@ async def update_cargo(
                     id_disciplina=disc_base_id,
                     id_evento_fk=event_id,
                     nome_disciplina=nome_disciplina,
+                    tenant_id=current_user.tenant_id,
                 )
                 db.add(db_disc_new)
                 await db.commit()
@@ -299,17 +308,6 @@ async def upload_capa_pdf(
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     evento = await carregar_evento_autorizado(event_id, db, current_user)
-    nome = nome_arquivo_seguro(file.filename, {".pdf"})
-    conteudo = await file.read(TAMANHO_MAX_CAPA + 1)
-    if len(conteudo) > TAMANHO_MAX_CAPA:
-        raise HTTPException(status_code=413, detail="Arquivo excede o limite de 20 MB.")
-    if not conteudo.startswith(b"%PDF"):
-        raise HTTPException(status_code=400, detail="O arquivo enviado não é um PDF válido.")
-    out_dir = "static/capas"
-    os.makedirs(out_dir, exist_ok=True)
-    nome_final = f"{evento.id_evento}_{nome}"
-    caminho_dentro_de(out_dir, nome_final)  # valida que não escapa da pasta
-    out_path = os.path.join(out_dir, nome_final)
-    with open(out_path, "wb") as f:
-        f.write(conteudo)
-    return {"cover_pdf_paths": [out_path]}
+    ref = await secure_files.save_upload_http(file, evento.tenant_id, "pdf")
+    # A referência volta ao cliente, que a reenvia ao salvar o cargo (validada por ref_from_client)
+    return {"cover_pdf_paths": [ref]}

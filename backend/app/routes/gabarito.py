@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Query, HTTPException, status, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from backend.app import secure_files
+from backend.app.rate_limit import rate_limit
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db_models import Evento, Cargo, ProvaMontada
@@ -15,6 +17,8 @@ router = APIRouter()
 
 document_generator = DocumentGenerator(
     templates_base_dir="templates",
+    # a API informa sempre a pasta de saída; evita criar ProvasGeradas_DG
+    config={"default_export_directory": os.path.join(tempfile.gettempdir(), "diagpro_core_default")},
     logger=logging.getLogger("core.document_generator"),
     core_elements_module=None  # ajuste se necessário
 )
@@ -61,28 +65,23 @@ async def listar_gabaritos_exportaveis(
     """
     Lista os arquivos de gabarito disponíveis para o cargo selecionado.
     """
-    # Monte o diretório de saída dos gabaritos desse cargo
-    from backend.app.routes.exportacao import get_output_dir  # ou ajuste o import conforme seu projeto
-    output_dir = await get_output_dir(evento_id, cargo_id, db)
-    arquivos = []
-    for file in os.listdir(output_dir):
-        if file.lower().endswith('.csv'):
-            arquivos.append({
-                "nome_arquivo": file,
-                "tipo": "gabarito",
-                "url": f"/api/export/download?evento_id={evento_id}&cargo_id={cargo_id}&tipo=gabarito"
-            })
-    return arquivos
+    # Nada é guardado no servidor: o download regenera o gabarito a partir do banco cifrado.
+    return [{
+        "nome_arquivo": f"Gabarito_{cargo_id}.csv",
+        "tipo": "gabarito",
+        "url": f"/api/export/download?evento_id={evento_id}&cargo_id={cargo_id}&tipo=gabarito",
+    }]
 
-@router.post("/eventos/{evento_id}/exportar-gabaritos-zip")
+@router.post("/eventos/{evento_id}/exportar-gabaritos-zip", dependencies=[Depends(rate_limit(5, 60, "gabaritos-zip"))])
 async def exportar_gabaritos_zip(
     evento_id: str,
     senha: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_tenant_db),
     evento_autorizado_obj=Depends(evento_autorizado),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    workdir: str = Depends(secure_files.request_workdir),
 ):
-    import pyzipper  # adicione este import no início do arquivo se ainda não houver
+    import pyzipper
 
     result = await db.execute(select(Evento).filter(Evento.id_evento == evento_id))
     evento: Evento = result.scalar_one_or_none()
@@ -104,7 +103,7 @@ async def exportar_gabaritos_zip(
     if not cargos:
         raise HTTPException(status_code=404, detail="Nenhum cargo para este evento.")
 
-    output_dir = tempfile.mkdtemp()
+    output_dir = workdir  # pasta temporária da requisição, apagada ao final (antes ficava para sempre no %TEMP%)
     arquivos_csv = []
 
     # Estrutura: { (codigo_cargo, nome_cargo, tipo_prova): [questoes...] }
@@ -188,7 +187,13 @@ async def exportar_gabaritos_zip(
         for file in arquivos_csv:
             zipf.write(file, arcname=os.path.basename(file))
 
-    return FileResponse(zip_path, filename=os.path.basename(zip_path), media_type='application/zip')
+    with open(zip_path, "rb") as fh:
+        conteudo = fh.read()
+    return Response(content=conteudo, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{os.path.basename(zip_path)}"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 @router.get("/eventos/{evento_id}/cargos/{cargo_id}/gabarito")
 async def visualizar_gabarito(

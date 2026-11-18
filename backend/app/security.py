@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from backend.app.auth import get_current_user
-from backend.app.database import get_db, set_tenant_context
+from backend.app.database import SessionLocal, PlatformSessionLocal, set_tenant_context
 from backend.app.db_models import Evento as DBEvento
 from backend.app.roles import UserRole
 
@@ -33,24 +33,25 @@ def require_roles(*allowed_roles: UserRole):
     return _checker
 
 
-async def get_tenant_db(
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
+async def get_tenant_db(current_user=Depends(get_current_user)):
     """
-    Fornece uma sessão de banco com contexto RLS transacional (SET LOCAL) vinculado
-    ao tenant do usuário autenticado. Falha fechada se usuário comum não tiver tenant_id.
+    Sessão de banco para a requisição:
+    - usuário de tenant: role de runtime (sem BYPASSRLS) com o tenant do usuário autenticado (SET LOCAL);
+    - administrador geral: role de plataforma (BYPASSRLS), única credencial com visão multi-tenant.
+    Falha fechada se um usuário comum não tiver tenant_id.
     """
     if is_admin_geral(current_user):
-        await set_tenant_context(db, None, bypass_rls=True)
-    else:
-        if current_user.tenant_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Usuário sem cliente (tenant) associado.",
-            )
-        await set_tenant_context(db, current_user.tenant_id, bypass_rls=False)
-    yield db
+        async with PlatformSessionLocal() as db:
+            yield db
+        return
+    if current_user.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário sem cliente (tenant) associado.",
+        )
+    async with SessionLocal() as db:
+        await set_tenant_context(db, current_user.tenant_id)
+        yield db
 
 
 async def carregar_evento_autorizado(evento_id: str, db: AsyncSession, current_user) -> DBEvento:

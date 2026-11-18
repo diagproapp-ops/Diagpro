@@ -4,7 +4,7 @@
 
 O **DiagPro** é uma plataforma multi-tenant voltada à gestão de concursos públicos e avaliações, cobrindo desde a administração das bancas organizadoras (clientes) e estruturação dos eventos/editais até a elaboração, importação, revisão, montagem e geração automatizada de provas, capas em PDF e gabaritos.
 
-> **Nota de transparência técnica:** Este documento reflete exclusivamente o que foi verificado diretamente no código-fonte e nos arquivos de configuração atuais do repositório. Itens estruturados ou pendentes de validação em execução estão explicitamente sinalizados.
+> **Nota de transparência técnica:** Este documento reflete exclusivamente o que foi verificado diretamente no código-fonte, nas migrações e na configuração atuais do repositório (revisão de 18/11/2026, após as fases de segurança 0, 1a, 1b, 2a e 2b). Itens estruturados ou pendentes de validação em execução estão explicitamente sinalizados. Ao longo do texto, **"inspecionado"** significa lido no código e **"testado"** significa exercitado em execução, conforme registrado na [Seção 16](#16-testes-e-validação).
 
 ---
 
@@ -35,41 +35,49 @@ O **DiagPro** é uma plataforma multi-tenant voltada à gestão de concursos pú
 
 O DiagPro centraliza o ciclo operacional de bancas organizadoras de concursos públicos e processos seletivos:
 
-- Administrar múltiplos clientes/bancas (**multi-tenancy lógico** via `tenant_id`, com base estruturada para PostgreSQL + Row-Level Security).
+- Administrar múltiplos clientes/bancas (**multi-tenancy** em PostgreSQL com Row-Level Security e **cifra de campos com chave por cliente**).
 - Estruturar concursos (**Eventos**), **Cargos**, **Disciplinas** e **Conteúdos Programáticos** com metas por professor.
 - Manter um **Banco de Questões** (múltipla escolha, certo/errado, discursiva e subjetiva) com textos de referência, imagens e trilha de revisão.
-- Automatizar a **importação de questões via DOCX**, montagem de cadernos, simulações, geração de variações e exportação de **DOCX, PDF, capas AcroForm e pacotes ZIP**.
+- Automatizar a **importação de questões via DOCX**, montagem de cadernos, simulações, geração de variações e exportação de **DOCX, PDF, capas AcroForm e pacotes ZIP protegidos por senha**.
 - Registrar auditoria de geração de provas (`audit_log_geracao`).
+
+Premissa de projeto: questões, gabaritos, provas, capas, credenciais e dados de colaboradores são confidenciais. Tudo o que vai para o banco e para o disco é cifrado, e nenhuma prova gerada é guardada no servidor.
 
 ---
 
 ## 2. Estado Atual das Funcionalidades
 
-Classificação adotada nesta auditoria:
-- **Implementada e verificada:** comportamento presente no código e validado por compilação/inspeção direta.
+Classificação adotada:
+- **Implementada e verificada:** comportamento presente no código e exercitado em execução (ver [Seção 16](#16-testes-e-validação)).
 - **Implementada parcialmente:** existe implementação no código, porém com lacunas, mocks ou pendências.
 - **Estruturada, mas não validada:** modelos, scripts ou configurações existem no repositório, mas não foram executados/validados em runtime.
-- **Planejada:** descrita em roadmap/relatório, sem implementação no código atual.
+- **Planejada:** descrita no roadmap, sem implementação no código atual.
 - **Não identificada:** sem evidência suficiente no repositório atual.
 
-| Funcionalidade | Classificação | Evidência / Observação no Código |
+| Funcionalidade | Classificação | Evidência / Observação |
 | :--- | :--- | :--- |
-| Autenticação JWT (`HS256`) + `bcrypt` + reCAPTCHA | **Implementada parcialmente** | `backend/app/auth.py`, `backend/app/routes/auth.py` (código inspecionado e validado por `py_compile`; fluxo E2E de `/auth/login` e reCAPTCHA não testado em execução nesta auditoria) |
-| Gestão de Tenants e Dashboard (`admin_geral`) | **Implementada parcialmente** | `backend/app/admin_clients.py` (sem testes automatizados de isolamento) |
-| Gestão de Usuários e Cadastro Público | **Implementada parcialmente** | `backend/app/routes/users.py` (cadastro público bloqueado para roles admin; nasce inativo) |
-| CRUD de Eventos, Cargos, Disciplinas e Conteúdos | **Implementada parcialmente** | `eventos.py`, `cargos.py`, `cargos_import.py`, `conteudos.py` (nem todas as rotas usam `evento_autorizado` / RBAC estrito) |
-| Banco de Questões, Textos de Referência e Revisão | **Implementada parcialmente** | `questoes.py`, `textos_referencia.py`, `utils_vinculo.py` |
-| Importação de Questões via DOCX | **Implementada parcialmente** | `questoes.py`, `core/docx_parser.py` (`backend/app/importador.py` existe no repo, mas não está registrado em `main.py`) |
-| Montagem, Simulação e Geração de Provas/Gabaritos | **Implementada parcialmente** | `provas.py`, `provas_geracao.py`, `gabarito.py`, `core/document_generator.py` |
-| Exportação DOCX, PDF (LibreOffice), Capas PDFBox e ZIP | **Implementada parcialmente** | `exportacao.py`, `PreencheCapaPDF_JSON_PDFBox.java` (execução síncrona na requisição HTTP) |
-| Auditoria de Geração (`audit_log_geracao`) | **Implementada parcialmente** | `backend/app/routes/audit_log.py` (cobre geração, não cobre leitura/edição geral) |
-| Chat com IA (OpenAI `gpt-3.5-turbo`) e Plágio (Bing) | **Implementada parcialmente** | `ia_chat.py`, `plagio.py` (autenticados, sem rate limiting) |
-| Dicionário (`dicio.com.br`) | **Implementada parcialmente** | `dicionario.py` (dependente de scraping HTML via regex) |
-| Biblioteca de Questões (`/api/biblioteca`) | **Implementada parcialmente** | `biblioteca.py` retorna dados mockados (`QUESTOES_FAKE`) |
-| PostgreSQL Multi-Tenant com RLS e Alembic | **Estruturada, mas não validada** | `database.py`, `db_models.py`, `rls_policies.sql`, `docker-compose.yml`, `alembic/`, `scripts/migrate_sqlite_to_postgres.py` (ainda não executado contra Postgres ativo) |
-| Frontend Web (código-fonte React/TS) | **Implementada parcialmente** | `frontend/build/` e `frontend/package.json` presentes; `frontend/src/` e `frontend/public/` ausentes no repo local |
-| Suíte de Testes Automatizados | **Não identificada** | Apenas `backend/app/test_upload.py` (snippet de 7 linhas); não há pasta/suíte `pytest` |
-| Filas Assíncronas (Redis/Celery/ARQ), Object Storage (S3/MinIO) e CI/CD | **Planejada** | Previsto no roadmap técnico; não implementado no código |
+| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 16 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
+| Cifra de campos (AES-256-GCM, chave por tenant) | **Implementada e verificada** | `backend/app/field_crypto.py`: 122 colunas sensíveis cifradas, incluindo enunciados, alternativas, gabarito (`correta`, `valor_correto`) e dados pessoais. Varredura no banco real: 4.034 valores, nenhum em texto claro. |
+| Arquivos cifrados e URLs assinadas | **Implementada e verificada** | `backend/app/secure_files.py`: imagens, avatares, logos, capas, templates e CSV de candidatos cifrados por tenant; entrega por URL assinada de 5 min. Pastas públicas `/static` e `/avatars` removidas. |
+| Provas geradas sem armazenamento | **Implementada e verificada** | Saídas criadas em pasta temporária privada por requisição e apagadas ao final; ZIP do lote protegido pela senha do evento. Testado ponta a ponta numa cópia do banco. |
+| Autenticação JWT (`HS256`) + `bcrypt` | **Implementada e verificada** | `backend/app/auth.py`, `routes/auth.py`. Testado: login válido (200), senha errada (401), inativo (403), token adulterado (401), limite de 10 tentativas/60 s (429). |
+| reCAPTCHA no login | **Implementada parcialmente** | Apenas **inspecionado**; com `RECAPTCHA_SECRET_KEY` vazia a verificação é ignorada (*fail-open*). |
+| Gestão de Tenants e Dashboard (`administrador geral`) | **Implementada e verificada** | `admin_clients.py` via role de plataforma; criação de cliente, duplicidade de domínio (400), listagem e dashboard testados. |
+| Gestão de Usuários e Cadastro Público | **Implementada parcialmente** | `routes/users.py`. Testados: bloqueio de perfis administrativos no cadastro público, criação/edição pelo admin do cliente e recusa de e-mail duplicado sem diferenciar maiúsculas (índice cego). A restrição do admin ao próprio cliente foi apenas inspecionada na revisão atual. |
+| CRUD de Eventos, Cargos, Disciplinas e Conteúdos | **Implementada parcialmente** | Fluxos principais testados (criar/editar/listar). O CRUD completo e o isolamento entre tenants de todos os recursos não têm teste automatizado. |
+| Banco de Questões, Textos de Referência e Revisão | **Implementada parcialmente** | Criar, editar, revisar, listar e excluir questão de múltipla escolha testados. **Criar questão Certo/Errado com itens falha** (`imagem_path_item` não existe em `ItensVerdadeiroFalso`). |
+| Importação de Questões via DOCX | **Implementada parcialmente** | Imagens extraídas vão direto para o armazenamento cifrado; a confirmação aceita só referências de arquivo do próprio cliente (testado). A extração DOCX em si não tem teste automatizado. |
+| Montagem, Simulação e Geração de Provas/Gabaritos | **Implementada parcialmente** | Geração real testada numa cópia do banco (PDF com capa via Java, lote ZIP, ZIP de gabaritos). Regras de embaralhamento/variação não têm testes automatizados. |
+| Auditoria de Geração (`audit_log_geracao`) | **Implementada parcialmente** | Gravação e filtro por usuário (índice cego) testados; cobre geração, não leitura/edição geral. |
+| Chat com IA (OpenAI) | **Implementada parcialmente** | `ia_chat.py` usa `openai.ChatCompletion`, removido no SDK v1; `requirements.txt` fixa `openai==1.109.1`, então a rota falha. |
+| Verificação de Plágio (Bing) | **Implementada parcialmente** | Autenticada, rate limit 20/60 s; chamada externa não testada. |
+| Dicionário (`dicio.com.br`) | **Implementada parcialmente** | Scraping HTML via regex; não testado. |
+| Biblioteca de Questões (`/api/biblioteca`) | **Implementada e verificada** | Busca em conteúdo cifrado (decifra só as questões do próprio cliente na memória); isolamento tenant 1 × tenant 2 testado. |
+| Frontend Web (React/TS) | **Implementada parcialmente** | `frontend/src/` (85 arquivos) presente localmente, mas **não versionado** (repositório Git separado com apenas o template CRA). Não exigiu mudanças nas fases de segurança. |
+| Suíte de Testes Automatizados | **Implementada parcialmente** | 17 testes `pytest` (segurança, RBAC, RLS, cifra, arquivos, logs). Cobertura de isolamento ainda parcial. |
+| Rate Limiting | **Implementada e verificada** | `rate_limit.py` (memória; Redis se `REDIS_URL`). Login 10/60 s; validar senha, lote e ZIP de gabaritos 5/60 s; cadastro 5/60 s; IA/plágio 20/60 s. |
+| CI/CD | **Estruturada, mas não validada** | `.github/workflows/ci.yml` (PostgreSQL 16, chave mestra efêmera, migrações, RLS, roles, `pytest`). Execuções no GitHub Actions não foram verificadas. |
+| Filas assíncronas e Object Storage (S3/MinIO) | **Estruturada, mas não validada** | `jobs.py` (registro em memória) e `storage.py` (backend S3 depende de `boto3`, ausente). A rota de exportação assíncrona foi removida por não funcionar. |
 
 ---
 
@@ -77,10 +85,10 @@ Classificação adotada nesta auditoria:
 
 1. **Cadastro do Cliente (`Tenant`)**: O `administrador geral` registra a banca organizadora (`/admin/clients`) e cria o usuário `administrador` do tenant.
 2. **Equipe e Permissões**: O `administrador` do tenant cadastra usuários internos ou aprova cadastros externos (`/users/register`) de `professor`, `revisor` e `diagramador`.
-3. **Estruturação do Evento**: Criação do concurso/edital (`/eventos`), cadastro manual ou via CSV de cargos (`/cargos`, `/cargos/import-csv`), upload de capas PDF e cadastro de conteúdos programáticos (`/conteudos`, `/conteudos/csv`) vinculados a professores.
+3. **Estruturação do Evento**: Criação do concurso/edital (`/eventos`), cadastro manual ou via CSV de cargos (`/eventos/{event_id}/cargos`, `/eventos/{event_id}/cargos/import-csv`), upload de capas PDF (`/eventos/{event_id}/cargos/upload-capa-pdf`) e cadastro de conteúdos programáticos (`/conteudos/eventos/{evento_id}/conteudos`, `.../conteudos/csv`) vinculados a professores.
 4. **Elaboração e Revisão**: Professores criam ou importam questões (`.docx`) e textos de referência; revisores analisam e registram pareceres em `HistoricoRevisaoQuestao`.
-5. **Montagem e Simulação**: Diagramadores/administradores montam a prova por cargo (`/provas`), definem variações e embaralhamento (`/provas/definir-geracao`) e simulam frases/itens Certo-Errado.
-6. **Geração e Exportação**: Após validação da senha do evento (`/api/export/eventos/{evento_id}/validar-senha`), o sistema gera os cadernos DOCX/PDF, preenche capas PDF via Java PDFBox, gera gabaritos e empacota em ZIP, gravando log em `audit_log_geracao`.
+5. **Montagem e Simulação**: Diagramadores/administradores montam a prova por cargo (`/provas/eventos/{id_evento}/provas-montadas/{id_cargo}`), definem variações e embaralhamento (`/eventos/{event_id}/provas/definir-geracao`) e simulam frases/itens Certo-Errado.
+6. **Geração e Exportação**: Após validação da senha do evento (`/api/export/eventos/{evento_id}/validar-senha`), o lote (`gerar-arquivos-multiplos`) gera os cadernos DOCX/PDF, preenche capas PDF via Java PDFBox e entrega um ZIP protegido pela senha do evento. Nada fica armazenado no servidor; a prova pode ser regerada a partir do banco.
 
 ---
 
@@ -96,6 +104,8 @@ Definidos em `backend/app/roles.py` (`UserRole`):
 | `revisor` | Tenant | Revisar questões submetidas e registrar histórico de aprovação/observações (`HistoricoRevisaoQuestao`). |
 | `diagramador` | Tenant | Gerenciar templates, montar provas, simular variações e gerar/exportar arquivos finais e gabaritos. |
 
+A aplicação dos perfis é feita pela dependência `require_roles` (`backend/app/security.py`) e por `get_admin_user` / `get_admin_geral_user`. Um administrador de cliente só cria, edita e exclui usuários do próprio cliente e não pode atribuir o perfil `administrador geral`. O teste `test_rbac_matrix_five_roles` cobre um subconjunto da matriz perfil × rota; as demais combinações foram apenas inspecionadas.
+
 ---
 
 ## 5. Arquitetura Técnica
@@ -105,15 +115,14 @@ O projeto encontra-se em transição entre uma aplicação desktop Python legada
 ```text
 +-------------------------------------------------------+
 |              FRONTEND (React 18 / TS / MUI)           |
-|   Artefato compilado em frontend/build/               |
-|   (código-fonte frontend/src/ ausente no repo local)  |
+|   frontend/src/ (local, não versionado) + build/      |
 +---------------------------+---------------------------+
-                            | HTTP / REST (JSON + Form)
+                            | HTTPS / REST + URLs assinadas
 +---------------------------v---------------------------+
 |             BACKEND API (FastAPI / Uvicorn)           |
-|  - Rotas REST (backend/app/routes/, admin_clients.py) |
-|  - Auth JWT + bcrypt (auth.py) + Helpers (security.py)|
-|  - Criptografia Fernet (utils_crypto.py)              |
+|  - Auth JWT + bcrypt, RBAC, rate limit, logs redigidos|
+|  - field_crypto: AES-256-GCM por tenant (ORM)         |
+|  - secure_files: arquivos cifrados + URL assinada     |
 +-------------+---------------------------+-------------+
               |                           |
               v                           v
@@ -123,23 +132,27 @@ O projeto encontra-se em transição entre uma aplicação desktop Python legada
 |  - DocxParser             |  |  pdfbox-app-3.0.5.jar  |
 |  - LibreOffice (PDF)      |  +------------------------+
 +-------------+-------------+
-              | SQLAlchemy Async
+              | SQLAlchemy Async + TLS verify-full
 +-------------v-----------------------------------------+
-|   BANCO DE DADOS                                      |
-|   - Atual em uso: SQLite WAL (diagprooff.db)          |
-|   - Estruturado para migração: PostgreSQL 16 + RLS    |
+|   PostgreSQL 16 (somente; RLS forçado, sem bypass)    |
+|   - diagpro_runtime: requisições de um tenant         |
+|   - diagpro_platform (BYPASSRLS): login/admin geral   |
 +-------------------------------------------------------+
 ```
+
+Fora do projeto e do banco ficam a chave mestra, a chave de backup, a CA/certificados TLS e os backups cifrados (`%LOCALAPPDATA%\DiagPro\secrets` e `%LOCALAPPDATA%\DiagPro\backups`).
 
 ---
 
 ## 6. Tecnologias e Dependências Identificadas
 
-- **Backend Python**: FastAPI, Uvicorn (`0.37.0` verificado no `.venv`), SQLAlchemy Async (`aiosqlite` para SQLite; `asyncpg` e `psycopg2-binary` instalados para PostgreSQL), Alembic (`1.20.1`), Pydantic, `python-jose`, `passlib` (`bcrypt`), `cryptography` (`Fernet`), `python-docx`, `pypdf`, `pyzipper`, `openai`, `requests`, `python-dotenv`.
-  - *Observação:* `backend/requirements.txt` lista apenas 5 pacotes (`fastapi`, `uvicorn`, `openai`, `requests`, `python-dotenv`) e está desatualizado em relação ao ambiente real.
-- **Processamento de Documentos Externo**: LibreOffice (`soffice.exe` para conversão DOCX → PDF) e Java + **Apache PDFBox 3.0.5** (`backend/app/pdfbox-app-3.0.5.jar`, `json.jar`).
-- **Frontend (`frontend/package.json`)**: React `18.2.0`, TypeScript `4.9.5`, Material UI v7 (`@mui/material`, `@mui/icons-material`, `@mui/x-date-pickers`), TipTap v3 (`@tiptap/react` + extensões de tabela, matemática/KaTeX, imagem, colaboração `yjs`), `@dnd-kit`, `axios`, `react-router-dom` v7, `html2pdf.js`, `react-markdown`, `react-google-recaptcha`.
-- **Infraestrutura**: Docker (`docker-compose.yml` com `postgres:16-alpine`).
+- **Backend Python** (`backend/requirements.txt`, 30 pacotes, versões fixadas exceto `redis>=5.0`): FastAPI, Starlette, Uvicorn, SQLAlchemy Async (`SQLAlchemy[asyncio]`, `greenlet`, `asyncpg`), `psycopg2-binary` (Alembic e scripts), Alembic, Pydantic, `email_validator`, `python-jose`, `passlib[bcrypt]`/`bcrypt`, `cryptography` (AES-GCM, HKDF), `python-multipart`, `python-docx`, `pypdf`, `pdfrw`, `reportlab`, `pillow`, `beautifulsoup4`, `pyzipper`, `openai`, `requests`, `httpx`, `redis`, `python-dotenv`, `pytest`, `pytest-asyncio`.
+  - *Versões verificadas no `.venv` da raiz:* Python `3.11.0`, Uvicorn `0.37.0`, Alembic `1.20.1`, pytest `9.2.0`.
+  - *Divergências conhecidas:* `openai==1.109.1` é incompatível com `ia_chat.py`; `boto3` (backend S3 de `storage.py`) não consta no arquivo; `redis` não está instalado no `.venv` local (o rate limit usa memória).
+  - `aiosqlite` foi removido: o sistema não usa mais SQLite.
+- **Processamento de Documentos Externo**: LibreOffice (`soffice.exe` para DOCX → PDF, com até 3 tentativas por conversão) e Java + **Apache PDFBox 3.0.5** (`backend/app/pdfbox-app-3.0.5.jar`, `json.jar`).
+- **Frontend (`frontend/package.json`)**: React `18.2.0`, TypeScript `4.9.5`, Material UI v7, TipTap v3, `@dnd-kit`, `axios`, `react-router-dom` v7, `html2pdf.js`, `react-markdown`, `react-google-recaptcha`.
+- **Infraestrutura**: `docker-compose.yml` com `postgres:16-alpine`, `redis:7-alpine` e `minio/minio:latest`, todos publicados **somente em `127.0.0.1`** (PostgreSQL na porta `5435`). `Dockerfile` da API (`python:3.11-slim`, OpenJDK 17, LibreOffice Writer, usuário não-root, healthcheck em `/health`). CI em `.github/workflows/ci.yml`.
 
 ---
 
@@ -147,46 +160,49 @@ O projeto encontra-se em transição entre uma aplicação desktop Python legada
 
 ```text
 DiagPro/
-├── alembic/                      # Ambiente e template de migrações Alembic
-├── alembic.ini                   # Configuração do Alembic (lê DATABASE_URL do .env)
+├── .github/workflows/ci.yml      # CI: PostgreSQL 16 + chave mestra efêmera + Alembic + RLS + roles + pytest
+├── alembic/
+│   ├── env.py                    # Só PostgreSQL; aplica o TLS de DB_SSLMODE/DB_SSL_ROOT_CERT
+│   └── versions/                 # 15cec84ab488 -> 24cbf7a7b399 -> c3f1a9d2b7e4 (RLS sem bypass) -> e7b2d4f8a1c6 (cifra de campos)
+├── alembic.ini
+├── .env.example                  # Modelo de variáveis (somente placeholders)
+├── Dockerfile                    # Imagem da API (Python 3.11, Java 17, LibreOffice)
+├── pytest.ini
 ├── backend/
 │   ├── app/
-│   │   ├── routes/               # Routers FastAPI por domínio (20 arquivos)
-│   │   ├── admin_clients.py      # Rotas de gestão multi-tenant (admin geral)
-│   │   ├── auth.py               # JWT, bcrypt, get_current_user, get_admin_user
-│   │   ├── campos_capa.py        # Mapeamento de ~40 campos para capa PDF
-│   │   ├── database.py           # Engine SQLAlchemy Async + set_tenant_context (RLS)
-│   │   ├── db_models.py          # 17 modelos ORM unificados em Base.metadata
-│   │   ├── html_to_docx.py       # Conversor HTML -> python-docx
-│   │   ├── importador.py         # Rota auxiliar de importação DOCX
-│   │   ├── main.py               # Aplicação FastAPI e registro de rotas
-│   │   ├── models.py             # Schemas Pydantic
-│   │   ├── PreencheCapaPDF_JSON_PDFBox.java  # Preenchedor AcroForm PDFBox 3.0.5
-│   │   ├── rls_policies.sql      # Políticas RLS PostgreSQL para 16 tabelas
-│   │   ├── roles.py              # Enum UserRole (5 perfis)
-│   │   ├── security.py           # Helpers evento_autorizado e path traversal
-│   │   ├── utils_codigo_curto.py # Gerador de códigos curtos únicos por tenant
-│   │   ├── utils_crypto.py       # Criptografia simétrica Fernet
-│   │   └── utils_vinculo.py      # Sincronização texto de referência <-> questão
-│   └── requirements.txt          # Lista parcial de dependências Python
-├── core/                         # Núcleo legado desktop + motor de docs/parser
-│   ├── app_controller.py         # Controlador legado (customtkinter/tkinter)
-│   ├── document_generator.py     # DocxProofGenerator, PdfConverter, ArchiveManager, AnswerKeyGenerator
-│   ├── docx_parser.py            # Parser de questões/tabelas em DOCX
-│   ├── elements.py               # Modelos internos/Pydantic do core
-│   ├── event_manager.py          # Gestão legada de eventos
-│   └── utils.py                  # Helpers gerais (datas, gabarito, sanitização)
-├── frontend/
-│   ├── build/                    # Build estático compilado do frontend
-│   ├── package.json              # Dependências React/TS/MUI/TipTap
-│   └── (src/ e public/ ausentes no repositório local)
+│   │   ├── routes/               # Routers FastAPI por domínio (inclui files.py: entrega por URL assinada)
+│   │   ├── admin_clients.py      # Gestão de clientes (administrador geral)
+│   │   ├── auth.py               # JWT, bcrypt, get_current_user (runtime por tenant; plataforma só p/ admin geral)
+│   │   ├── database.py           # Engines runtime/plataforma, TLS obrigatório, set_tenant_context
+│   │   ├── db_models.py          # 17 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
+│   │   ├── field_crypto.py       # Cifra de campos AES-256-GCM por tenant, índices cegos, eventos do ORM
+│   │   ├── secure_files.py       # Arquivos cifrados por tenant, URLs assinadas, templates, pasta por requisição
+│   │   ├── log_redaction.py      # Filtro que mascara senhas, assinaturas, tokens e caminhos nos logs
+│   │   ├── security.py           # require_roles, get_tenant_db, evento_autorizado, helpers de caminho
+│   │   ├── rls_policies.sql      # Políticas RLS (16 tabelas, sem bypass)
+│   │   ├── rate_limit.py, jobs.py, storage.py, models.py, roles.py, ...
+│   │   ├── utils_crypto.py       # Camada Fernet LEGADA, desativada (funções sem efeito; mask_pii)
+│   │   └── PreencheCapaPDF_JSON_PDFBox.java
+│   └── requirements.txt
+├── core/                         # Núcleo legado desktop + motor de documentos/parser (usado pela API)
+├── frontend/                     # Repositório Git separado; src/ e public/ NÃO versionados
 ├── scripts/
-│   └── migrate_sqlite_to_postgres.py  # Migração de dados SQLite -> PostgreSQL
-├── docker-compose.yml            # Serviço PostgreSQL 16-alpine
-├── diagprooff.db                 # Banco SQLite local em modo WAL
-├── create_db.py                  # Script legado de criação do banco
+│   ├── setup_postgres_roles.py   # Cria/ajusta diagpro_runtime e diagpro_platform; --rotate gera senhas no .env
+│   ├── gen_pg_tls.py             # Gera CA privada e certificado TLS do PostgreSQL (fora do projeto)
+│   ├── backup_crypto.py          # Cifra/decifra backups (AES-256-GCM em blocos, chave fora do projeto)
+│   ├── reencrypt_fields.py       # Converte dados para a cifra de campos (executado na fase 1b)
+│   └── migrate_files_to_secure_store.py  # Move arquivos em claro para o armazenamento cifrado (executado na fase 2a)
+├── tests/
+│   ├── conftest.py               # Cliente ASGI, tokens e seed sintético (role de plataforma)
+│   └── test_security_rbac_rls.py # 17 testes
+├── docker-compose.yml            # PostgreSQL, Redis e MinIO (somente 127.0.0.1)
+├── storage_data/                 # Arquivos cifrados (ignorado pelo Git)
+├── templates_eventos/            # Templates DOCX cifrados (*.enc, ignorado pelo Git)
+├── create_db.py                  # Script legado (SQLite), não usado pela API
 └── update_password.py            # Utilitário pontual para senha de evento
 ```
+
+Não existem mais `static/`, `avatars/`, `ProvasGeradas_DG/` nem `diagprooff.db`.
 
 ---
 
@@ -194,164 +210,291 @@ DiagPro/
 
 Definido em `backend/app/db_models.py` (**17 tabelas** registradas em `Base.metadata`):
 
-- **Multi-tenancy e Acesso (1 tabela global + 2 com `tenant_id`):**
-  - `tenants` (`Tenant`) — tabela raiz de clientes/bancas (não possui `tenant_id`, pois define os próprios tenants; por isso não recebe política RLS de `tenant_id` em `rls_policies.sql`).
-  - `users` (`User`, com `tenant_id` nullable para `administrador geral`, dados cadastrais, especialidade e dados bancários/PIX), `company_data` (`Company`).
-- **Estrutura de Concursos:** `Eventos` (`Evento`, com soft delete e `senha_evento_cripto`), `Cargos` (`Cargo`, com timbre e capas PDF), `Disciplinas` (`Disciplina`), `DisciplinasDaProva` (`DisciplinaDaProva`), `conteudos` (`Conteudo`).
-- **Questões e Apoio:** `TextosReferenciaGeral` (`TextoReferenciaGeral`), `QuestoesBanco` (`QuestoesBanco`), `OpcoesQuestao` (`OpcoesQuestao`), `ItensVerdadeiroFalso` (`ItensVerdadeiroFalso`), `DetalhesQuestaoDiscursiva` (`DetalhesQuestaoDiscursiva`), `HistoricoRevisaoQuestao` (`HistoricoRevisaoQuestao`).
-- **Provas e Auditoria:** `ProvasMontadas` (`ProvaMontada` com blocos e metadados JSON), `banco_frases` (`BancoFrases`), `audit_log_geracao` (`AuditLogGeracao`).
+- **Multi-tenancy e Acesso:** `tenants` (`Tenant`, tabela raiz sem `tenant_id`), `users` (`User`, `tenant_id` nulo para `administrador geral`), `company_data` (`Company`).
+- **Estrutura de Concursos:** `Eventos`, `Cargos`, `Disciplinas`, `DisciplinasDaProva`, `conteudos`.
+- **Questões e Apoio:** `TextosReferenciaGeral`, `QuestoesBanco`, `OpcoesQuestao`, `ItensVerdadeiroFalso`, `DetalhesQuestaoDiscursiva`, `HistoricoRevisaoQuestao`.
+- **Provas e Auditoria:** `ProvasMontadas`, `banco_frases`, `audit_log_geracao`.
+
+### Colunas cifradas e índices cegos
+
+- **122 colunas** são declaradas com o tipo `Ciphertext` e guardam `e1.<versão>.<AES-256-GCM>`: todo texto livre, conteúdo de questões/textos/provas, gabaritos (inclusive os booleanos `OpcoesQuestao.correta` e `ItensVerdadeiroFalso.valor_correto`), dados pessoais/bancários, dados de clientes, caminhos de arquivo e campos da auditoria.
+- **Ficam em claro** apenas: chaves (PK/FK), `tenant_id`, códigos técnicos gerados (`identificador_*`, `codigo_*`), papéis/estados/tipos usados em autorização e fluxo, datas, números, `password_hash` (bcrypt) e `senha_evento` (bcrypt).
+- **Índices cegos** (HMAC-SHA256, colunas `*_bidx`) permitem busca exata e unicidade sem expor o valor: `users.username/email` (escopo global, usado no login), `tenants.name/domain` (global), `users.full_name`, `banco_frases.categoria` e `frase_bidx`, `Disciplinas.nome_disciplina` e `audit_log_geracao.usuario/evento/cargo` (escopo por cliente: o mesmo valor em clientes diferentes gera índices diferentes).
+
+### 17 modelos ORM × 16 tabelas com RLS
+
+`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **16** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
+
+- O acesso a `tenants` só ocorre pela role `diagpro_platform`, em rotas exclusivas do `administrador geral`. A camada de cifra também bloqueia sessões de runtime que tentem carregar linhas de `tenants`.
+- Em `users`, linhas com `tenant_id` nulo (administrador geral) só são visíveis pela role `diagpro_platform`, que tem `BYPASSRLS`. Não existe bypass por variável de sessão.
 
 ---
 
 ## 9. Principais Módulos do Backend
 
-- `backend/app/main.py`: inicialização da API, CORS (`localhost:3000` / `127.0.0.1:3000`), criação de diretórios `avatars/` e `static/` e inclusão dos routers.
-- `backend/app/database.py` e `backend/app/db_models.py`: camada assíncrona SQLAlchemy e definição ORM.
-- `backend/app/auth.py` e `backend/app/security.py`: autenticação JWT, verificação de usuário ativo e helpers de escopo por tenant e sanitização de caminhos.
-- `core/document_generator.py` e `core/docx_parser.py`: geração de provas/gabaritos em DOCX/PDF e extração estruturada de documentos Word.
+- `backend/app/main.py`: inicialização da API, nível de log (`DIAGPRO_LOG_LEVEL`, padrão `WARNING`), filtro de redação de logs, CORS (`CORS_ORIGINS`), cabeçalhos de segurança e `X-Request-ID`, `GET /health` e routers. Não há montagens de arquivos estáticos.
+- `backend/app/database.py`: engine da role de runtime e engine da role de plataforma, ambas com TLS (`DB_SSLMODE`, padrão `verify-full`); `set_tenant_context` (contexto por transação, *fail-closed*); recusa iniciar sem PostgreSQL.
+- `backend/app/field_crypto.py` e `db_models.py`: cifra/decifra transparente no ORM, índices cegos, tipo `Ciphertext` que recusa texto claro em SQL direto e bloqueio de linhas de outro tenant em sessões de runtime.
+- `backend/app/secure_files.py` e `routes/files.py`: armazenamento cifrado de arquivos, URLs assinadas, validação de conteúdo de uploads, descarte de caminhos vindos do cliente e pasta temporária por requisição para o gerador.
+- `backend/app/auth.py` e `backend/app/security.py`: autenticação JWT, usuário ativo, `require_roles`, `get_tenant_db`, `evento_autorizado`, helpers de caminho.
+- `backend/app/log_redaction.py`: mascara senhas, assinaturas, tokens, caminhos e nomes de arquivo em todos os logs (inclusive no log de acesso do uvicorn).
+- `core/document_generator.py` e `core/docx_parser.py`: geração de provas/gabaritos em DOCX/PDF e extração de documentos Word. Os `print` de depuração desses módulos viram logs DEBUG.
 
 ---
 
 ## 10. Principais Endpoints da API
 
+Tabela conferida contra as rotas registradas em `app.routes` em 18/11/2026: **85 operações HTTP**, mais `/docs`, `/docs/oauth2-redirect`, `/redoc` e `/openapi.json`. Não há montagens públicas de arquivos.
+
 | Prefixo / Módulo | Endpoints Principais |
 | :--- | :--- |
+| **Sistema** (`main.py`) | `GET /`, `GET /health` |
+| **Arquivos** (`routes/files.py`) | `GET /api/files/{scope}/{name}?exp=&sig=` (URL assinada de vida curta; sem token) |
 | **Auth** (`/auth`) | `POST /auth/login` |
 | **Usuários** (`/users`) | `POST /users/register`, `GET /users/me`, `GET / POST /users/`, `PATCH / DELETE /users/{user_id}` |
 | **Admin Tenants** (`admin_clients.py`) | `GET / POST /admin/clients`, `GET /admin/clients/dashboard`, `POST /admin/clients/{client_id}/create-admin`, `GET /admin/clients/{client_id}` |
 | **Empresa** (`company.py`) | `GET / PUT /company` |
 | **Eventos** (`/eventos`) | `GET / POST /eventos/`, `GET /eventos/{event_id}/detalhes`, `GET / PUT / DELETE /eventos/{event_id}` |
 | **Cargos** (`cargos.py`, `cargos_import.py`) | `GET / POST /eventos/{event_id}/cargos`, `PUT / DELETE /cargos/{cargo_id}`, `POST /eventos/{event_id}/cargos/upload-capa-pdf`, `POST /eventos/{event_id}/cargos/import-csv` |
-| **Conteúdos** (`/conteudos`) | `GET / POST /conteudos/eventos/{evento_id}/conteudos`, `PUT / DELETE /conteudos/{conteudo_id}`, `POST .../csv`, `GET /conteudos/meus` |
-| **Questões** (`questoes.py`) | `GET / POST /eventos/{evento_id}/conteudos/{conteudo_id}/questoes`, `GET / PUT / DELETE /eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}`, `PATCH .../questoes/{id_questao}/revisao`, `GET .../questoes/{id_questao}/revisoes`, `POST .../importar-docx`, `POST .../importar-docx/confirmar` *(nota: `importador.py` não está montado em `main.py`)* |
-| **Textos de Referência** (`textos_referencia.py`) | `GET / POST /eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia`, `GET / PATCH / DELETE /eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}` |
+| **Conteúdos** (`/conteudos`) | `GET / POST /conteudos/eventos/{evento_id}/conteudos`, `POST /conteudos/eventos/{evento_id}/conteudos/csv`, `PUT / DELETE /conteudos/{conteudo_id}`, `GET /conteudos/meus` |
+| **Questões** (`questoes.py`) | `GET / POST /eventos/{evento_id}/conteudos/{conteudo_id}/questoes`, `GET / PUT / DELETE .../questoes/{id_questao}`, `PATCH .../questoes/{id_questao}/revisao`, `GET .../questoes/{id_questao}/revisoes`, `POST .../importar-docx`, `POST .../importar-docx/confirmar` |
+| **Textos de Referência** (`textos_referencia.py`) | `GET / POST /eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia`, `GET / PATCH / DELETE .../textos-referencia/{id_texto_ref}` |
 | **Frases** (`/frases`) | `GET / POST /frases/`, `PUT / DELETE /frases/{frase_id}`, `POST /frases/import/` |
-| **Templates** (`/api`) | `GET / POST /api/eventos/{evento_id}/templates`, `GET / DELETE /api/eventos/{evento_id}/templates/{nome_arquivo}`, `POST /api/eventos/{evento_id}/templates/upload` |
+| **Templates** (`/api`) | `GET /api/eventos/{evento_id}/templates`, `POST .../templates/upload`, `GET / DELETE .../templates/{nome_arquivo}` |
 | **Provas e Simulação** (`/provas`, `provas_geracao.py`) | `GET /provas/eventos/{id_evento}/cargos-com-status-prova`, `GET / POST / DELETE /provas/eventos/{id_evento}/provas-montadas/{id_cargo}`, `GET /provas/eventos/{id_evento}/disciplinas`, `GET /provas/eventos/{event_id}/cargos-quantidade-questoes`, `GET /eventos/{event_id}/cargos/provas-geracao`, `POST /eventos/{event_id}/provas/definir-geracao`, `POST /eventos/{event_id}/simular-frases/{cargo_id}`, `POST /eventos/{event_id}/simular-certo-errado/{cargo_id}` |
-| **Gabaritos** (`/api/gabarito`) | `GET /api/gabarito/eventos/{evento_id}/cargos/{cargo_id}/gabarito`, `GET .../variacoes`, `GET .../exportacoes`, `POST /api/gabarito/eventos/{evento_id}/exportar-gabaritos-zip` |
-| **Exportação** (`/api/export`) | `POST /api/export/eventos/{evento_id}/validar-senha`, `GET /api/export/eventos/{evento_id}/cargos/{cargo_id}/exportacoes`, `GET /api/export/download`, `POST /api/export/eventos/{evento_id}/cargos/{cargo_id}/gerar-arquivos`, `POST .../exportar-gabarito`, `POST /api/export/eventos/{evento_id}/cargos/gerar-arquivos-multiplos`, `GET /api/export/download-zip` |
+| **Gabaritos** (`/api/gabarito`) | `GET .../cargos/{cargo_id}/gabarito`, `GET .../cargos/{cargo_id}/variacoes`, `GET .../cargos/{cargo_id}/exportacoes`, `POST /api/gabarito/eventos/{evento_id}/exportar-gabaritos-zip` |
+| **Exportação** (`/api/export`) | `POST .../eventos/{evento_id}/validar-senha`, `POST .../eventos/{evento_id}/cargos/gerar-arquivos-multiplos` (fluxo do frontend), `GET .../cargos/{cargo_id}/exportacoes`, `POST .../cargos/{cargo_id}/gerar-arquivos`, `POST .../cargos/{cargo_id}/exportar-gabarito`, `GET /api/export/download`, `GET /api/export/jobs/{job_id}` |
 | **Auditoria** (`/admin/logs/geracao`) | `GET / POST /admin/logs/geracao/` |
 | **Apoio / IA** (`/api`) | `POST /api/ia-chat`, `POST /api/check-plagio`, `POST /api/dicionario`, `POST /api/biblioteca` |
+
+Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_ping`, `/api/export/debug_export_ping`, `/api/export/download-zip` (entregava um ZIP sem senha gravado em disco) e `/api/export/.../gerar-arquivos-async` (nunca funcionou).
 
 ---
 
 ## 11. Banco de Questões, Importação DOCX e Revisão
 
 - **Tipos suportados**: `MULTIPLA_ESCOLHA` (`OpcoesQuestao`), `CERTO_ERRADO` (`ItensVerdadeiroFalso`), `DISCURSIVA` e `SUBJETIVA` (`DetalhesQuestaoDiscursiva`).
-- **Importação DOCX**: `core/docx_parser.py` (`DocxParser`) extrai texto formatado, tabelas e mídias de `.docx`, permitindo pré-visualização e confirmação para persistência no banco (`questoes.py`).
-- **Revisão**: O fluxo de revisão altera `status_revisao`/`observacao_revisor` e grava histórico em `HistoricoRevisaoQuestao`.
+- **Conteúdo cifrado**: enunciado, versão formatada, alternativas, indicação de correta, resposta esperada, justificativas e histórico de revisão são cifrados com a chave do cliente.
+- **Imagens**: uploads de enunciado, alternativas e textos de referência têm extensão, tamanho e assinatura de conteúdo validados e vão para o armazenamento cifrado; a API devolve URLs assinadas no mesmo formato relativo que o frontend usa.
+- **Importação DOCX**: `core/docx_parser.py` extrai texto, tabelas e imagens numa pasta temporária; as imagens são cifradas e a pré-visualização recebe URLs assinadas. Na confirmação, campos de caminho vindos do cliente só são aceitos se forem referências válidas do próprio cliente.
+- **Revisão**: altera `status_revisao`/`observacao_revisor` e grava histórico em `HistoricoRevisaoQuestao`.
 
 ---
 
 ## 12. Montagem, Geração de Provas, Gabaritos e Exportação
 
-- **Montagem**: `ProvasMontadas` armazena `blocos_questoes` e `metadados_prova` (JSON) por evento/cargo.
-- **Geração e Variações**: `provas_geracao.py` configura número de variações, embaralhamento de questões/alternativas e simulações.
-- **Exportação DOCX/PDF/ZIP**: `exportacao.py` utiliza `DocumentGenerator` (`core/document_generator.py`) para montar o DOCX (com `html_to_docx.py`), converte para PDF via LibreOffice, preenche capas AcroForm com `PreencheCapaPDF_JSON_PDFBox.java` (`campos_capa.py`), gera gabaritos (`gabarito.py`) e compacta pacotes com `pyzipper`.
+- **Montagem**: `ProvasMontadas` guarda `blocos_questoes` e `metadados_prova` (cifrados) por evento/cargo.
+- **Geração e Variações**: `provas_geracao.py` configura número de variações, embaralhamento e simulações. O CSV de candidatos (dados pessoais) é gravado cifrado.
+- **Entrada do gerador**: imagens, logo, capas, templates e CSV são decifrados apenas numa pasta temporária privada da requisição (`secure_files.request_workdir`), apagada ao final mesmo em caso de erro. Campos de caminho que não sejam referências válidas do cliente viram vazio antes de chegar ao gerador.
+- **Saídas**: DOCX, PDF (LibreOffice, até 3 tentativas), capas AcroForm (`PreencheCapaPDF_JSON_PDFBox.java`), gabaritos e ZIPs são criados na mesma pasta temporária, entregues em memória (`Cache-Control: private, no-store`) e apagados. O lote e o ZIP de gabaritos são protegidos com a senha do evento (AES, `pyzipper`).
+- **Senha do evento**: comparada em tempo constante, com limite de 5 tentativas/60 s no lote, na validação e no ZIP de gabaritos.
 
 ---
 
 ## 13. Integrações Externas
 
-- **OpenAI API** (`backend/app/routes/ia_chat.py`): utiliza `gpt-3.5-turbo` (requer `OPENAI_API_KEY`).
-- **Bing Web Search API v7** (`backend/app/routes/plagio.py`): verificação de similaridade/plágio (requer `BING_API_KEY`).
-- **Google reCAPTCHA** (`backend/app/routes/auth.py`): validação de login (requer `RECAPTCHA_SECRET_KEY`).
-- **Dicio (`dicio.com.br`)** (`backend/app/routes/dicionario.py`): consulta via requisição HTTP e regex sobre HTML.
+- **OpenAI API** (`ia_chat.py`): modelo por `OPENAI_MODEL` (padrão `gpt-3.5-turbo`), requer `OPENAI_API_KEY` (sem ela, 503). **Inoperante:** usa `openai.ChatCompletion`, removido no SDK `>=1.0`, e `requirements.txt` fixa `openai==1.109.1`.
+- **Bing Web Search API v7** (`plagio.py`): requer `BING_API_KEY`. O texto analisado sai do sistema para um serviço externo.
+- **Google reCAPTCHA** (`routes/auth.py`): requer `RECAPTCHA_SECRET_KEY`; sem a chave, a verificação é ignorada (*fail-open*). Não testado.
+- **Dicio (`dicio.com.br`)** (`dicionario.py`): requisição HTTP e regex sobre HTML.
 
 ---
 
 ## 14. Segurança e Isolamento Multi-Tenant
 
-- **Autenticação**: JWT (`HS256`, expiração 30 min) com `JWT_SECRET_KEY` via `.env`, senhas com `bcrypt` e bloqueio de usuários inativos.
-- **Criptografia**: `Fernet` (`FERNET_KEY`) para senhas de eventos e vínculos. Validação de senha de evento usa `hmac.compare_digest`.
-- **Prevenção de Path Traversal e Escalação**: `backend/app/security.py` fornece `nome_arquivo_seguro`, `caminho_dentro_de` e `evento_autorizado`; `/users/register` bloqueia cadastro público em papéis administrativos.
-- **Isolamento Multi-Tenant**: Atualmente aplicado na camada de aplicação por filtro de `tenant_id` (ainda com rotas a auditar quanto à obrigatoriedade estrita de RBAC e escopo). **O isolamento multi-tenant ainda não pode ser considerado garantido**, pois não há testes automatizados validando isolamento entre dois tenants (Tenant A vs. Tenant B). No PostgreSQL, `backend/app/rls_policies.sql` declara RLS para as **16 tabelas com `tenant_id`** (excluindo `tenants`, que é a tabela global de clientes), e `backend/app/database.py` expõe `set_tenant_context`, porém essa camada **ainda não foi validada em execução** e requer role não-superuser + dependência de sessão nas rotas.
-- **LGPD**: Campos pessoais/bancários (`cpf`, `pix_key`, `banco`, `agencia`, `conta_corrente`) ainda não possuem criptografia em repouso dedicada nem mascaramento em logs.
+**Banco de dados**
+- Somente PostgreSQL; a API recusa iniciar sem `DATABASE_URL` PostgreSQL e sem `PLATFORM_DATABASE_URL` distinta.
+- Conexões com TLS obrigatório: `pg_hba.conf` aceita só `hostssl` + SCRAM e rejeita TCP sem TLS; a API usa `verify-full` com a CA privada do projeto (TLS 1.3 negociado nos testes). Porta publicada apenas em `127.0.0.1`.
+- Duas roles de aplicação sem superuser e sem permissão de criar objetos ou de serem donas de tabelas: `diagpro_runtime` (`NOBYPASSRLS`) para requisições de um cliente e `diagpro_platform` (`BYPASSRLS`) apenas para login, cadastro e `administrador geral`. Senhas geradas aleatoriamente por `setup_postgres_roles.py --rotate`.
+- RLS forçado em 16 tabelas, sem cláusula de bypass: `SET app.bypass_rls = 'on'` não tem efeito (testado no banco real).
+
+**Cifra de campos** (`field_crypto.py`)
+- AES-256-GCM com chave por cliente derivada (HKDF-SHA256) de uma chave mestra que fica fora do projeto e do banco. O AAD amarra cada valor a tabela, coluna, cliente e versão da chave: um valor copiado para outro lugar falha na autenticação.
+- Sessões de runtime não decifram linhas de outro cliente, mesmo que uma injeção de SQL troque o contexto de RLS (testado).
+- O tipo `Ciphertext` recusa gravar ou comparar texto claro em coluna cifrada fora do ORM.
+- A antiga `FERNET_KEY` (exposta antes das correções) foi aposentada; a API não a lê mais.
+
+**Arquivos** (`secure_files.py`)
+- Arquivos cifrados por cliente em `storage_data/files` (blocos AES-256-GCM, nomes opacos); templates em `templates_eventos/*.enc`.
+- Entrega por URL assinada (HMAC, 5 min, `DIAGPRO_FILE_URL_TTL`); assinatura inválida, link expirado ou escopo de outro cliente → 404. Respostas com `no-store`, `nosniff` e CSP restritiva.
+- Uploads validados por extensão, tamanho e assinatura de conteúdo (HTML/SVG disfarçado de imagem é recusado).
+- Caminhos enviados pelo cliente (importação DOCX, capas, timbre, avatar) só são aceitos como referência válida do próprio cliente; antes, permitiam ler arquivos arbitrários do servidor pelo gerador.
+
+**Saídas e logs**
+- Nenhuma prova gerada é armazenada; a pasta temporária da requisição é apagada ao final.
+- `log_redaction.py` mascara `senha=`, `sig=`, tokens `Bearer`, caminhos e nomes de arquivo em todos os logs, inclusive no log de acesso do uvicorn (testado com servidor real). Logs de depuração ficam desligados por padrão.
+
+**Autenticação e HTTP**
+- JWT `HS256` (30 min), `bcrypt`, bloqueio de inativos, rate limits (ver [Seção 2](#2-estado-atual-das-funcionalidades)). reCAPTCHA em *fail-open* sem chave. Sem refresh token; o frontend guarda o token em `localStorage`.
+- Cabeçalhos: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Request-ID`, `Cache-Control: no-store` em rotas de API. HSTS com `ENABLE_HSTS=true`.
+
+**Isolamento multi-tenant: estado verificado**
+- Testado: RLS no PostgreSQL com a role de runtime (leitura e escrita cruzada bloqueadas, pool sem vazamento, bypass bloqueado), recusa de decifrar linhas de outro cliente, isolamento HTTP em eventos, biblioteca e jobs, e isolamento de arquivos por cliente.
+- Não testado automaticamente: isolamento entre clientes nas rotas de usuários, frases, templates, questões, textos, cargos, provas e gabaritos (protegidas por RLS + `evento_autorizado`/filtro de tenant; apenas inspecionadas na revisão atual).
+
+**Limites conhecidos**
+- Metadados não cifráveis ficam visíveis a quem acessar o banco: IDs, `tenant_id`, códigos técnicos, papéis, estados, datas, contagens e tamanho aproximado dos textos.
+- Durante a geração, arquivos decifrados existem por alguns segundos na pasta temporária do usuário do serviço (LibreOffice e Java precisam deles). Apagar não sobrescreve o disco: use criptografia de disco (BitLocker) no servidor.
+- `/docs` e `/openapi.json` são públicos.
 
 ---
 
 ## 15. Instalação, Variáveis de Ambiente e Execução
 
 ### Pré-requisitos
-- Python 3.10+ (validado com CPython `3.11.0` no `.venv` da raiz; `backend/requirements.txt` está incompleto, portanto um ambiente novo exigirá instalar também as dependências ausentes desse arquivo)
-- PostgreSQL 16+ (o `docker-compose.yml` provisiona `postgres:16-alpine`; também compatível com instalação local mais recente, como PostgreSQL 17 observado no ambiente)
-- LibreOffice (para conversão DOCX → PDF em `PdfConverter`) e Java JRE/JDK (para `PreencheCapaPDF_JSON_PDFBox`)
-- Node.js 18+ (para servir `frontend/build/` ou reconstruir quando `frontend/src/` for restaurado)
+- **Python 3.11**, **Docker** (PostgreSQL 16 do `docker-compose.yml`), **LibreOffice** e **Java** (OpenJDK 17 no `Dockerfile`), **Node.js 18+** para o frontend.
+- Na máquina de desenvolvimento há serviços PostgreSQL 16/17/18 instalados localmente; a referência validada é o contêiner `postgres:16-alpine` do compose (porta `5435`, só `127.0.0.1`).
+
+### Segredos (fora do projeto)
+Todos ficam em `%LOCALAPPDATA%\DiagPro\secrets` (pasta acessível apenas pelo usuário do serviço):
+
+| Arquivo | Gerado por | Função |
+| :--- | :--- | :--- |
+| `master.key` | `python -m backend.app.field_crypto genkey` | Chave mestra da cifra de campos e de arquivos. **Sem ela, os dados são irrecuperáveis.** |
+| `backup.key` | `python scripts/backup_crypto.py genkey` | Chave dos backups cifrados |
+| `pg-tls\ca.crt`, `ca.key`, `server.crt`, `server.key` | `python scripts/gen_pg_tls.py` | CA privada e certificado TLS do PostgreSQL |
+| `legacy_fernet.key` | — | Chave Fernet aposentada; necessária só para converter backups anteriores à fase 1b |
+
+Guarde cópias **offline** de `master.key`, `backup.key` e `pg-tls\ca.key`. Nenhum desses scripts sobrescreve uma chave existente.
 
 ### Variáveis de Ambiente (`.env`)
-Configurar na raiz do projeto (sem versionar segredos):
-```env
-FERNET_KEY=<chave-fernet-base64>
-JWT_SECRET_KEY=<chave-secreta-forte>
-RECAPTCHA_SECRET_KEY=<chave-secreta-recaptcha>
-OPENAI_API_KEY=<opcional-para-ia-chat>
-BING_API_KEY=<opcional-para-plagio>
-# Opcional (se omitido, usa SQLite local diagprooff.db):
-DATABASE_URL=postgresql+asyncpg://diagpro_admin:diagpro_dev_password@localhost:5432/diagpro
-```
+Copie `.env.example` para `.env` e preencha. Nunca versione o `.env`.
 
-### Execução Local (Validada em Ambiente)
-Subir o backend FastAPI usando o `.venv` da raiz:
+| Variável | Obrigatória | Uso |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | Sim | `postgresql+asyncpg://diagpro_runtime:<senha>@127.0.0.1:5435/diagpro` |
+| `PLATFORM_DATABASE_URL` | Sim | `postgresql+asyncpg://diagpro_platform:<senha>@127.0.0.1:5435/diagpro` (deve ser diferente da anterior) |
+| `ALEMBIC_DATABASE_URL` | Para migrações/scripts | `postgresql+psycopg2://diagpro_admin:<senha>@127.0.0.1:5435/diagpro` |
+| `DB_SSLMODE`, `DB_SSL_ROOT_CERT` | Sim (padrão `verify-full`) | TLS com o banco; `disable` só no CI efêmero |
+| `JWT_SECRET_KEY` (ou `SECRET_KEY`) | Sim | Assinatura JWT |
+| `DIAGPRO_MASTER_KEY_FILE` | Não | Caminho da chave mestra (padrão `%LOCALAPPDATA%\DiagPro\secrets\master.key`) |
+| `DIAGPRO_FILES_DIR` | Não | Armazenamento cifrado de arquivos (padrão `storage_data/files`) |
+| `DIAGPRO_FILE_URL_TTL` | Não | Validade das URLs assinadas em segundos (padrão 300) |
+| `DIAGPRO_LOG_LEVEL` | Não | Nível de log (padrão `WARNING`; `DEBUG` expõe detalhes de depuração) |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT` | Para o compose | Contêiner PostgreSQL |
+| `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_PLATFORM_POOL_SIZE`, `DB_PLATFORM_MAX_OVERFLOW` | Não | Pools de conexão |
+| `CORS_ORIGINS`, `ENABLE_HSTS`, `RATE_LIMIT_ENABLED` | Não | HTTP e rate limit |
+| `RECAPTCHA_SECRET_KEY` | Recomendada | Sem ela, o reCAPTCHA é ignorado |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `BING_API_KEY` | Não | Integrações externas |
+| `REDIS_URL`, `S3_*`, `LOCAL_STORAGE_DIR` | Não | Rate limit compartilhado e `storage.py` |
+
+### Preparar um ambiente novo
 ```powershell
-.\.venv\Scripts\uvicorn.exe backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
-API disponível em `http://127.0.0.1:8000` e Swagger em `http://127.0.0.1:8000/docs`.
+# 1. Dependências e chaves
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
+.\.venv\Scripts\python.exe -m backend.app.field_crypto genkey
+.\.venv\Scripts\python.exe scripts/backup_crypto.py genkey
+.\.venv\Scripts\python.exe scripts/gen_pg_tls.py
 
-Servir o build estático existente do frontend (`frontend/build/`):
-```powershell
-npx serve -s frontend/build -l 3000
-```
-
-### Migração Estruturada para PostgreSQL (Não Executada Nesta Auditoria)
-> **Observação:** `alembic/versions/` ainda não possui revisões geradas. A sequência abaixo cria o schema via Alembic antes de popular os dados do SQLite (não utilize `stamp head` sem executar `upgrade head`):
-
-```powershell
-# 1. Subir o PostgreSQL (e configurar DATABASE_URL no .env)
+# 2. PostgreSQL 16 (somente 127.0.0.1:5435)
 docker compose up -d db
 
-# 2. Gerar a revisão inicial a partir dos modelos ORM e aplicá-la no banco vazio
-.\.venv\Scripts\alembic.exe revision --autogenerate -m "initial_postgres_multitenant"
-.\.venv\Scripts\alembic.exe upgrade head
+# 3. TLS no servidor: instalar certificado e exigir hostssl + SCRAM
+$tls = "$env:LOCALAPPDATA\DiagPro\secrets\pg-tls"
+docker cp "$tls\server.crt" diagpro_postgres:/var/lib/postgresql/data/server.crt
+docker cp "$tls\server.key" diagpro_postgres:/var/lib/postgresql/data/server.key
+docker exec diagpro_postgres sh -c 'cd $PGDATA && chown postgres:postgres server.* && chmod 600 server.key'
+#    pg_hba.conf: "local all all trust", "hostssl all all all scram-sha-256", "host all all all reject"
+docker exec diagpro_postgres psql -U diagpro_admin -d diagpro -c "ALTER SYSTEM SET ssl = 'on'" -c "ALTER SYSTEM SET ssl_min_protocol_version = 'TLSv1.2'" -c "SELECT pg_reload_conf()"
 
-# 3. Migrar os dados do diagprooff.db e aplicar backend/app/rls_policies.sql
-.\.venv\Scripts\python.exe scripts/migrate_sqlite_to_postgres.py
+# 4. Schema, RLS e roles (role administrativa em ALEMBIC_DATABASE_URL)
+.\.venv\Scripts\alembic.exe upgrade head          # deve terminar em e7b2d4f8a1c6
+Get-Content backend/app/rls_policies.sql -Raw | docker exec -i diagpro_postgres psql -U diagpro_admin -d diagpro
+.\.venv\Scripts\python.exe scripts/setup_postgres_roles.py --rotate   # cria as roles e grava as senhas no .env
+
+# 5. API (a partir da raiz do projeto)
+.\.venv\Scripts\uvicorn.exe backend.app.main:app --host 127.0.0.1 --port 8000
 ```
+API em `http://127.0.0.1:8000`, Swagger em `/docs` e saúde em `/health`. **Não use `alembic stamp head`** em banco vazio (não cria tabelas) e não gere uma nova revisão inicial.
+
+Frontend (código em `frontend/src/`, não versionado; comandos não executados nesta revisão):
+```powershell
+cd frontend; npm install; npm start   # http://localhost:3000; a API é http://127.0.0.1:8000 (frontend/src/api.ts)
+```
+
+### Backup e restauração
+```powershell
+$bk = "$env:LOCALAPPDATA\DiagPro\backups\pg_diagpro_$(Get-Date -f yyyyMMdd-HHmmss).dump.enc"
+docker exec diagpro_postgres pg_dump -U diagpro_admin -d diagpro -Fc | .\.venv\Scripts\python.exe scripts/backup_crypto.py encrypt $bk
+# verificar:   .\.venv\Scripts\python.exe scripts/backup_crypto.py decrypt $bk | docker exec -i diagpro_postgres pg_restore --list
+# restaurar:   ... decrypt $bk | docker exec -i diagpro_postgres pg_restore -U diagpro_admin -d <banco_vazio> --no-owner --role=diagpro_admin
+```
+O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templates_eventos/` também são cifrados e devem ser copiados junto. Restaurar exige a mesma `master.key`.
 
 ---
 
 ## 16. Testes e Validação
 
-- **Suíte de testes automatizados:** Não identificada no repositório (não há `pytest` nem testes de unidade/integração; `backend/app/test_upload.py` é apenas um protótipo de 7 linhas).
-- **Verificações executadas nesta auditoria:**
-  - `.\.venv\Scripts\uvicorn.exe --version` → `Running uvicorn 0.37.0 with CPython 3.11.0 on Windows`
-  - `.\.venv\Scripts\alembic.exe --version` → `alembic 1.20.1`
-  - `.\.venv\Scripts\python.exe -m py_compile backend/app/main.py backend/app/database.py backend/app/db_models.py backend/app/auth.py backend/app/security.py` → concluído com código `0`.
-  - Testes E2E de banco PostgreSQL/RLS, geração real de PDF/ZIP e UI frontend **não foram executados** nesta auditoria.
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, 17 testes)
+
+| Área | Testes |
+| :--- | :--- |
+| Autenticação e RBAC | `test_unauthenticated_endpoints_return_401`, `test_public_register_blocks_admin_escalation_and_bad_uploads`, `test_rbac_matrix_five_roles` |
+| Isolamento e RLS | `test_http_tenant_isolation_between_tenant_1_and_tenant_2`, `test_postgres_rls_isolation_and_pool_non_leakage`, `test_runtime_role_cannot_bypass_rls_via_session_variable`, `test_health_request_id_and_biblioteca_tenant_isolation`, `test_storage_path_traversal_and_export_jobs_tenant_isolation` |
+| Cifra de campos | `test_field_crypto_roundtrip_binding_and_blind_index`, `test_database_stores_only_ciphertext_and_orm_returns_plaintext`, `test_plaintext_write_to_encrypted_column_is_blocked`, `test_runtime_session_refuses_rows_of_other_tenant_even_with_tampered_context` |
+| Arquivos | `test_secure_files_store_sign_and_isolation`, `test_upload_returns_signed_url_and_public_folders_are_gone` |
+| HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
+
+Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.
+
+### Verificações executadas (18/11/2026, Windows, `.venv` da raiz)
+- **Suíte:** 17 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
+- **Teste de fumaça da API** no mesmo banco: 34 chamadas (empresa, eventos, cargos, frases com importação, conteúdos, ciclo completo de questão, textos, usuários, clientes, auditoria) e checagem de uploads de imagem; varredura sem texto claro nas colunas cifradas.
+- **Migrações no banco real**, cada uma ensaiada antes numa cópia restaurada de backup:
+  - RLS sem bypass;
+  - recifragem de 4.034 valores (1.269 linhas; 607 camadas Fernet antigas removidas), com cada valor decifrado e comparado;
+  - 14 arquivos e 2 templates movidos para o armazenamento cifrado, conferidos por SHA-256.
+- **Banco real após as migrações:** carga completa pelo ORM (por cliente na role de runtime e pela de plataforma), login pelo índice cego, leituras pela API e varredura de texto claro (nenhum).
+- **Geração real numa cópia do banco:**
+  - PDF com capa via Java;
+  - lote do frontend com ZIP AES que não abre sem senha;
+  - ZIP de gabaritos;
+  - nenhum arquivo nem pasta temporária remanescente e nenhum conteúdo de prova nos logs.
+- **Log de acesso do uvicorn** (servidor real): senha, assinatura e token não aparecem.
+- **TLS:** conexão sem TLS recusada, CA errada recusada, `verify-full` aceito.
+- **Backups:** cifrados, verificados com `pg_restore --list` e restaurados com sucesso em bancos de ensaio.
+
+### Não executado
+- Workflow de CI no GitHub Actions.
+- reCAPTCHA junto ao Google e chamadas OpenAI/Bing/Dicio.
+- Build da imagem Docker da API.
+- Build, testes e uso da interface do frontend.
+- Extração DOCX automatizada e regras de embaralhamento/variação.
 
 ---
 
 ## 17. Limitações Conhecidas e Roadmap Técnico
 
 ### Limitações Atuais
-- `frontend/src/` e `frontend/public/` ausentes no repositório local (apenas `frontend/build/` disponível).
-- `backend/requirements.txt` incompleto frente às bibliotecas importadas pelo código.
-- Ausência de suíte de testes automatizados (`pytest`), rate limiting e refresh tokens em cookie `HttpOnly`.
-- `biblioteca.py` usa dados fictícios (`QUESTOES_FAKE`) e `dicionario.py` depende de scraping HTML.
-- Geração de arquivos (DOCX/PDF/PDFBox/ZIP) executada de forma síncrona na requisição HTTP.
-- Arquivos em `avatars/` e `static/` montados diretamente via `StaticFiles` sem controle de acesso por endpoint.
+- **Histórico do Git:** o banco SQLite antigo (com dados pessoais) e as imagens de prova que estavam em `static/` continuam no histórico de commits anteriores. Removê-los exige reescrever o histórico (autorização do responsável).
+- **Frontend sem versionamento:** `frontend/src/` e `frontend/public/` existem só localmente.
+- **Bugs conhecidos:** criar questão Certo/Errado com itens falha (`imagem_path_item`); frase duplicada devolve 500 em vez de 400; Chat IA inoperante (SDK `openai` v1).
+- **Senha na URL:** `exportar-gabaritos-zip` recebe a senha do evento na query string (mascarada nos logs); deveria ir no corpo da requisição (requer ajuste no frontend).
+- **Chamadas legadas sem efeito:** `encrypt_text`/`decrypt_text`/`encrypt_pii` ainda aparecem nas rotas, mas não fazem nada (a cifra é feita no ORM).
+- **Rotação de chave:** o formato dos valores cifrados guarda a versão da chave, mas não há script de rotação.
+- **Busca da biblioteca:** decifra as questões do cliente na memória; mais lenta em volumes grandes.
+- **Arquivos órfãos:** imagens de pré-visualizações de importação não confirmadas ficam cifradas no armazenamento sem limpeza automática.
+- **Dependências:** `redis` sem versão fixada; `boto3` ausente; imagem `minio/minio:latest` sem versão fixada.
+- **reCAPTCHA *fail-open***, sem refresh token, token em `localStorage`, `/docs` público.
 
 ### Próximos Passos Prioritários
-1. **Concluir migração PostgreSQL + RLS**: rodar migração de dados, criar usuário PostgreSQL não-superuser (`diagpro_runtime`) e aplicar `set_tenant_context` como dependência global nas rotas.
-2. **Auditoria completa de RBAC e LGPD**: revisar todas as rotas para checagem estrita de `UserRole`, adicionar rate limiting (`slowapi`), refresh token `HttpOnly` e criptografia em repouso para dados bancários/CPF.
-3. **Restaurar código-fonte do Frontend**: recuperar `frontend/src/` e `frontend/public/` com sanitização (`DOMPurify`).
-4. **Suíte de Testes e CI/CD**: criar testes `pytest` de isolamento Tenant A vs Tenant B e matriz RBAC, atualizar `requirements.txt` e configurar pipeline CI (`ruff`, `bandit`, `pip-audit`).
-5. **Escala**: mover geração de provas para fila assíncrona (Redis + ARQ/Celery) e mídias/provas para Object Storage (S3/MinIO) com URLs pré-assinadas.
+1. **Limpar o histórico do Git** (banco antigo e imagens de prova) e versionar o frontend.
+2. **Testes de isolamento** em todas as rotas de questões, textos, cargos, provas e gabaritos; executar o CI no GitHub.
+3. **Corrigir os bugs conhecidos** e mover a senha do ZIP de gabaritos para o corpo da requisição.
+4. **Rotação de chaves** (mestra e roles) com script e procedimento documentado; avaliar KMS para a chave mestra.
+5. **Endurecimento de sessão:** refresh token em cookie `HttpOnly`/`SameSite`, reCAPTCHA *fail-closed* em produção, `/docs` restrito.
 
 ---
 
 ## 18. Diretrizes para Desenvolvimento e Contribuição
 
 - **Fonte da verdade:** código-fonte, modelos, rotas e migrações atuais prevalecem sobre documentos antigos.
-- **Isolamento multi-tenant:** nunca confiar em `tenant_id` enviado pelo cliente; derivar sempre do usuário autenticado e validar pertencimento ao evento/recurso.
-- **Segurança por padrão:** toda nova rota deve exigir autenticação e verificação explícita de `UserRole`, além de testes negativos e de isolamento entre tenants.
-- **Preservação de segredos:** nunca registrar senhas, chaves (`JWT_SECRET_KEY`, `FERNET_KEY`), tokens ou dados pessoais em código, logs ou commits.
+- **Isolamento multi-tenant:** nunca confiar em `tenant_id` enviado pelo cliente; derivar sempre do usuário autenticado e validar pertencimento ao evento/recurso. Use `get_tenant_db`; a role de plataforma é só para login, cadastro e `administrador geral`.
+- **Dados sensíveis:** toda nova coluna de texto/JSON com conteúdo de prova, dado pessoal ou dado de cliente deve entrar em `field_crypto.ENCRYPTED` e ser declarada como `Ciphertext`. Buscas exatas em colunas cifradas usam `blind_eq` (índice cego); `LIKE`/ordenação nelas não funcionam.
+- **Arquivos:** nunca gravar em pastas públicas nem abrir caminhos vindos do cliente. Use `secure_files.save_upload_http` para uploads, `ref_from_client`/`sanitize_client_paths` para valores devolvidos pelo cliente e `materialize_into` com `request_workdir` para o gerador.
+- **Saídas:** provas e gabaritos gerados são entregues em memória e nunca persistidos.
+- **Logs:** não usar `print` para dados operacionais; não registrar senhas, tokens, chaves, conteúdo de prova ou dados pessoais.
+- **Segurança por padrão:** toda nova rota exige autenticação, `require_roles` e testes negativos (sem token, perfil errado, outro cliente) em `tests/`.
+- **Migrações:** novas revisões Alembic encadeadas à atual, revisadas manualmente, ensaiadas numa cópia do banco e precedidas de backup cifrado; nunca editar revisões já aplicadas.
+- **Segredos:** nunca registrar senhas, chaves (`master.key`, `JWT_SECRET_KEY`), tokens ou dados pessoais em código, logs ou commits.

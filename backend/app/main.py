@@ -1,10 +1,19 @@
+import logging
 import os
 import uuid
+
+# Nível de log padrão WARNING: logs de depuração (que podem conter conteúdo de prova) ficam desligados.
+logging.basicConfig(
+    level=os.getenv("DIAGPRO_LOG_LEVEL", "WARNING").upper(),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
+)
+from backend.app import log_redaction  # noqa: E402
+log_redaction.install()  # mascara senhas, assinaturas, tokens, caminhos e nomes de arquivo em todos os logs
 from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from backend.app.database import SessionLocal
 from backend.app.routes.ia_chat import router as ia_chat_router
@@ -24,6 +33,7 @@ from backend.app.routes import audit_log
 from backend.app.routes.exportacao import router as export_router
 from backend.app.routes.gabarito import router as gabarito_router
 from backend.app.routes.templates import router as templates_router
+from backend.app.routes.files import router as files_router
 
 # Aqui está o segredo!
 app = FastAPI(multipart_params={"max_part_size": 50 * 1024 * 1024})  # 50 MB por parte
@@ -58,8 +68,6 @@ async def security_headers_middleware(request: Request, call_next):
 app.include_router(admin_clients_router)
 app.include_router(auth.router, prefix="/auth")
 app.include_router(users.router, prefix="/users")
-os.makedirs("avatars", exist_ok=True)
-app.mount("/avatars", StaticFiles(directory="avatars"), name="avatars")
 app.include_router(eventos.router, prefix="/eventos")
 app.include_router(cargos.router)  # <<< Sem prefixo!
 app.include_router(provas, prefix="/provas")  # <- CORRETO!
@@ -73,8 +81,8 @@ app.include_router(ia_chat_router, prefix="/api")
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Não há mais pastas públicas (/static, /avatars): arquivos ficam cifrados e são servidos por URL assinada.
+app.include_router(files_router, prefix="/api")
 app.include_router(provas_geracao_router)
 app.include_router(audit_log.router)
 app.include_router(export_router, prefix="/api/export")
@@ -94,8 +102,3 @@ async def health_check():
         return {"status": "ok", "database": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail={"status": "degraded", "database": "unavailable"})
-
-@app.get("/debug_ping")
-def debug_ping():
-    print(">>> CHEGOU NO /debug_ping <<<")
-    return {"ok": True}

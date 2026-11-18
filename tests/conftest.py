@@ -11,7 +11,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from backend.app.auth import create_access_token, get_password_hash  # noqa: E402
-from backend.app.database import IS_SQLITE, SessionLocal, set_tenant_context  # noqa: E402
+from backend.app.database import PlatformSessionLocal  # noqa: E402
 from backend.app.db_models import Company, Conteudo, Evento, QuestoesBanco, Tenant, User  # noqa: E402
 from backend.app.main import app  # noqa: E402
 from backend.app.roles import UserRole  # noqa: E402
@@ -21,10 +21,9 @@ from backend.app.utils_crypto import encrypt_text  # noqa: E402
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def ensure_ci_seed_data():
     """Popula dados sintéticos mínimos apenas quando o banco está vazio (ex.: GitHub Actions CI)."""
-    async with SessionLocal() as session:
+    # Seed com a role de plataforma (BYPASSRLS): a role de runtime não consegue inserir dados de vários tenants.
+    async with PlatformSessionLocal() as session:
         async with session.begin():
-            if not IS_SQLITE:
-                await set_tenant_context(session, None, bypass_rls=True)
             count = (await session.execute(text("SELECT COUNT(*) FROM tenants"))).scalar()
             if count and count > 0:
                 return

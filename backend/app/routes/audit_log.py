@@ -4,6 +4,7 @@ from sqlalchemy import select, and_
 from typing import List, Optional
 from datetime import datetime
 
+from backend.app.field_crypto import blind_eq
 from backend.app.database import get_db
 from backend.app.db_models import AuditLogGeracao
 from backend.app.models import AuditLogGeracaoCreate, AuditLogGeracaoOut
@@ -25,17 +26,20 @@ async def list_audit_logs(
 ):
     filters = []
     if not is_admin_geral(current_user):
-        filters.append(AuditLogGeracao.tenant_id == current_user.tenant_id)
-    elif tenant_id:
+        tenant_id = current_user.tenant_id
+    if tenant_id:
         filters.append(AuditLogGeracao.tenant_id == tenant_id)
+    if (usuario or evento or cargo) and not tenant_id:
+        # índices cegos são por tenant: o administrador geral precisa informar o cliente para filtrar
+        raise HTTPException(status_code=400, detail="Informe tenant_id para filtrar por usuário, evento ou cargo.")
     if usuario:
-        filters.append(AuditLogGeracao.usuario == usuario)
+        filters.append(blind_eq(AuditLogGeracao.usuario, usuario, tenant_id))
     if acao:
         filters.append(AuditLogGeracao.acao == acao)
     if evento:
-        filters.append(AuditLogGeracao.evento == evento)
+        filters.append(blind_eq(AuditLogGeracao.evento, evento, tenant_id))
     if cargo:
-        filters.append(AuditLogGeracao.cargo == cargo)
+        filters.append(blind_eq(AuditLogGeracao.cargo, cargo, tenant_id))
     stmt = select(AuditLogGeracao).where(and_(*filters)).order_by(AuditLogGeracao.timestamp.desc()).limit(200)
     result = await db.execute(stmt)
     return result.scalars().all()

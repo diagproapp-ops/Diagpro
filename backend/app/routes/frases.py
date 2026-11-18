@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from backend.app.field_crypto import encrypt_row
 from typing import List
 import csv
 import io
@@ -60,8 +61,12 @@ async def import_frases_csv(
 
         if not phrases_to_insert:
             raise HTTPException(status_code=400, detail="Nenhuma frase válida encontrada no arquivo CSV. Verifique as colunas 'categoria' e 'texto_frase'.")
+        # SQL direto não passa pelos eventos do ORM: cifra e calcula os índices cegos explicitamente
+        rows = [encrypt_row(BancoFrases.__tablename__, r, tenant_id) for r in phrases_to_insert]
         await db.execute(
-            sqlite_insert(BancoFrases).values(phrases_to_insert).on_conflict_do_nothing()
+            pg_insert(BancoFrases).values(rows).on_conflict_do_nothing(
+                constraint='_tenant_frase_bidx_uc'
+            )
         )
         await db.commit()
         return {"message": f"{len(phrases_to_insert)} frases importadas com sucesso!"}

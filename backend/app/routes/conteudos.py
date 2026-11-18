@@ -1,7 +1,17 @@
+import logging as _diag_logging
+_diag_print_logger = _diag_logging.getLogger(__name__)
+
+
+def print(*args, **kwargs):  # noqa: A001
+    """Prints de depuração viram log DEBUG: não expõem conteúdo de prova em produção (DIAGPRO_LOG_LEVEL)."""
+    _diag_print_logger.debug(" ".join(str(a) for a in args))
+
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
+from backend.app.field_crypto import blind_eq
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import Conteudo as DBConteudo, User as DBUser, QuestoesBanco
@@ -161,7 +171,7 @@ async def get_professor_id_by_name(prof_name: str, db: AsyncSession, tenant_id: 
     result = await db.execute(
         select(DBUser.id)
         .where(
-            DBUser.full_name == prof_name,
+            blind_eq(DBUser.full_name, prof_name, tenant_id),
             DBUser.role == "professor",
             DBUser.tenant_id == tenant_id
         )

@@ -1,0 +1,83 @@
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './contexts/AuthContext';
+import { Box, CircularProgress } from '@mui/material';
+import LoginPage from './pages/login';
+import EventManagerPage from './pages/dashboard';
+import EventoDetalhesPage from './pages/EventoDetalhesPage';
+import EventoFormPage from './pages/EventoFormPage';
+import EventoEditPage from './pages/EventoEditPage';
+import SettingsPage from './pages/SettingsPage';
+import { CustomThemeProvider } from "./contexts/ThemeContext";
+import AdminClientsTab from './pages/AdminClientsTab';
+import CargoManagerPage from './pages/CargoManagerPage';
+import ConteudoPage from './pages/ConteudoPage';
+import ConteudoFormPage from './pages/ConteudoFormPage';
+import ConteudoEditPage from './pages/ConteudoEditPage';
+import ConteudoIniciarPage from './pages/ConteudoIniciarPage';
+import AdicionarTextoReferenciaPage from './pages/AdicionarTextoReferenciaPage'; // <-- Adicione este import
+
+function App() {
+  const { isAuthenticated, loading, user } = useAuth();
+
+  return (
+    <CustomThemeProvider>
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+          <CircularProgress />
+        </Box>
+      ) : (
+        <Router>
+          <Routes>
+            {!isAuthenticated ? (
+              <>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="*" element={<Navigate to="/login" replace />} />
+              </>
+            ) : (
+              <>
+                {/* Se for professor, só deixa acessar conteúdo */}
+                {user && user.role === 'professor' ? (
+                  <>
+                    <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />
+                    <Route path="/eventos/:eventId/conteudo/editar/:conteudoId" element={<ConteudoEditPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<ConteudoIniciarPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<AdicionarTextoReferenciaPage />} /> {/* <-- NOVA ROTA */}
+                    {/* Redireciona qualquer outro caminho para a página de conteúdos */}
+                    <Route path="*" element={<Navigate to="/eventos/1/conteudo" replace />} />
+                  </>
+                ) : (
+                  <>
+                    <Route path="/dashboard" element={<EventManagerPage />} />
+                    <Route path="/eventos/novo" element={<EventoFormPage />} />
+                    <Route path="/eventos/:eventId/editar" element={<EventoEditPage />} />
+                    <Route path="/eventos/:eventId" element={<EventoDetalhesPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/eventos/:eventId/cargo" element={<CargoManagerPage />} />
+                    <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />
+                    <Route path="/eventos/:eventId/conteudo/editar/:conteudoId" element={<ConteudoEditPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<ConteudoIniciarPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<AdicionarTextoReferenciaPage />} /> {/* <-- NOVA ROTA */}
+                    <Route
+                      path="/admin/clients"
+                      element={
+                        user && user.role === 'administrador geral'
+                          ? <AdminClientsTab />
+                          : <Navigate to="/dashboard" replace />
+                      }
+                    />
+                    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                  </>
+                )}
+              </>
+            )}
+          </Routes>
+        </Router>
+      )}
+    </CustomThemeProvider>
+  );
+}
+
+export default App;

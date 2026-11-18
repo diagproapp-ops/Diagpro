@@ -1,0 +1,74 @@
+.tiptap-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 0;
+  margin-bottom: 8px;
+  max-height: 80px;
+  overflow-y: auto;
+  width: 100%;
+  align-items: flex-start;
+  background: #f7f7f7;
+  border-radius: 6px;
+  padding: 6px 2px 2px 2px;
+  box-sizing: border-box;
+}
+.tiptap-toolbar .MuiButtonGroup-root {
+  margin-right: 16px;
+  margin-bottom: 4px;
+  background: transparent;
+  border: none;
+}
+.tiptap-toolbar .MuiButton-root {
+  min-width: 28px;
+  height: 28px;
+  padding: 2px 4px;
+  font-size: 1rem;
+  border-radius: 4px;
+  box-shadow: none;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+.tiptap-toolbar .MuiButton-root.Mui-selected,
+.tiptap-toolbar .MuiButton-root[aria-pressed="true"] {
+  background: #e3f2fd;
+  border-color: #1976d2;
+}
+.tiptap-toolbar .MuiButton-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tiptap-toolbar {
+  scrollbar-width: thin;
+  scrollbar-color: #bbb #f7f7f7;
+}
+.tiptap-toolbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.tiptap-toolbar::-webkit-scrollbar-thumb {
+  background: #bbb;
+  border-radius: 3px;
+}
+.tiptap-toolbar::-webkit-scrollbar-track {
+  background: #f7f7f7;
+}
+
+/* Recuos de parágrafo de 0 até 2.5em em passos de 0.25em */
+.ProseMirror p.indent-0, .tiptap-content p.indent-0 { text-indent: 0em; }
+.ProseMirror p.indent-1, .tiptap-content p.indent-1 { text-indent: 0.25em; }
+.ProseMirror p.indent-2, .tiptap-content p.indent-2 { text-indent: 0.5em; }
+.ProseMirror p.indent-3, .tiptap-content p.indent-3 { text-indent: 0.75em; }
+.ProseMirror p.indent-4, .tiptap-content p.indent-4 { text-indent: 1em; }
+.ProseMirror p.indent-5, .tiptap-content p.indent-5 { text-indent: 1.25em; }
+.ProseMirror p.indent-6, .tiptap-content p.indent-6 { text-indent: 1.5em; }
+.ProseMirror p.indent-7, .tiptap-content p.indent-7 { text-indent: 1.75em; }
+.ProseMirror p.indent-8, .tiptap-content p.indent-8 { text-indent: 2em; }
+.ProseMirror p.indent-9, .tiptap-content p.indent-9 { text-indent: 2.25em; }
+.ProseMirror p.indent-10, .tiptap-content p.indent-10 { text-indent: 2.5em; }
+
+/* Para padding inline, o estilo é aplicado diretamente via style no parágrafo
+   Exemplo de resultado: <p style="padding-left:32px;">texto</p>
+   Não precisa de CSS específico, mas se quiser forçar visualização, pode usar: */
+.ProseMirror p[style*="padding-left"] { background: #fffff8; }
+.ProseMirror p[style*="padding-right"] { background: #f8ffff; }

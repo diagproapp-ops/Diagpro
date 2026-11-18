@@ -1,7 +1,15 @@
--- Políticas de Row-Level Security (RLS) Multi-Tenant para PostgreSQL (Fail-Closed)
--- Uso:
---   SET LOCAL app.bypass_rls = 'on';                    -- apenas para admin geral / login / migrações
---   SET LOCAL app.current_tenant_id = '<tenant_id>';    -- sessão normal de um tenant
+-- Políticas de Row-Level Security (RLS) Multi-Tenant do DiagPro (fail-closed, sem bypass por variável).
+--
+-- Modelo de acesso:
+--   diagpro_runtime  (NOBYPASSRLS): só enxerga linhas com tenant_id = app.current_tenant_id,
+--                                    definido por transação com set_config('app.current_tenant_id', <id>, true).
+--                                    Sem contexto, não enxerga nada.
+--   diagpro_platform (BYPASSRLS):   única role com visão multi-tenant (login, cadastro, admin geral).
+--                                    A liberação depende da credencial, não de variável de sessão.
+--
+-- Não existe cláusula de bypass na política: nenhuma variável de sessão (como a antiga
+-- app.bypass_rls) consegue liberar o acesso para a role de runtime.
+-- Mantida em sincronia com a revisão Alembic c3f1a9d2b7e4.
 
 DO $$
 DECLARE
@@ -31,14 +39,8 @@ BEGIN
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation_policy ON %I;', tbl);
         EXECUTE format(
             'CREATE POLICY tenant_isolation_policy ON %I
-             USING (
-                 NULLIF(current_setting(''app.bypass_rls'', true), '''') = ''on''
-                 OR tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::integer
-             )
-             WITH CHECK (
-                 NULLIF(current_setting(''app.bypass_rls'', true), '''') = ''on''
-                 OR tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::integer
-             );',
+             USING (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::integer)
+             WITH CHECK (tenant_id = NULLIF(current_setting(''app.current_tenant_id'', true), '''')::integer);',
             tbl
         );
     END LOOP;

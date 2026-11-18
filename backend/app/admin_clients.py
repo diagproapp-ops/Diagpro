@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
+from backend.app.field_crypto import blind_eq
 from backend.app.security import get_tenant_db
 from backend.app.db_models import Tenant, User, ProvaMontada, BancoFrases, Evento, Cargo
 from backend.app.models import Tenant as PydanticTenant, TenantCreate, TenantDashboard
@@ -36,10 +37,10 @@ async def create_admin_client(
 ):
     # Normaliza domínio para evitar duplicidade por maiúsculas/espacos
     domain = tenant.domain.lower().strip()
-    exist_domain = await db.execute(select(Tenant).where(Tenant.domain == domain))
+    exist_domain = await db.execute(select(Tenant).where(blind_eq(Tenant.domain, domain)))
     if exist_domain.scalars().first():
         raise HTTPException(status_code=400, detail="Domínio já registrado.")
-    exist_name = await db.execute(select(Tenant).where(Tenant.name == tenant.name))
+    exist_name = await db.execute(select(Tenant).where(blind_eq(Tenant.name, tenant.name)))
     if exist_name.scalars().first():
         raise HTTPException(status_code=400, detail="Nome de cliente já registrado.")
 

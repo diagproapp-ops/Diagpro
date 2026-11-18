@@ -4,6 +4,8 @@ from sqlalchemy.future import select
 from typing import List, Optional
 from datetime import datetime
 import uuid, os, json, shutil, hashlib, random
+from backend.app import secure_files
+from backend.app.field_crypto import blind_eq
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import (
@@ -83,12 +85,8 @@ async def definir_geracao_provas(
     ids = json.loads(cargos_ids)
     csv_path = None
     if csv_candidatos:
-        filename = f"{uuid.uuid4()}.csv"
-        upload_dir = "uploads/csv_candidatos"
-        os.makedirs(upload_dir, exist_ok=True)
-        csv_path = os.path.join(upload_dir, filename)
-        with open(csv_path, "wb") as buffer:
-            shutil.copyfileobj(csv_candidatos.file, buffer)
+        # CSV de candidatos contém dados pessoais: gravado cifrado; o gerador o recebe via materialize()
+        csv_path = await secure_files.save_upload_http(csv_candidatos, current_user.tenant_id, "csv")
 
     for cargo_id in ids:
         result = await db.execute(
@@ -128,7 +126,7 @@ async def definir_geracao_provas(
         # Buscar frases motivacionais ativas
         frases_result = await db.execute(
             select(BancoFrases)
-            .where(BancoFrases.categoria == "Motivacionais")
+            .where(blind_eq(BancoFrases.categoria, "Motivacionais", current_user.tenant_id))
             .where(BancoFrases.ativo == True)
             .where(BancoFrases.tenant_id == current_user.tenant_id)
         )
@@ -181,7 +179,7 @@ async def simular_frases_geracao(
     # Buscar frases motivacionais ativas
     frases_result = await db.execute(
         select(BancoFrases)
-        .where(BancoFrases.categoria == "Motivacionais")
+        .where(blind_eq(BancoFrases.categoria, "Motivacionais", current_user.tenant_id))
         .where(BancoFrases.ativo == True)
         .where(BancoFrases.tenant_id == current_user.tenant_id)
     )

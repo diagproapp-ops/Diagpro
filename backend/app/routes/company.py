@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 import os
 
+from backend.app import secure_files
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import Company
@@ -46,14 +47,7 @@ async def update_company(
     logo_path = None
 
     if logo:
-        folder = "static/logos"
-        os.makedirs(folder, exist_ok=True)
-        # Nome do arquivo inclui tenant_id para evitar conflitos
-        logo_filename = f"logo_{tenant_id}_{logo.filename}"
-        logo_path = os.path.join(folder, logo_filename)
-        with open(logo_path, "wb") as f:
-            f.write(await logo.read())
-        logo_path = "/" + logo_path  # caminho relativo para servir
+        logo_path = await secure_files.save_upload_http(logo, tenant_id, "image")
 
     if not company:
         company = Company(

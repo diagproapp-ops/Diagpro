@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Optional
 
+from backend.app import secure_files
+from backend.app.field_crypto import blind_eq
 from backend.app.database import get_auth_db
 from backend.app.security import get_tenant_db
 from backend.app.rate_limit import rate_limit
@@ -110,29 +112,27 @@ async def public_register(
         )
 
     # 2. Verifica duplicidade de username/email
-    existing_user = await db.execute(select(DBUser).filter(DBUser.username == username))
+    existing_user = await db.execute(select(DBUser).filter(blind_eq(DBUser.username, username)))
     if existing_user.scalars().first():
         raise HTTPException(status_code=400, detail="Username já registrado")
 
-    existing_email = await db.execute(select(DBUser).filter(DBUser.email == email))
+    existing_email = await db.execute(select(DBUser).filter(blind_eq(DBUser.email, email)))
     if existing_email.scalars().first():
         raise HTTPException(status_code=400, detail="Email já registrado")
 
     # 3. Salva avatar (obrigatório, com validação de extensão e tamanho)
-    UPLOAD_DIR = "avatars"
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
     allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
     _, ext = os.path.splitext((avatar_file.filename or "").lower())
     if ext not in allowed_exts:
         raise HTTPException(status_code=400, detail="Formato de imagem inválido. Use JPG, PNG ou WEBP.")
-    avatar_bytes = await avatar_file.read()
+    avatar_bytes = await avatar_file.read(5 * 1024 * 1024 + 1)
     if len(avatar_bytes) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Imagem excede o limite de 5 MB.")
-    filename = f"{uuid4().hex}{ext}"
-    file_location = os.path.join(UPLOAD_DIR, filename)
-    with open(file_location, "wb") as f:
-        f.write(avatar_bytes)
-    avatar_url = file_location
+    try:
+        # cifrado com a chave do tenant informado no cadastro; nunca em pasta pública
+        avatar_url = secure_files.store_bytes(avatar_bytes, tenant_id, ext)
+    except secure_files.SecureFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     # 4. Cria usuário (sempre inativo até aprovação do administrador)
     hashed_password = get_password_hash(password)
@@ -165,6 +165,15 @@ async def public_register(
     await db.commit()
     await db.refresh(new_user)
     return {"ok": True, "msg": "Cadastro enviado! Aguarde a aprovação do administrador."}
+
+# ------------ ARQUIVOS ------------
+
+def _avatar_seguro(value, tenant_id):
+    """Aceita só referência cifrada válida do próprio cliente ou URL externa https; o resto é descartado."""
+    if isinstance(value, str) and value.lower().startswith("https://") and len(value) < 2048:
+        return value
+    return secure_files.ref_from_client(value, tenant_id)
+
 
 # ------------ REGRAS DE PERMISSÃO ------------
 
@@ -233,11 +242,11 @@ async def create_user(
     db: AsyncSession = Depends(get_tenant_db),
     admin_user: DBUser = Depends(get_admin_user)
 ):
-    existing_user = await db.execute(select(DBUser).filter(DBUser.username == user_data.username))
+    existing_user = await db.execute(select(DBUser).filter(blind_eq(DBUser.username, user_data.username)))
     if existing_user.scalars().first():
         raise HTTPException(status_code=400, detail="Username já registado")
 
-    existing_email = await db.execute(select(DBUser).filter(DBUser.email == user_data.email))
+    existing_email = await db.execute(select(DBUser).filter(blind_eq(DBUser.email, user_data.email)))
     if existing_email.scalars().first():
         raise HTTPException(status_code=400, detail="Email já registado")
 
@@ -264,7 +273,7 @@ async def create_user(
         status=user_data.status,
         notes=user_data.notes,
         address=user_data.address,
-        avatar_url=user_data.avatar_url,
+        avatar_url=_avatar_seguro(user_data.avatar_url, tenant_id),
         specialty=user_data.specialty,
         pix_key=encrypt_pii(user_data.pix_key),
         agencia=encrypt_pii(user_data.agencia),
@@ -303,6 +312,8 @@ async def update_user(
             if value is not None:
                 _verificar_role_permitida(admin_user, value)
                 user.role = _normalizar_role(value)
+        elif key == "avatar_url":
+            user.avatar_url = _avatar_seguro(value, user.tenant_id)
         elif key in PII_FIELDS:
             setattr(user, key, encrypt_pii(value))
         else:

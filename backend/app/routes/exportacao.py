@@ -1,8 +1,18 @@
+import logging as _diag_logging
+_diag_print_logger = _diag_logging.getLogger(__name__)
+
+
+def print(*args, **kwargs):  # noqa: A001
+    """Prints de depuração viram log DEBUG: não expõem conteúdo de prova em produção (DIAGPRO_LOG_LEVEL)."""
+    _diag_print_logger.debug(" ".join(str(a) for a in args))
+
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from backend.app import secure_files
 from backend.app.security import get_tenant_db, is_admin_geral, require_roles
 from backend.app.jobs import create_job, get_job_for_tenant, update_job
 from backend.app.rate_limit import rate_limit
@@ -39,37 +49,45 @@ from backend.app.db_models import Evento
 from core.document_generator import DocumentGenerator
 import core.elements as elements
 
-logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG, INFO, WARNING, ERROR
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Nível de log definido em main.py (DIAGPRO_LOG_LEVEL); nunca DEBUG global por padrão.
 logger = logging.getLogger("exportacao")
 
 router = APIRouter()
 
 document_generator = DocumentGenerator(
     templates_base_dir="templates",
+    # A API sempre informa a pasta de saída (temporária por requisição); evita criar ProvasGeradas_DG
+    config={"default_export_directory": os.path.join(tempfile.gettempdir(), "diagpro_core_default")},
     logger=logging.getLogger("DocumentGenerator"),
     core_elements_module=elements
 )
 
-async def get_output_dir(evento_id, cargo_id, db: AsyncSession):
-    from backend.app.db_models import Evento as DBEvento
-    from sqlalchemy.future import select
-
-    evento_result = await db.execute(select(DBEvento).where(DBEvento.id_evento == evento_id))
-    evento = evento_result.scalar_one_or_none()
-    if not evento:
-        raise Exception("Evento não encontrado")
-    base_dir = os.path.realpath("ProvasGeradas_DG")
-    nome_evento = re.sub(r"[^A-Za-z0-9_.-]", "_", evento.nome_evento.strip().replace(" ", "_"))
+async def get_output_dir(evento_id, cargo_id, db: AsyncSession, workdir: str):
+    """
+    Pasta de saída EFÊMERA, dentro da pasta temporária privada da requisição (secure_files.request_workdir).
+    Nenhuma prova gerada fica guardada no servidor: ela é entregue na resposta e a pasta é apagada em seguida.
+    A autorização do evento/cargo é feita por fetch_evento_cargo_prova (escopo do tenant).
+    """
     safe_cargo_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id))
-    output_dir = os.path.realpath(os.path.join(base_dir, nome_evento, safe_cargo_id))
-    if not output_dir.startswith(base_dir + os.sep):
-        raise HTTPException(status_code=400, detail="Caminho de saída inválido.")
+    output_dir = os.path.join(workdir, "saida", safe_cargo_id)
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
+
+
+def _resposta_arquivo(caminho: str, nome: str, media_type: str) -> Response:
+    """Lê o arquivo para a memória antes da limpeza da pasta temporária e o entrega sem cache."""
+    with open(caminho, "rb") as fh:
+        conteudo = fh.read()
+    return Response(
+        content=conteudo,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{nome}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
 
 @router.post("/eventos/{evento_id}/validar-senha", dependencies=[Depends(rate_limit(5, 60, "validar-senha"))])
 async def validar_senha_evento(
@@ -271,31 +289,19 @@ async def listar_arquivos_exportaveis(
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
-    output_dir = await get_output_dir(evento_id, cargo_id, db)
-    arquivos = []
+    # Nada é guardado no servidor: cada download regenera o arquivo a partir do banco cifrado.
+    await fetch_evento_cargo_prova(evento_id, cargo_id, db, current_user.tenant_id)
     tipos = [
-        ("prova_pdf", "pdf", "Prova PDF"),
-        ("prova_docx", "docx", "Prova DOCX"),
-        ("gabarito", "csv", "Gabarito CSV"),
-        ("zip", "zip", "Pacote ZIP"),
+        ("prova_pdf", f"Prova_{cargo_id}.pdf", "Prova PDF"),
+        ("prova_docx", f"Prova_{cargo_id}.docx", "Prova DOCX"),
+        ("gabarito", f"Gabarito_{cargo_id}.csv", "Gabarito CSV"),
+        ("zip", f"Pacote_{cargo_id}.zip", "Pacote ZIP"),
     ]
-    nomes = {
-        "prova_pdf": f"Prova_{cargo_id}.pdf",
-        "prova_docx": f"Prova_{cargo_id}.docx",
-        "gabarito": f"Gabarito_{cargo_id}.csv",
-        "zip": f"Pacote_{cargo_id}.zip",
-    }
-    for tipo, ext, label in tipos:
-        nome = nomes[tipo]
-        caminho = os.path.join(output_dir, nome)
-        if os.path.exists(caminho):
-            arquivos.append({
-                "nome_arquivo": nome,
-                "tipo": tipo,
-                "label": label,
-                "url": f"/api/export/download?evento_id={evento_id}&cargo_id={cargo_id}&tipo={tipo}"
-            })
-    return arquivos
+    return [
+        {"nome_arquivo": nome, "tipo": tipo, "label": label,
+         "url": f"/api/export/download?evento_id={evento_id}&cargo_id={cargo_id}&tipo={tipo}"}
+        for tipo, nome, label in tipos
+    ]
 
 @router.get("/download")
 async def baixar_arquivo(
@@ -303,18 +309,20 @@ async def baixar_arquivo(
     cargo_id: str = Query(...),
     tipo: str = Query(..., description="prova_pdf, prova_docx, gabarito, zip"),
     db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    workdir: str = Depends(secure_files.request_workdir),
 ):
     logger.debug("=== CHEGOU NO ENDPOINT baixar_arquivo ===")
     import sys
     print("sys.stdout.isatty:", sys.stdout.isatty())
     import logging
     logging.warning("=== LOGGING FUNCIONA AQUI? ===")
-    output_dir = await get_output_dir(evento_id, cargo_id, db)
+    output_dir = await get_output_dir(evento_id, cargo_id, db, workdir)
     evento, cargo, prova_montada, blocos_questoes, metadados_prova = await fetch_evento_cargo_prova(
         evento_id, cargo_id, db, current_user.tenant_id
     )
     prova_dict = await montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db)
+    prova_dict = secure_files.materialize_into(prova_dict, current_user.tenant_id, workdir)
     nome_cargo = cargo.nome_cargo
     textos_map = {}
 
@@ -339,6 +347,7 @@ async def baixar_arquivo(
         print("INÍCIO DO PATCH PARA CAPA")
 
         cover_pdf_paths = getattr(cargo, 'cover_pdf_paths', None)
+        cover_pdf_paths = secure_files.materialize_into({'cover_pdf_paths': cover_pdf_paths}, current_user.tenant_id, workdir)['cover_pdf_paths']
         logger.debug("cover_pdf_paths (raw): %s", repr(cover_pdf_paths))
 
         def resolve_capa_template_path(cover_pdf_paths):
@@ -509,11 +518,8 @@ async def baixar_arquivo(
         "gabarito": "text/csv",
         "zip": "application/zip",
     }
-    return FileResponse(
-        path=caminho_arquivo,
-        filename=os.path.basename(caminho_arquivo),
-        media_type=media_types.get(tipo, "application/octet-stream")
-    )
+    return _resposta_arquivo(caminho_arquivo, os.path.basename(caminho_arquivo),
+                             media_types.get(tipo, "application/octet-stream"))
 
 @router.post("/eventos/{evento_id}/cargos/{cargo_id}/gerar-arquivos")
 async def gerar_todos_arquivos(
@@ -521,7 +527,8 @@ async def gerar_todos_arquivos(
     cargo_id: str,
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    workdir: str = Depends(secure_files.request_workdir),
 ):
     import os, json, time, shutil
     from pypdf import PdfWriter
@@ -537,7 +544,7 @@ async def gerar_todos_arquivos(
     exibir_gabarito_marcado = body.get("exibir_gabarito_marcado", False)
 
     if template:
-        path_template = os.path.join("templates_eventos", str(evento_id), template)
+        path_template = secure_files.materialize_template(evento_id, template, current_user.tenant_id, workdir)  # nome vindo do cliente: validado
     else:
         path_template = None
 
@@ -552,11 +559,12 @@ async def gerar_todos_arquivos(
         "exibir_gabarito_marcado": exibir_gabarito_marcado,
     }
 
-    output_dir = await get_output_dir(evento_id, cargo_id, db)
+    output_dir = await get_output_dir(evento_id, cargo_id, db, workdir)
     evento, cargo, prova_montada, blocos_questoes, metadados_prova = await fetch_evento_cargo_prova(
         evento_id, cargo_id, db, current_user.tenant_id
     )
     prova_dict = await montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db)
+    prova_dict = secure_files.materialize_into(prova_dict, current_user.tenant_id, workdir)
     nome_cargo = cargo.nome_cargo
     codigo_cargo = getattr(cargo, "codigo_cargo", "")
     textos_map = {}
@@ -566,6 +574,7 @@ async def gerar_todos_arquivos(
     pdf_paths = []
 
     cover_pdf_paths = getattr(cargo, 'cover_pdf_paths', None)
+    cover_pdf_paths = secure_files.materialize_into({'cover_pdf_paths': cover_pdf_paths}, current_user.tenant_id, workdir)['cover_pdf_paths']
     def resolve_capa_template_path(cover_pdf_paths):
         if isinstance(cover_pdf_paths, str):
             try:
@@ -697,17 +706,12 @@ async def gerar_todos_arquivos(
             if pdf_path:
                 pdf_paths.append(pdf_path)
 
-    # Apenas retorna os caminhos dos arquivos criados, não faz ZIP nem apaga arquivos!
+    # Os arquivos não ficam no servidor (pasta da requisição é apagada); devolve só os nomes gerados.
     return {
-        "docx": docx_paths if manterDocx else [],
-        "pdf": pdf_paths
+        "docx": [os.path.basename(p) for p in docx_paths] if manterDocx else [],
+        "pdf": [os.path.basename(p) for p in pdf_paths],
+        "aviso": "Arquivos não são armazenados no servidor; use /api/export/download para obtê-los.",
     }
-
-
-@router.get("/debug_export_ping")
-async def debug_export_ping():
-    print(">>> CHEGOU NO /api/export/debug_export_ping <<<")
-    return {"ok": True}
 
 
 @router.post("/eventos/{evento_id}/cargos/{cargo_id}/exportar-gabarito")
@@ -716,7 +720,8 @@ async def exportar_gabarito(
     cargo_id: str,
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    workdir: str = Depends(secure_files.request_workdir),
 ):
     import os
     # Carrega dados necessários do banco
@@ -725,7 +730,7 @@ async def exportar_gabarito(
     )
     prova_dict = await montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db)
 
-    output_dir = await get_output_dir(evento_id, cargo_id, db)
+    output_dir = await get_output_dir(evento_id, cargo_id, db, workdir)
     os.makedirs(output_dir, exist_ok=True)
     gabarito_path = os.path.join(output_dir, f"Gabarito_{cargo_id}.csv")
 
@@ -742,132 +747,19 @@ async def exportar_gabarito(
         gabaritos_por_variacao=gabaritos_por_variacao
     )
 
-    # (Opcional) Retorne o caminho, ou envie o arquivo como download
-    return {
-        "gabarito": gabarito_path if os.path.exists(gabarito_path) else None
-    }
+    if not os.path.exists(gabarito_path):
+        return {"gabarito": None}
+    return _resposta_arquivo(gabarito_path, os.path.basename(gabarito_path), "text/csv")
 
 
-async def zip_provas_cargos_selecionados(
-    evento_id: str,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
-):
-    result = await db.execute(select(Evento).where(Evento.id_evento == evento_id))
-    evento = result.scalar_one_or_none()
-    senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
-    senha_evento = decrypt_text(senha_evento_cripto)
-    
-    if not evento:
-        return {"erro": "Evento não encontrado."}
-    nome_evento = evento.nome_evento.strip().replace(" ", "_")
-
-    body = await request.json()
-    cargos_id = body.get("cargos_id", [])
-    manter_docx = body.get("manterDocx", False)
-    if not cargos_id:
-        return {"erro": "Nenhum cargo selecionado."}
-
-    base_dir = os.path.join("ProvasGeradas_DG", nome_evento)
-    arquivos_para_zip = []
-    padrao_pdf = r"^\d+\s*-\s*[^-]+-\s*Tipo_([A-Z]|PADRAO|PADRÃO)\.pdf$"
-
-    for cargo_id in cargos_id:
-        dir_cargo = os.path.join(base_dir, cargo_id)
-        if not os.path.isdir(dir_cargo):
-            continue
-
-        # Buscar código e nome do cargo do banco
-        cargo_result = await db.execute(select(DBCargo).where(DBCargo.id_cargo == cargo_id))
-        cargo_obj = cargo_result.scalar_one_or_none()
-        if cargo_obj:
-            codigo_cargo = str(getattr(cargo_obj, "codigo_cargo", cargo_id))
-            nome_cargo = getattr(cargo_obj, "nome_cargo", cargo_id)
-        else:
-            codigo_cargo = cargo_id
-            nome_cargo = cargo_id
-        nome_pasta_cargo = f"{codigo_cargo}_{nome_cargo.replace(' ', '_')}".replace('/', '_')
-
-        # PDFs finais (sempre vão!)
-        for file in os.listdir(dir_cargo):
-            file_path = os.path.join(dir_cargo, file)
-            if (
-                file.lower().endswith('.pdf')
-                and re.match(padrao_pdf, file, re.IGNORECASE)
-            ):
-                arcname = f"{nome_pasta_cargo}/{file}"
-                arquivos_para_zip.append((file_path, arcname))
-
-        if manter_docx:
-            # DOCX (opcional)
-            for file in os.listdir(dir_cargo):
-                if file.lower().endswith('.docx'):
-                    file_path = os.path.join(dir_cargo, file)
-                    arcname = f"{nome_pasta_cargo}/{file}"
-                    arquivos_para_zip.append((file_path, arcname))
-            # CapasPreenchidas (opcional)
-            dir_capas = os.path.join(dir_cargo, "CapasPreenchidas")
-            if os.path.isdir(dir_capas):
-                for root, dirs, files in os.walk(dir_capas):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.join(
-                            nome_pasta_cargo,
-                            os.path.relpath(file_path, dir_cargo)
-                        )
-                        arquivos_para_zip.append((file_path, arcname))
-
-    if not arquivos_para_zip:
-        return {"erro": "Nenhum arquivo encontrado para os cargos selecionados."}
-
-    # Cria ZIP em arquivo temporário
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmpzip:
-        with pyzipper.AESZipFile(tmpzip, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zipf:
-            zipf.setpassword(senha_evento.encode('utf-8'))
-            for file_path, arcname in arquivos_para_zip:
-                zipf.write(file_path, arcname=arcname)
-        tmpzip_path = tmpzip.name
-
-    # Remove o arquivo temporário após download
-    def remover_arquivo_tmp(path):
-        try:
-            os.remove(path)
-        except Exception as e:
-            print(f'[WARN] Não foi possível apagar o ZIP temporário: {path} - {e}')
-
-    background_tasks.add_task(remover_arquivo_tmp, tmpzip_path)
-
-    return FileResponse(
-        tmpzip_path,
-        filename=f"Provas_{nome_evento}.zip",
-        media_type="application/zip",
-        background=background_tasks,
-    )
-
-import shutil
-
-def limpar_pasta_evento(nome_evento):
-    """
-    Remove toda a pasta do evento após exportação:
-    ProvasGeradas_DG/<nome_evento>
-    """
-    dir_evento = os.path.join("ProvasGeradas_DG", nome_evento)
-    try:
-        if os.path.isdir(dir_evento):
-            shutil.rmtree(dir_evento)
-            print(f"[CLEANUP] Apagou pasta do evento: {dir_evento}")
-    except Exception as e:
-        print(f"[CLEANUP][ERRO] Não conseguiu apagar {dir_evento}: {e}")
-
-@router.post("/eventos/{evento_id}/cargos/gerar-arquivos-multiplos")
+@router.post("/eventos/{evento_id}/cargos/gerar-arquivos-multiplos", dependencies=[Depends(rate_limit(5, 60, "export-lote"))])
 async def gerar_todos_arquivos_multiplos(
     evento_id: str,
     request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    workdir: str = Depends(secure_files.request_workdir),
 ):
     """
     Exportação em lote, só permite com a senha correta do evento!
@@ -896,8 +788,8 @@ async def gerar_todos_arquivos_multiplos(
     if not senha_evento_cripto:
         return {"erro": "Evento não possui senha cadastrada."}
     senha_evento = decrypt_text(senha_evento_cripto)
-    if senha_usuario != senha_evento:
-        print(f"[SECURITY] Tentativa de exportação com senha inválida para evento {evento_id}")
+    if not hmac.compare_digest(senha_usuario.encode(), senha_evento.encode()):
+        logger.warning("Tentativa de exportação em lote com senha inválida (evento %s)", evento_id)
         return {"erro": "Senha do evento inválida!"}
 
     # Opções de formatação e exportação
@@ -910,7 +802,7 @@ async def gerar_todos_arquivos_multiplos(
     exibir_codigo_curto_questao = body.get("exibir_codigo_curto_questao", False)
     exibir_gabarito_marcado = body.get("exibir_gabarito_marcado", False)
     if template:
-        path_template = os.path.join("templates_eventos", str(evento_id), template)
+        path_template = secure_files.materialize_template(evento_id, template, current_user.tenant_id, workdir)  # nome vindo do cliente: validado
     else:
         path_template = None
 
@@ -931,16 +823,18 @@ async def gerar_todos_arquivos_multiplos(
     )
 
     for cargo_id in cargos_id:
-        output_dir = os.path.join("ProvasGeradas_DG", nome_evento, cargo_id)
+        output_dir = os.path.join(workdir, "saida", re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id)))
         os.makedirs(output_dir, exist_ok=True)
         evento, cargo, prova_montada, blocos_questoes, metadados_prova = await fetch_evento_cargo_prova(
             evento_id, cargo_id, db, current_user.tenant_id
         )
         prova_dict = await montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db)
+        prova_dict = secure_files.materialize_into(prova_dict, current_user.tenant_id, workdir)
         nome_cargo = cargo.nome_cargo
         codigo_cargo = getattr(cargo, "codigo_cargo", "")
         num_variacoes = metadados_prova.get("definicao_geracao", {}).get("num_variacoes", 1)
         cover_pdf_paths = getattr(cargo, 'cover_pdf_paths', None)
+        cover_pdf_paths = secure_files.materialize_into({'cover_pdf_paths': cover_pdf_paths}, current_user.tenant_id, workdir)['cover_pdf_paths']
 
         def resolve_capa_template_path(cover_pdf_paths):
             if isinstance(cover_pdf_paths, str):
@@ -1047,12 +941,12 @@ async def gerar_todos_arquivos_multiplos(
                 shutil.copy2(pdf_path, caminho_pdf_final)
 
     # --- Monta lista de arquivos para o ZIP ---
-    base_dir = os.path.join("ProvasGeradas_DG", nome_evento)
+    base_dir = os.path.join(workdir, "saida")
     arquivos_para_zip = []
     padrao_pdf = r"^\d+\s*-\s*[^-]+-\s*Tipo_([A-Z]|PADRAO|PADRÃO)\.pdf$"
 
     for cargo_id in cargos_id:
-        dir_cargo = os.path.join(base_dir, cargo_id)
+        dir_cargo = os.path.join(base_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id)))
         if not os.path.isdir(dir_cargo):
             continue
         cargo_result = await db.execute(select(DBCargo).where(DBCargo.id_cargo == cargo_id))
@@ -1089,163 +983,13 @@ async def gerar_todos_arquivos_multiplos(
     if not arquivos_para_zip:
         return {"erro": "Nenhum arquivo encontrado para os cargos selecionados."}
 
-    # --- Cria ZIP temporário ---
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmpzip:
-        with pyzipper.AESZipFile(tmpzip, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zipf:
-            zipf.setpassword(senha_evento.encode('utf-8'))
-            for file_path, arcname in arquivos_para_zip:
-                zipf.write(file_path, arcname=arcname)
-        tmpzip_path = tmpzip.name
-
-    def remover_arquivo_tmp(path):
-        try:
-            os.remove(path)
-        except Exception as e:
-            print(f'[WARN] Falha ao apagar ZIP temporário: {path} - {e}')
-
-    background_tasks.add_task(remover_arquivo_tmp, tmpzip_path)
-    background_tasks.add_task(limpar_pasta_evento, nome_evento)
-
-    return FileResponse(
-        tmpzip_path,
-        filename=f"Provas_{nome_evento}.zip",
-        media_type="application/zip",
-        background=background_tasks,
-    )
-
-
-def nome_zip_evento(evento) -> str:
-    nome_evento = evento.nome_evento.strip().replace(" ", "_")
-    return f"Provas_{nome_evento}.zip"
-
-
-async def zip_provas_cargos_selecionados_interno(evento_id, cargos_id, manter_docx, db, current_user):
-    evento = await carregar_evento_autorizado(evento_id, db, current_user)
-    senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
-    senha_evento = decrypt_text(senha_evento_cripto)
-
-    nome_evento = evento.nome_evento.strip().replace(" ", "_")
-
-    # Tente pegar manterDocx do current_user ou de outra fonte se necessário (ajuste conforme seu fluxo)
-    # Aqui, por padrão, vamos deixar sempre True para garantir o zip completo (ajuste conforme seu fluxo)
-    
-    base_dir = os.path.join("ProvasGeradas_DG", nome_evento)
-    arquivos_para_zip = []
-    padrao_pdf = r"^\d+\s*-\s*[^-]+-\s*Tipo_([A-Z]|PADRAO|PADRÃO)\.pdf$"
-
-    for cargo_id in cargos_id:
-        dir_cargo = os.path.join(base_dir, cargo_id)
-        print(f"[DEBUG-ZIP] Pasta: {dir_cargo}")
-        if not os.path.isdir(dir_cargo):
-            print(f"[DEBUG-ZIP] Pasta NÃO EXISTE: {dir_cargo}")
-            continue
-        print(f"[DEBUG-ZIP] Arquivos na pasta: {os.listdir(dir_cargo)}")
-
-        # Buscar código e nome do cargo do banco
-        cargo_result = await db.execute(select(DBCargo).where(DBCargo.id_cargo == cargo_id))
-        cargo_obj = cargo_result.scalar_one_or_none()
-        if cargo_obj:
-            codigo_cargo = str(getattr(cargo_obj, "codigo_cargo", cargo_id))
-            nome_cargo = getattr(cargo_obj, "nome_cargo", cargo_id)
-        else:
-            codigo_cargo = cargo_id
-            nome_cargo = cargo_id
-        nome_pasta_cargo = f"{codigo_cargo}_{nome_cargo.replace(' ', '_')}".replace('/', '_')
-
-        # PDFs finais
-        for file in os.listdir(dir_cargo):
-            file_path = os.path.join(dir_cargo, file)
-            if (
-                file.lower().endswith('.pdf')
-                and re.match(padrao_pdf, file, re.IGNORECASE)
-            ):
-                print(f"[DEBUG-ZIP] Incluindo PDF no ZIP: {file_path}")
-                arcname = f"{nome_pasta_cargo}/{file}"
-                arquivos_para_zip.append((file_path, arcname))
-
-            # DOCX
-            if manter_docx and file.lower().endswith('.docx'):
-                arcname = f"{nome_pasta_cargo}/{file}"
-                arquivos_para_zip.append((file_path, arcname))
-            # CSV
-            if file.lower().endswith('.csv'):
-                arcname = f"{nome_pasta_cargo}/{file}"
-                arquivos_para_zip.append((file_path, arcname))
-
-        # CapasPreenchidas
-        if manter_docx:
-            dir_capas = os.path.join(dir_cargo, "CapasPreenchidas")
-            if os.path.isdir(dir_capas):
-                for root, dirs, files in os.walk(dir_capas):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.join(
-                            nome_pasta_cargo,
-                            os.path.relpath(file_path, dir_cargo)
-                        )
-                        arquivos_para_zip.append((file_path, arcname))
-
-    if not arquivos_para_zip:
-        return None
-
-    zip_filename = nome_zip_evento(evento)
-    zip_path = caminho_dentro_de("ProvasGeradas_DG", zip_filename)
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    # --- ZIP protegido pela senha do evento, montado na pasta da requisição e entregue em memória ---
+    zip_path = os.path.join(workdir, "pacote.zip")
+    with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zipf:
+        zipf.setpassword(senha_evento.encode('utf-8'))
         for file_path, arcname in arquivos_para_zip:
             zipf.write(file_path, arcname=arcname)
-
-    return {
-        "zip_filename": zip_filename,
-        "zip_path": zip_path,
-        "download_url": f"/api/export/download-zip?evento_id={evento.id_evento}"
-    }
-
-
-# O router é montado com prefixo /api/export, então a rota final é /api/export/download-zip
-@router.get("/download-zip")
-async def download_zip(
-    evento_id: str = Query(...),
-    db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
-):
-    # O nome do arquivo é derivado do evento autorizado; nunca do que o cliente envia.
-    evento = await carregar_evento_autorizado(evento_id, db, current_user)
-    filename = nome_zip_evento(evento)
-    file_path = caminho_dentro_de("ProvasGeradas_DG", filename)
-    if not os.path.isfile(file_path):
-        raise HTTPException(404, "Arquivo ZIP não encontrado.")
-    return FileResponse(file_path, filename=filename, media_type="application/zip")
-
-
-@router.post("/eventos/{evento_id}/cargos/{cargo_id}/gerar-arquivos-async", status_code=202)
-async def gerar_arquivos_async(
-    evento_id: str,
-    cargo_id: str,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
-):
-    await fetch_evento_cargo_prova(evento_id, cargo_id, db, current_user.tenant_id)
-    job = create_job(
-        tenant_id=current_user.tenant_id,
-        user=current_user.username,
-        tipo="gerar_arquivos_cargo",
-        params={"evento_id": evento_id, "cargo_id": cargo_id},
-    )
-
-    async def _run_export_job(jid: str, ev_id: str, cg_id: str, tid: int | None):
-        from backend.app.database import SessionLocal, set_tenant_context
-        update_job(jid, status="running")
-        try:
-            async with SessionLocal() as job_db:
-                await set_tenant_context(job_db, tid, bypass_rls=(tid is None))
-                out = await gerar_todos_arquivos(ev_id, cg_id, job_db, current_user)
-                update_job(jid, status="completed", result=out)
-        except Exception as exc:
-            update_job(jid, status="failed", error=type(exc).__name__)
-
-    background_tasks.add_task(_run_export_job, job["job_id"], evento_id, cargo_id, current_user.tenant_id)
-    return {"job_id": job["job_id"], "status": job["status"]}
+    return _resposta_arquivo(zip_path, f"Provas_{nome_evento}.zip", "application/zip")
 
 
 @router.get("/jobs/{job_id}")

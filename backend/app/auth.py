@@ -12,7 +12,8 @@ from sqlalchemy.future import select
 
 
 # Importações da nossa aplicação
-from backend.app.database import get_auth_db
+from backend.app.field_crypto import blind_eq
+from backend.app.database import SessionLocal, PlatformSessionLocal, set_tenant_context
 from backend.app.db_models import User as DBUser
 from backend.app.models import User as PydanticUser
 from backend.app.roles import UserRole
@@ -52,17 +53,17 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def decode_access_token(token: str):
+def decode_token_payload(token: str) -> dict:
+    """Valida assinatura/expiração (algoritmo fixo HS256) e devolve o payload com `sub` obrigatório."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str | None = payload.get("sub")
-        if username is None:
+        if not payload.get("sub"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Credenciais de autenticação inválidas",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return username
+        return payload
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -70,24 +71,55 @@ def decode_access_token(token: str):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-# --- FUNÇÃO CORRIGIDA E ADICIONADA ---
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_auth_db)
-) -> PydanticUser:   # <-- Retorna Pydantic agora
+def decode_access_token(token: str) -> str:
+    return decode_token_payload(token)["sub"]
+
+
+_UNAUTHORIZED = dict(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Usuário não encontrado",
+    headers={"WWW-Authenticate": "Bearer"},
+)
+
+
+async def _load_user_from_token(payload: dict) -> DBUser | None:
     """
-    Descodifica o token, obtém o username e busca o usuário no banco de dados.
+    Resolve o usuário do token com o menor privilégio possível:
+    - token com tenant_id (assinado pelo servidor): role de runtime, sob RLS daquele tenant;
+    - token sem tenant_id: role de plataforma, aceito SOMENTE para administrador geral.
     """
-    username = decode_access_token(token)
-    result = await db.execute(select(DBUser).filter(DBUser.username == username))
-    user = result.scalars().first()
+    username = payload["sub"]
+    tenant_id = payload.get("tenant_id")
+    if tenant_id is not None:
+        try:
+            tenant_id = int(tenant_id)
+        except (TypeError, ValueError):
+            return None
+        async with SessionLocal() as db:
+            async with db.begin():
+                await set_tenant_context(db, tenant_id)
+                result = await db.execute(
+                    select(DBUser).where(blind_eq(DBUser.username, username), DBUser.tenant_id == tenant_id)
+                )
+                return result.scalars().first()
+    async with PlatformSessionLocal() as db:
+        result = await db.execute(
+            select(DBUser).where(
+                blind_eq(DBUser.username, username),
+                DBUser.tenant_id.is_(None),
+                DBUser.role == UserRole.ADMIN_GERAL.value,
+            )
+        )
+        return result.scalars().first()
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> PydanticUser:
+    """Valida o token e carrega o usuário (ver _load_user_from_token)."""
+    payload = decode_token_payload(token)
+    user = await _load_user_from_token(payload)
 
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuário não encontrado",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(**_UNAUTHORIZED)
 
     if not user.is_active or (user.status is not None and user.status.lower() == "inativo"):
         raise HTTPException(

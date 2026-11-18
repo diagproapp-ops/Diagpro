@@ -1,6 +1,15 @@
 """
 Módulo para geração de documentos (provas, gabaritos, pacotes).
 """
+import logging as _diag_logging
+_diag_print_logger = _diag_logging.getLogger(__name__)
+
+
+def print(*args, **kwargs):  # noqa: A001
+    """Prints de depuração viram log DEBUG: não expõem conteúdo de prova em produção (DIAGPRO_LOG_LEVEL)."""
+    _diag_print_logger.debug(" ".join(str(a) for a in args))
+
+
 import logging
 import os
 import shutil
@@ -2309,7 +2318,20 @@ class PdfConverter:
         self._log_ui("LibreOffice (soffice) não encontrado. Conversão para PDF pode falhar.", "warning")
         return None
 
-    def convert_to_pdf(self, docx_path: str, output_dir: str) -> Optional[str]: # Tornar output_dir minúsculo
+    def convert_to_pdf(self, docx_path: str, output_dir: str, tentativas: int = 3) -> Optional[str]:
+        """
+        Converte DOCX em PDF com novas tentativas. No Windows o LibreOffice headless às vezes termina com
+        código 0 sem gerar o PDF (falha alternada, reproduzida fora do DiagPro); sem repetir, variações da
+        prova sumiam do pacote final.
+        """
+        for tentativa in range(1, tentativas + 1):
+            pdf = self._convert_to_pdf_once(docx_path, output_dir)
+            if pdf and os.path.exists(pdf):
+                return pdf
+            self.logger.warning("Conversão para PDF sem resultado (tentativa %d de %d).", tentativa, tentativas)
+        return None
+
+    def _convert_to_pdf_once(self, docx_path: str, output_dir: str) -> Optional[str]:
         """Converte um arquivo DOCX para PDF."""
         if not self.soffice_path:
             self._log_ui("Executável do LibreOffice não configurado. Conversão para PDF abortada.", "error")

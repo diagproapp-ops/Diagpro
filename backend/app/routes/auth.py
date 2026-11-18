@@ -1,9 +1,19 @@
+import logging as _diag_logging
+_diag_print_logger = _diag_logging.getLogger(__name__)
+
+
+def print(*args, **kwargs):  # noqa: A001
+    """Prints de depuração viram log DEBUG: não expõem conteúdo de prova em produção (DIAGPRO_LOG_LEVEL)."""
+    _diag_print_logger.debug(" ".join(str(a) for a in args))
+
+
 import os
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from backend.app.field_crypto import blind_eq
 from backend.app.auth import verify_password, create_access_token, Token
 from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
@@ -14,7 +24,7 @@ RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY", "")
 router = APIRouter()
 
 async def get_user(db: AsyncSession, username: str):
-    result = await db.execute(select(DBUser).filter(DBUser.username == username))
+    result = await db.execute(select(DBUser).filter(blind_eq(DBUser.username, username)))
     return result.scalars().first()
 
 def verify_recaptcha(token: str) -> bool:

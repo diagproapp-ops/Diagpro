@@ -1,5 +1,15 @@
+import logging as _diag_logging
+_diag_print_logger = _diag_logging.getLogger(__name__)
+
+
+def print(*args, **kwargs):  # noqa: A001
+    """Prints de depuração viram log DEBUG: não expõem conteúdo de prova em produção (DIAGPRO_LOG_LEVEL)."""
+    _diag_print_logger.debug(" ".join(str(a) for a in args))
+
+
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Body, Request
 from sqlalchemy import select
+from backend.app import secure_files
 from backend.app.db_models import QuestoesBanco, OpcoesQuestao, ItensVerdadeiroFalso, DetalhesQuestaoDiscursiva, Conteudo
 from backend.app.models import QuestaoOut, OpcaoQuestao, ItemVerdadeiroFalso, DetalhesQuestaoDiscursiva as DetalhesQuestaoDiscursivaModel
 from backend.app.security import get_tenant_db, require_roles
@@ -76,25 +86,11 @@ async def criar_questao(
 
     caminho_imagem_enunciado = None
     if imagem_enunciado:
-        ext = os.path.splitext(imagem_enunciado.filename)[1]
-        nome_arquivo = f"{uuid.uuid4()}{ext}"
-        pasta = "static/questoes"
-        os.makedirs(pasta, exist_ok=True)
-        file_path = os.path.join(pasta, nome_arquivo)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(imagem_enunciado.file, buffer)
-        caminho_imagem_enunciado = file_path
+        caminho_imagem_enunciado = await secure_files.save_upload_http(imagem_enunciado, tenant_id, "image")
 
     caminho_imagem_justificativa = None
     if imagem_justificativa:
-        ext = os.path.splitext(imagem_justificativa.filename)[1]
-        nome_arquivo = f"{uuid.uuid4()}{ext}"
-        pasta = "static/questoes"
-        os.makedirs(pasta, exist_ok=True)
-        file_path = os.path.join(pasta, nome_arquivo)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(imagem_justificativa.file, buffer)
-        caminho_imagem_justificativa = file_path
+        caminho_imagem_justificativa = await secure_files.save_upload_http(imagem_justificativa, tenant_id, "image")
 
     enunciado_criptografado = encrypt_text(enunciado) if enunciado else None
     justificativa_anulacao_criptografada = encrypt_text(justificativa_anulacao) if justificativa_anulacao else None
@@ -150,14 +146,7 @@ async def criar_questao(
         imagem_file = locals().get(f"alternativa_imagem_{letra}")
         imagem_path_opcao = None
         if imagem_file:
-            ext = os.path.splitext(imagem_file.filename)[1]
-            nome_arquivo = f"{uuid.uuid4()}{ext}"
-            pasta = "static/alternativas"
-            os.makedirs(pasta, exist_ok=True)
-            file_path = os.path.join(pasta, nome_arquivo)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(imagem_file.file, buffer)
-            imagem_path_opcao = file_path
+            imagem_path_opcao = await secure_files.save_upload_http(imagem_file, tenant_id, "image")
 
         texto_opcao = alt.get("texto") or alt.get("texto_opcao") or ""
         texto_opcao_cript = encrypt_text(texto_opcao) if texto_opcao else None
@@ -191,14 +180,7 @@ async def criar_questao(
         imagem_file = item_imagem_map.get(idx)
         imagem_path_item = None
         if imagem_file is not None and hasattr(imagem_file, "filename"):
-            ext = os.path.splitext(imagem_file.filename)[1]
-            nome_arquivo = f"{uuid.uuid4()}{ext}"
-            pasta = "static/itens_vf"
-            os.makedirs(pasta, exist_ok=True)
-            file_path = os.path.join(pasta, nome_arquivo)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(imagem_file.file, buffer)
-            imagem_path_item = file_path
+            imagem_path_item = await secure_files.save_upload_http(imagem_file, tenant_id, "image")
         afirmacao_cript = encrypt_text(item.get("afirmacao")) if item.get("afirmacao") else None
         feedback_item_cript = encrypt_text(item.get("feedback_item")) if item.get("feedback_item") else None
         novo_item = ItensVerdadeiroFalso(
@@ -644,14 +626,7 @@ async def editar_questao(
 
     caminho_imagem_relativo = questao.caminho_imagem_relativo
     if imagem_enunciado:
-        ext = os.path.splitext(imagem_enunciado.filename)[1]
-        nome_arquivo = f"{uuid.uuid4()}{ext}"
-        pasta = "static/questoes"
-        os.makedirs(pasta, exist_ok=True)
-        file_path = os.path.join(pasta, nome_arquivo)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(imagem_enunciado.file, buffer)
-        caminho_imagem_relativo = file_path
+        caminho_imagem_relativo = await secure_files.save_upload_http(imagem_enunciado, tenant_id, "image")
 
     questao.enunciado = encrypt_text(enunciado) if enunciado else None
     questao.tipo = tipo
@@ -696,14 +671,7 @@ async def editar_questao(
             imagem_file = alternativa_imagem_E
 
         if imagem_file and hasattr(imagem_file, "filename") and imagem_file.filename:
-            ext = os.path.splitext(imagem_file.filename)[1]
-            nome_arquivo = f"{uuid.uuid4()}{ext}"
-            pasta = "static/alternativas"
-            os.makedirs(pasta, exist_ok=True)
-            file_path = os.path.join(pasta, nome_arquivo)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(imagem_file.file, buffer)
-            imagem_path_opcao = file_path
+            imagem_path_opcao = await secure_files.save_upload_http(imagem_file, tenant_id, "image")
         else:
             imagem_path_opcao = alt_anteriores.get(letra)
 
@@ -753,14 +721,7 @@ async def editar_questao(
         if idx == 9: item_imagem_file = item_imagem_9
 
         if item_imagem_file and hasattr(item_imagem_file, "filename") and item_imagem_file.filename:
-            ext = os.path.splitext(item_imagem_file.filename)[1]
-            nome_arquivo = f"{uuid.uuid4()}{ext}"
-            pasta = "static/itens_vf"
-            os.makedirs(pasta, exist_ok=True)
-            file_path = os.path.join(pasta, nome_arquivo)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(item_imagem_file.file, buffer)
-            imagem_path_item = file_path
+            imagem_path_item = await secure_files.save_upload_http(item_imagem_file, tenant_id, "image")
         else:
             imagem_path_item = item_anteriores.get(idx)
 
@@ -868,14 +829,7 @@ async def revisar_questao(
     form = json.loads(dados_revisao)
     caminho_imagem_relativo = questao.caminho_imagem_relativo
     if imagem_enunciado:
-        ext = os.path.splitext(imagem_enunciado.filename)[1]
-        nome_arquivo = f"{uuid.uuid4()}{ext}"
-        pasta = "static/questoes"
-        os.makedirs(pasta, exist_ok=True)
-        file_path = os.path.join(pasta, nome_arquivo)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(imagem_enunciado.file, buffer)
-        caminho_imagem_relativo = file_path
+        caminho_imagem_relativo = await secure_files.save_upload_http(imagem_enunciado, tenant_id, "image")
     questao.caminho_imagem_relativo = caminho_imagem_relativo
     questao.enunciado = encrypt_text(form.get("enunciado", ""))
     questao.indicacao_conteudo = encrypt_text(form.get("indicacao_conteudo", ""))
@@ -923,14 +877,7 @@ async def revisar_questao(
             imagem_file = alternativa_imagem_E
 
         if imagem_file and hasattr(imagem_file, "filename") and imagem_file.filename:
-            ext = os.path.splitext(imagem_file.filename)[1]
-            nome_arquivo = f"{uuid.uuid4()}{ext}"
-            pasta = "static/alternativas"
-            os.makedirs(pasta, exist_ok=True)
-            file_path = os.path.join(pasta, nome_arquivo)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(imagem_file.file, buffer)
-            imagem_path_opcao = file_path
+            imagem_path_opcao = await secure_files.save_upload_http(imagem_file, tenant_id, "image")
         else:
             imagem_path_opcao = alt_anteriores.get(letra)
 
@@ -972,14 +919,7 @@ async def revisar_questao(
         if idx == 9: item_imagem_file = item_imagem_9
 
         if item_imagem_file and hasattr(item_imagem_file, "filename") and item_imagem_file.filename:
-            ext = os.path.splitext(item_imagem_file.filename)[1]
-            nome_arquivo = f"{uuid.uuid4()}{ext}"
-            pasta = "static/itens_vf"
-            os.makedirs(pasta, exist_ok=True)
-            file_path = os.path.join(pasta, nome_arquivo)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(item_imagem_file.file, buffer)
-            imagem_path_item = file_path
+            imagem_path_item = await secure_files.save_upload_http(item_imagem_file, tenant_id, "image")
 
         novo_item = ItensVerdadeiroFalso(
             id_item_vf=str(uuid4()),
@@ -1059,8 +999,10 @@ async def importar_questoes_docx(
     disciplina_nome = conteudo_obj.nome_conteudo or "Conteudo"
 
     # Instancia o parser e faz o parse
+    # Imagens extraídas vão para uma pasta temporária privada e, em seguida, para o armazenamento cifrado
+    media_dir = tempfile.mkdtemp(prefix="diagpro_docx_")
     parser = DocxParser(
-        base_media_dir="static/questoes",
+        base_media_dir=media_dir,
         questao_model=QuestaoType,
         opcao_model=OpcaoMultiplaEscolha,
         texto_ref_model=TextoReferenciaType
@@ -1099,12 +1041,33 @@ async def importar_questoes_docx(
             "conteudo": getattr(t, "conteudo", getattr(t, "conteudo_texto_ref", "")),
         }
 
-    return {
+    resultado = {
         "ok": True,
         "importadas": len(questoes),
         "questoes": [serialize_questao(q) for q in questoes],
         "textos_referencia": [serialize_texto_ref(t) for t in textos_referencia]
     }
+    try:
+        guardadas: dict[str, str] = {}
+
+        def proteger(v):
+            if isinstance(v, dict):
+                return {k: proteger(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [proteger(x) for x in v]
+            if isinstance(v, str) and v and len(v) < 500:
+                full = os.path.realpath(os.path.join(media_dir, v))
+                if full.startswith(os.path.realpath(media_dir) + os.sep) and os.path.isfile(full):
+                    if full not in guardadas:
+                        with open(full, "rb") as fh:
+                            ref = secure_files.store_bytes(fh.read(), evento.tenant_id, os.path.splitext(full)[1])
+                        guardadas[full] = secure_files.signed_url(ref)
+                    return guardadas[full]
+            return v
+
+        return proteger(resultado)
+    finally:
+        shutil.rmtree(media_dir, ignore_errors=True)
 
 @router.post(
     "/eventos/{evento_id}/conteudos/{conteudo_id}/importar-docx/confirmar",
@@ -1118,6 +1081,8 @@ async def confirmar_importacao_questoes_docx(
     evento=Depends(evento_autorizado)
 ):
     tenant_id = evento.tenant_id  # ignora tenant_id do corpo
+    # Caminhos de arquivo vindos do cliente: só referências cifradas válidas deste cliente sobrevivem
+    body = secure_files.sanitize_client_paths(body, tenant_id)
     questoes = body.get("questoes", [])
     textos_referencia = body.get("textos_referencia", [])
     autor_elaborador = body.get("autor_elaborador")

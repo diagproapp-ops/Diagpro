@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from backend.app.field_crypto import blind_eq
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import Cargo as DBCargo, DisciplinaDaProva as DBDisciplinaDaProva, Disciplina as DBDisciplina
@@ -117,7 +118,7 @@ async def import_cargos_csv(
 
                 result_disc = await db.execute(
                     select(DBDisciplina).where(
-                        DBDisciplina.nome_disciplina == nome_disciplina,
+                        blind_eq(DBDisciplina.nome_disciplina, nome_disciplina, current_user.tenant_id),
                         DBDisciplina.id_evento_fk == event_id
                     )
                 )
@@ -130,7 +131,7 @@ async def import_cargos_csv(
                         id_disciplina=id_disciplina_base_fk,
                         id_evento_fk=event_id,
                         nome_disciplina=nome_disciplina,
-                        # Adicione tenant_id se existir no modelo Disciplina
+                        tenant_id=current_user.tenant_id,
                     )
                     db.add(db_disc_new)
                     await db.commit()

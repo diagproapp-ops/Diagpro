@@ -44,3 +44,7 @@ avatars/
 storage_data/
 .pytest_cache/
 README.md.bak
+# Armazenamento cifrado de arquivos e templates (fase 2) e uploads legados
+storage_data/
+templates_eventos/
+uploads/

@@ -1,12 +1,17 @@
+import os
 import pytest
 from sqlalchemy import text
 
-from backend.app.database import IS_SQLITE, SessionLocal, set_tenant_context
+from backend.app.database import PlatformSessionLocal, SessionLocal, set_tenant_context
 from backend.app.jobs import create_job
 from backend.app.rate_limit import reset_rate_limits
 from backend.app.roles import UserRole
 from backend.app.storage import LocalStorageBackend
-from backend.app.utils_crypto import encrypt_pii, mask_pii, safe_decrypt_pii
+from backend.app.utils_crypto import mask_pii
+from backend.app import field_crypto as fc
+from backend.app.field_crypto import blind_eq
+from backend.app.db_models import Company, User
+from sqlalchemy import select, update
 from tests.conftest import auth_headers
 
 
@@ -145,9 +150,6 @@ async def test_http_tenant_isolation_between_tenant_1_and_tenant_2(async_client)
 
 @pytest.mark.asyncio
 async def test_postgres_rls_isolation_and_pool_non_leakage():
-    if IS_SQLITE:
-        pytest.skip("Teste específico para PostgreSQL com RLS ativo.")
-
     # Fail-closed sem contexto
     async with SessionLocal() as s:
         async with s.begin():
@@ -157,7 +159,7 @@ async def test_postgres_rls_isolation_and_pool_non_leakage():
     # Tenant 1 vs Tenant 2 na mesma pool
     async with SessionLocal() as s1:
         async with s1.begin():
-            await set_tenant_context(s1, 1, bypass_rls=False)
+            await set_tenant_context(s1, 1)
             c1 = (await s1.execute(text("SELECT COUNT(*) FROM company_data"))).scalar()
             assert c1 == 1
             upd = await s1.execute(text("UPDATE company_data SET company_name = 'X' WHERE tenant_id = 2"))
@@ -165,7 +167,7 @@ async def test_postgres_rls_isolation_and_pool_non_leakage():
 
     async with SessionLocal() as s2:
         async with s2.begin():
-            await set_tenant_context(s2, 2, bypass_rls=False)
+            await set_tenant_context(s2, 2)
             q2 = (await s2.execute(text('SELECT COUNT(*) FROM "QuestoesBanco"'))).scalar()
             c2 = (await s2.execute(text("SELECT COUNT(*) FROM company_data"))).scalar()
             assert q2 == 0 and c2 == 1
@@ -175,6 +177,30 @@ async def test_postgres_rls_isolation_and_pool_non_leakage():
         async with s3.begin():
             c3 = (await s3.execute(text("SELECT COUNT(*) FROM company_data"))).scalar()
             assert c3 == 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_role_cannot_bypass_rls_via_session_variable():
+    """Regressão: antes, `SET app.bypass_rls = 'on'` liberava todos os tenants para a role de runtime."""
+    async with SessionLocal() as s:
+        async with s.begin():
+            role = (await s.execute(text("SELECT current_user"))).scalar()
+            bypass = (await s.execute(text("SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user"))).scalar()
+            assert bypass is False, f"{role} não pode ter BYPASSRLS"
+            await set_tenant_context(s, 2)
+            await s.execute(text("SELECT set_config('app.bypass_rls', 'on', true)"))
+            tenants = (await s.execute(text("SELECT count(DISTINCT tenant_id) FROM company_data"))).scalar()
+            outros = (await s.execute(text("SELECT count(*) FROM company_data WHERE tenant_id <> 2"))).scalar()
+            assert tenants == 1 and outros == 0
+
+            # Escrita em outro tenant também é barrada (WITH CHECK)
+            upd = await s.execute(text("UPDATE company_data SET company_name = company_name WHERE tenant_id = 1"))
+            assert upd.rowcount == 0
+
+    async with PlatformSessionLocal() as p:
+        bypass = (await p.execute(text("SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user"))).scalar()
+        total = (await p.execute(text("SELECT count(DISTINCT tenant_id) FROM company_data"))).scalar()
+        assert bypass is True and total >= 2
 
 
 @pytest.mark.asyncio
@@ -206,16 +232,62 @@ async def test_security_headers_and_rate_limiting(async_client):
     reset_rate_limits()
 
 
-def test_lgpd_pii_encryption_and_masking():
-    raw_cpf = "12345678901"
-    enc = encrypt_pii(raw_cpf)
-    assert enc is not None and enc != raw_cpf and enc.startswith("gAAAAA")
-    # Não deve criptografar duas vezes
-    assert encrypt_pii(enc) == enc
-    assert safe_decrypt_pii(enc) == raw_cpf
-    # Compatibilidade com legado em texto claro
-    assert safe_decrypt_pii("legado_plain") == "legado_plain"
-    assert mask_pii(raw_cpf, keep_last=2) == "*********01"
+def test_field_crypto_roundtrip_binding_and_blind_index():
+    tok = fc.encrypt_value("12345678901", table="users", column="cpf", tenant_id=1)
+    assert tok.startswith("e1.") and "12345678901" not in tok
+    assert fc.decrypt_value(tok, table="users", column="cpf", tenant_id=1) == "12345678901"
+    # nonce aleatório: mesmo valor gera cifras diferentes
+    assert tok != fc.encrypt_value("12345678901", table="users", column="cpf", tenant_id=1)
+    # valor não pode ser movido de tenant, coluna ou tabela, nem adulterado
+    for kw in ({"table": "users", "column": "cpf", "tenant_id": 2},
+               {"table": "users", "column": "pix_key", "tenant_id": 1},
+               {"table": "company_data", "column": "cpf", "tenant_id": 1}):
+        with pytest.raises(fc.FieldCryptoError):
+            fc.decrypt_value(tok, **kw)
+    tampered = tok[:-2] + ("A" if tok[-2] != "A" else "B") + tok[-1]
+    with pytest.raises(fc.FieldCryptoError):
+        fc.decrypt_value(tampered, table="users", column="cpf", tenant_id=1)
+    # índice cego por tenant: o mesmo valor em clientes diferentes não é correlacionável
+    b1 = fc.compute_blind_indexes("Disciplinas", {"nome_disciplina": "Matemática"}, 1)["nome_disciplina_bidx"]
+    b2 = fc.compute_blind_indexes("Disciplinas", {"nome_disciplina": "Matemática"}, 2)["nome_disciplina_bidx"]
+    assert b1 and b2 and b1 != b2
+    assert mask_pii("12345678901", keep_last=2) == "*********01"
+
+
+@pytest.mark.asyncio
+async def test_database_stores_only_ciphertext_and_orm_returns_plaintext():
+    checks = [("users", "username"), ("users", "email"), ("QuestoesBanco", "enunciado"),
+              ("company_data", "company_name"), ("Eventos", "nome_evento"), ("Eventos", "senha_evento_cripto")]
+    async with PlatformSessionLocal() as p:
+        for table, col in checks:
+            plain = (await p.execute(text(
+                f"SELECT count(*) FROM \"{table}\" WHERE \"{col}\" IS NOT NULL AND \"{col}\" NOT LIKE 'e1.%'"))).scalar()
+            total = (await p.execute(text(f'SELECT count(*) FROM "{table}" WHERE "{col}" IS NOT NULL'))).scalar()
+            assert total > 0 and plain == 0, f"{table}.{col}: {plain} valores em texto claro"
+        raw = (await p.execute(text("SELECT username FROM users WHERE tenant_id = 1 LIMIT 1"))).scalar()
+        assert raw.startswith("e1.")
+        user = (await p.execute(select(User).where(blind_eq(User.username, "admin1")))).scalars().first()
+        assert user is not None and user.username == "admin1"
+
+
+@pytest.mark.asyncio
+async def test_plaintext_write_to_encrypted_column_is_blocked():
+    async with PlatformSessionLocal() as p:
+        with pytest.raises(Exception) as exc:
+            await p.execute(update(Company).where(Company.tenant_id == 1).values(company_name="texto claro"))
+        assert "texto claro" in str(exc.value) or "FieldCryptoError" in repr(exc.value)
+        await p.rollback()
+
+
+@pytest.mark.asyncio
+async def test_runtime_session_refuses_rows_of_other_tenant_even_with_tampered_context():
+    async with SessionLocal() as s:
+        async with s.begin():
+            await set_tenant_context(s, 1)
+            # simula uma injeção de SQL trocando o tenant do RLS dentro da transação
+            await s.execute(text("SELECT set_config('app.current_tenant_id', '2', true)"))
+            with pytest.raises(fc.FieldCryptoError):
+                (await s.execute(select(Company))).scalars().all()
 
 
 @pytest.mark.asyncio
@@ -252,3 +324,77 @@ async def test_storage_path_traversal_and_export_jobs_tenant_isolation(async_cli
     assert (await async_client.get(f"/api/export/jobs/{job['job_id']}", headers=h_t1)).status_code == 200
     assert (await async_client.get(f"/api/export/jobs/{job['job_id']}", headers=h_t2)).status_code == 404
     assert (await async_client.get(f"/api/export/jobs/{job['job_id']}", headers=h_prof)).status_code == 403
+
+
+# --------------------------------------------------------------------------- arquivos cifrados (fase 2)
+PNG_1PX = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c6360000002000100e221bc330000000049454e44ae426082"
+)
+
+
+def test_secure_files_store_sign_and_isolation(tmp_path, monkeypatch):
+    from backend.app import secure_files as sf
+    monkeypatch.setenv("DIAGPRO_FILES_DIR", str(tmp_path))
+    ref = sf.store_bytes(PNG_1PX, 1, "png")
+    scope, fid, _ = sf.parse_ref(ref)
+    blob = (tmp_path / str(scope) / f"{fid}.bin").read_bytes()
+    assert b"IHDR" not in blob and PNG_1PX not in blob          # disco guarda só cifra
+    assert sf.read_bytes(ref, 1) == PNG_1PX
+    with pytest.raises(sf.SecureFileError):
+        sf.read_bytes(ref, 2)                                     # outro tenant não lê
+    with pytest.raises(sf.SecureFileError):
+        sf.store_bytes(b"<html><script>alert(1)</script>", 1, "png")  # conteúdo não é PNG
+    url = sf.signed_url(ref)
+    assert sf.ref_from_client(url, 1) == ref                      # URL assinada volta a ser referência
+    assert sf.ref_from_client(url, 2) is None                     # mas não para outro tenant
+    for forjado in ("static/../../.env", "C:/Windows/win.ini", ref.replace(":1:", ":2:"), "https://x/y.png"):
+        assert sf.ref_from_client(forjado, 1) is None
+    with sf.materialize({"caminho_imagem_relativo": "../../.env", "imagem_path_opcao": ref,
+                         "cover_pdf_paths": ["/etc/passwd", ref]}, 1) as (m, workdir):
+        assert m["caminho_imagem_relativo"] is None                # caminho arbitrário nunca chega ao gerador
+        assert open(m["imagem_path_opcao"], "rb").read() == PNG_1PX
+        assert len(m["cover_pdf_paths"]) == 1
+    assert not os.path.exists(workdir)                             # pasta temporária apagada
+
+
+@pytest.mark.asyncio
+async def test_upload_returns_signed_url_and_public_folders_are_gone(async_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("DIAGPRO_FILES_DIR", str(tmp_path))
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    data = {"company_name": "B", "company_cnpj": "1", "company_address": "", "company_phone": "",
+            "company_email": "", "company_website": ""}
+    bad = await async_client.put("/company", headers=h, data=data,
+                                 files={"logo": ("logo.png", b"<svg onload=alert(1)>", "image/png")})
+    assert bad.status_code == 400
+    ok = await async_client.put("/company", headers=h, data=data, files={"logo": ("logo.png", PNG_1PX, "image/png")})
+    assert ok.status_code == 200
+    url = ok.json()["company_logo_path"]
+    assert url.startswith("api/files/1/") and "sig=" in url
+    r = await async_client.get("/" + url)
+    assert r.status_code == 200 and r.content == PNG_1PX and r.headers["cache-control"] == "private, no-store"
+    assert (await async_client.get("/" + url[:-1] + ("0" if url[-1] != "0" else "1"))).status_code == 404
+    assert (await async_client.get("/static/x.png")).status_code == 404
+    assert (await async_client.get("/avatars/x.png")).status_code == 404
+
+
+# --------------------------------------------------------------------------- saídas e logs (fase 2b)
+def test_log_redaction_masks_secrets_paths_and_exam_file_names():
+    from backend.app.log_redaction import redact
+    linha = ('POST /api/gabarito/eventos/x/exportar-gabaritos-zip?senha=Segredo123 HTTP/1.1 '
+             'GET /api/files/1/abc.png?exp=1&sig=deadbeef Bearer eyJ.abc.def '
+             r"Erro ao converter 'PROVA_Concurso_X_Cargo_Y_TIPO_1.docx' em C:\Users\u\AppData\Local\Temp\d\a.pdf")
+    out = redact(linha)
+    for segredo in ("Segredo123", "deadbeef", "eyJ.abc.def", "Concurso_X", "Cargo_Y", "AppData"):
+        assert segredo not in out, segredo
+    assert redact("GET /eventos/ HTTP/1.1 200 OK") == "GET /eventos/ HTTP/1.1 200 OK"
+
+
+@pytest.mark.asyncio
+async def test_debug_and_disk_persisting_export_routes_were_removed(async_client):
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    assert (await async_client.get("/debug_ping")).status_code == 404
+    assert (await async_client.get("/api/export/debug_export_ping", headers=h)).status_code == 404
+    assert (await async_client.get(f"/api/export/download-zip?evento_id={ev}", headers=h)).status_code == 404
+    assert (await async_client.post(f"/api/export/eventos/{ev}/cargos/x/gerar-arquivos-async", headers=h)).status_code in (404, 405)

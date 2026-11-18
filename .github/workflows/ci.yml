@@ -26,9 +26,16 @@ jobs:
 
     env:
       ALEMBIC_DATABASE_URL: postgresql+psycopg2://diagpro_admin:diagpro_ci_password@127.0.0.1:5432/diagpro_test
-      DATABASE_URL: postgresql+asyncpg://diagpro_runtime:diagpro_runtime_dev_password@127.0.0.1:5432/diagpro_test
+      # Credenciais exclusivas do Postgres efêmero do CI (descartado ao fim do job)
+      DATABASE_URL: postgresql+asyncpg://diagpro_runtime:ci_runtime_password@127.0.0.1:5432/diagpro_test
+      PLATFORM_DATABASE_URL: postgresql+asyncpg://diagpro_platform:ci_platform_password@127.0.0.1:5432/diagpro_test
+      DIAGPRO_RUNTIME_DB_PASSWORD: ci_runtime_password
+      DIAGPRO_PLATFORM_DB_PASSWORD: ci_platform_password
       JWT_SECRET_KEY: ci_only_not_for_production_secret_key_change_me
-      FERNET_KEY: ZmFrZV9jaV9mZXJuZXRfa2V5XzMyX2J5dGVzX29ubHk=
+      # Postgres efêmero do CI não tem TLS; em qualquer ambiente com dados reais use verify-full
+      DB_SSLMODE: disable
+      # Chave mestra efêmera gerada no próprio job (nunca uma chave real)
+      DIAGPRO_MASTER_KEY_FILE: /tmp/diagpro_ci_master.key
 
     steps:
       - uses: actions/checkout@v4
@@ -37,11 +44,14 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r backend/requirements.txt
+      - name: Generate ephemeral master key
+        run: python -m backend.app.field_crypto genkey
       - name: Compile check
         run: python -m compileall -q backend core
       - name: Run Alembic migrations & RLS setup
         run: |
           alembic upgrade head
-          python -c "import os, pathlib; from sqlalchemy import create_engine, text; eng = create_engine(os.environ['ALEMBIC_DATABASE_URL']); conn = eng.begin(); c = conn.__enter__(); c.execute(text(pathlib.Path('backend/app/rls_policies.sql').read_text())); c.execute(text(pathlib.Path('scripts/setup_postgres_roles.sql').read_text())); conn.__exit__(None, None, None)"
+          python -c "import os, pathlib; from sqlalchemy import create_engine, text; eng = create_engine(os.environ['ALEMBIC_DATABASE_URL']); conn = eng.begin(); c = conn.__enter__(); c.execute(text(pathlib.Path('backend/app/rls_policies.sql').read_text())); conn.__exit__(None, None, None)"
+          python scripts/setup_postgres_roles.py --env-file /dev/null
       - name: Run pytest
         run: pytest -v --tb=short

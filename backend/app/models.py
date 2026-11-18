@@ -1,8 +1,10 @@
 # backend/app/models.py (VERSÃO FINAL COMPLETA)
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from typing import Optional, List, Union, Dict, Any
 from datetime import datetime, date
+
+from backend.app.secure_files import to_public as _arquivo_publico  # referência cifrada -> URL assinada
 
 class Tenant(BaseModel):
     id: int
@@ -134,6 +136,10 @@ class Cargo(BaseModel):
     class Config:
         from_attributes = True
 
+    @field_serializer("letterhead_pdf_path", "cover_pdf_paths")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
+
 class CargoOut(BaseModel):
     id_cargo: str
     identificador_cargo: Optional[str] = None
@@ -214,6 +220,10 @@ class User(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("avatar_url")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
 
 class UserCreate(BaseModel):
     username: str
@@ -299,6 +309,10 @@ class Company(BaseModel):
     class Config:
         orm_mode = True
 
+    @field_serializer("company_logo_path")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
+
 class ConteudoCreate(BaseModel):
     nome_conteudo: str
     descricao: Optional[str] = ""
@@ -359,6 +373,10 @@ class TextoReferenciaCreate(BaseModel):
 class TextoReferenciaOut(TextoReferenciaCreate):
     id_texto_ref: str
 
+    @field_serializer("caminho_imagem_relativo")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
+
 class QuestaoOut(BaseModel):
     id_questao: str
     codigo_curto_questao: Optional[str] = None
@@ -412,6 +430,10 @@ class QuestaoOut(BaseModel):
     class Config:
         from_attributes = True
 
+    @field_serializer("caminho_imagem_relativo")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
+
 class OpcaoQuestao(BaseModel):
     id_opcao_questao: Optional[str]
     id_questao_fk: Optional[str]
@@ -425,6 +447,10 @@ class OpcaoQuestao(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("imagem_path_opcao")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
 
 class ItemVerdadeiroFalso(BaseModel):
     id_item_vf: Optional[str]

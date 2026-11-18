@@ -1,13 +1,15 @@
+import os
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from backend.app.auth import verify_password, create_access_token, Token
-from backend.app.database import get_db
+from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
+from backend.app.rate_limit import rate_limit
 
-RECAPTCHA_SECRET_KEY = "6LcTjaorAAAAANA6QLQI3n4TQBK90Djc1Ucxr0kn" 
+RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY", "")
 
 router = APIRouter()
 
@@ -25,12 +27,12 @@ def verify_recaptcha(token: str) -> bool:
     result = r.json()
     return result.get('success', False)
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, dependencies=[Depends(rate_limit(10, 60, "login"))])
 async def login_for_access_token(
     username: str = Form(...),
     password: str = Form(...),
     recaptcha_token: str = Form(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_auth_db)
 ):
     if not verify_recaptcha(recaptcha_token):
         raise HTTPException(
@@ -44,6 +46,12 @@ async def login_for_access_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Nome de utilizador ou senha incorretos",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active or (user.status is not None and user.status.lower() == "inativo"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário inativo ou aguardando aprovação do administrador.",
         )
     
     token_data = {

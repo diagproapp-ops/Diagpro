@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, B
 from sqlalchemy import select
 from backend.app.db_models import QuestoesBanco, OpcoesQuestao, ItensVerdadeiroFalso, DetalhesQuestaoDiscursiva, Conteudo
 from backend.app.models import QuestaoOut, OpcaoQuestao, ItemVerdadeiroFalso, DetalhesQuestaoDiscursiva as DetalhesQuestaoDiscursivaModel
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.utils_crypto import encrypt_text, decrypt_text
 from backend.app.db_models import TextoReferenciaGeral
 from backend.app.db_models import HistoricoRevisaoQuestao
 from backend.app.utils_codigo_curto import gerar_codigo_curto
+from backend.app.security import evento_autorizado
 import uuid, os, shutil, json
 from uuid import uuid4
 from datetime import datetime
@@ -51,7 +53,7 @@ async def criar_questao(
     texto_referencia_direto: str = Form(None),
     indicacao_conteudo: str = Form(None),
     metadados: str = Form(None),
-    tenant_id: int = Form(...),
+    tenant_id: int | None = Form(None),  # ignorado: o tenant vem do evento autorizado
     imagem_enunciado: UploadFile = File(None),
     imagem_justificativa: UploadFile = File(None),
     alternativa_imagem_A: UploadFile = File(None),
@@ -60,8 +62,10 @@ async def criar_questao(
     alternativa_imagem_D: UploadFile = File(None),
     alternativa_imagem_E: UploadFile = File(None),
     autor_elaborador: str = Form(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
+    tenant_id = evento.tenant_id
     tags_list = tags.split(",") if tags else []
     metadados_dict = None
     if metadados:
@@ -100,7 +104,11 @@ async def criar_questao(
     indicacao_conteudo_criptografada = encrypt_text(indicacao_conteudo) if indicacao_conteudo else None
 
     conteudo_result = await db.execute(
-        select(Conteudo).where(Conteudo.id_conteudo == conteudo_id)
+        select(Conteudo).where(
+            Conteudo.id_conteudo == conteudo_id,
+            Conteudo.evento_id == evento.id_evento,
+            Conteudo.tenant_id == evento.tenant_id,
+        )
     )
     conteudo_obj = conteudo_result.scalar_one_or_none()
     codigo_curto_questao = await gerar_codigo_curto(tipo, tenant_id, db)
@@ -313,7 +321,8 @@ async def criar_questao(
 async def listar_questoes(
     evento_id: str,
     conteudo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     result = await db.execute(
         select(QuestoesBanco).where(
@@ -417,7 +426,9 @@ async def excluir_questao(
     evento_id: str,
     conteudo_id: str,
     id_questao: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.PROFESSOR)),
 ):
     result = await db.execute(
         select(QuestoesBanco).where(
@@ -426,7 +437,6 @@ async def excluir_questao(
             QuestoesBanco.conteudo_id == conteudo_id
         )
     )
-    q = result.scalar_one_or_none()
     questao = result.scalar_one_or_none()
     if not questao:
         raise HTTPException(status_code=404, detail="Questão não encontrada.")
@@ -458,7 +468,8 @@ async def buscar_questao(
     evento_id: str,
     conteudo_id: str,
     id_questao: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado),
 ):
     result = await db.execute(
         select(QuestoesBanco).where(
@@ -587,7 +598,7 @@ async def editar_questao(
     texto_referencia_direto: str = Form(None),
     indicacao_conteudo: str = Form(None),
     metadados: str = Form(None),
-    tenant_id: int = Form(...),
+    tenant_id: int | None = Form(None),  # ignorado: o tenant vem do evento autorizado
     imagem_enunciado: UploadFile = File(None),
     alternativa_imagem_A: UploadFile = File(None),
     alternativa_imagem_B: UploadFile = File(None),
@@ -604,8 +615,11 @@ async def editar_questao(
     item_imagem_7: UploadFile = File(None),
     item_imagem_8: UploadFile = File(None),
     item_imagem_9: UploadFile = File(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.PROFESSOR, UserRole.REVISOR, UserRole.ADMIN, UserRole.ADMIN_GERAL)),
 ):
+    tenant_id = evento.tenant_id
     from backend.app.utils_crypto import encrypt_text
 
     result = await db.execute(
@@ -616,7 +630,6 @@ async def editar_questao(
             QuestoesBanco.tenant_id == tenant_id,
         )
     )
-    q = result.scalar_one_or_none()
     questao = result.scalar_one_or_none()
     if not questao:
         raise HTTPException(status_code=404, detail="Questão não encontrada.")
@@ -804,7 +817,7 @@ async def revisar_questao(
     observacao_revisor: str = Form(""),
     usuario_revisor: str = Form(...),
     dados_revisao: str = Form(...),
-    tenant_id: int = Form(...),
+    tenant_id: int | None = Form(None),  # ignorado: o tenant vem do evento autorizado
     imagem_enunciado: UploadFile = File(None),
     alternativa_imagem_A: UploadFile = File(None),
     alternativa_imagem_B: UploadFile = File(None),
@@ -822,8 +835,11 @@ async def revisar_questao(
     item_imagem_7: UploadFile = File(None),
     item_imagem_8: UploadFile = File(None),
     item_imagem_9: UploadFile = File(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.REVISOR, UserRole.ADMIN, UserRole.ADMIN_GERAL)),
 ):
+    tenant_id = evento.tenant_id
     from backend.app.utils_crypto import encrypt_text
 
     revisao = HistoricoRevisaoQuestao(
@@ -845,7 +861,6 @@ async def revisar_questao(
             QuestoesBanco.conteudo_id == conteudo_id
         )
     )
-    q = result.scalar_one_or_none()
     questao = result.scalar_one_or_none()
     if not questao:
         raise HTTPException(status_code=404, detail="Questão não encontrada.")
@@ -1016,8 +1031,9 @@ async def importar_questoes_docx(
     evento_id: str,
     conteudo_id: str,
     arquivo: UploadFile = File(...),
-    tenant_id: int = Form(...),
-    db: AsyncSession = Depends(get_db)
+    tenant_id: int | None = Form(None),  # ignorado: o tenant vem do evento autorizado
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     import tempfile, shutil, os
     from core.docx_parser import DocxParser
@@ -1030,7 +1046,11 @@ async def importar_questoes_docx(
 
     # Busca o nome do conteúdo
     conteudo_result = await db.execute(
-        select(Conteudo).where(Conteudo.id_conteudo == conteudo_id)
+        select(Conteudo).where(
+            Conteudo.id_conteudo == conteudo_id,
+            Conteudo.evento_id == evento.id_evento,
+            Conteudo.tenant_id == evento.tenant_id,
+        )
     )
     conteudo_obj = conteudo_result.scalar_one_or_none()
     if not conteudo_obj:
@@ -1094,9 +1114,10 @@ async def confirmar_importacao_questoes_docx(
     evento_id: str,
     conteudo_id: str,
     body: dict = Body(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
-    tenant_id = body.get("tenant_id")
+    tenant_id = evento.tenant_id  # ignora tenant_id do corpo
     questoes = body.get("questoes", [])
     textos_referencia = body.get("textos_referencia", [])
     autor_elaborador = body.get("autor_elaborador")
@@ -1131,7 +1152,11 @@ async def confirmar_importacao_questoes_docx(
 
     # Busque o objeto de conteúdo APENAS UMA VEZ
     conteudo_result = await db.execute(
-        select(Conteudo).where(Conteudo.id_conteudo == conteudo_id)
+        select(Conteudo).where(
+            Conteudo.id_conteudo == conteudo_id,
+            Conteudo.evento_id == evento.id_evento,
+            Conteudo.tenant_id == evento.tenant_id,
+        )
     )
     conteudo_obj = conteudo_result.scalar_one_or_none()
 
@@ -1191,8 +1216,19 @@ async def listar_revisoes_questao(
     evento_id: str,
     conteudo_id: str,
     id_questao: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado),
 ):
+    questao_existe = await db.execute(
+        select(QuestoesBanco.id_questao).where(
+            QuestoesBanco.id_questao == id_questao,
+            QuestoesBanco.id_evento_fk == evento.id_evento,
+            QuestoesBanco.conteudo_id == conteudo_id,
+        )
+    )
+    if questao_existe.first() is None:
+        raise HTTPException(status_code=404, detail="Questão não encontrada.")
+
     result = await db.execute(
         select(HistoricoRevisaoQuestao)
         .where(HistoricoRevisaoQuestao.id_questao_fk == id_questao)

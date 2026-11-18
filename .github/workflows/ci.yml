@@ -1,0 +1,47 @@
+name: DiagPro CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: diagpro_test
+          POSTGRES_USER: diagpro_admin
+          POSTGRES_PASSWORD: diagpro_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ALEMBIC_DATABASE_URL: postgresql+psycopg2://diagpro_admin:diagpro_ci_password@127.0.0.1:5432/diagpro_test
+      DATABASE_URL: postgresql+asyncpg://diagpro_runtime:diagpro_runtime_dev_password@127.0.0.1:5432/diagpro_test
+      JWT_SECRET_KEY: ci_only_not_for_production_secret_key_change_me
+      FERNET_KEY: ZmFrZV9jaV9mZXJuZXRfa2V5XzMyX2J5dGVzX29ubHk=
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Compile check
+        run: python -m compileall -q backend core
+      - name: Run Alembic migrations & RLS setup
+        run: |
+          alembic upgrade head
+          python -c "import os, pathlib; from sqlalchemy import create_engine, text; eng = create_engine(os.environ['ALEMBIC_DATABASE_URL']); conn = eng.begin(); c = conn.__enter__(); c.execute(text(pathlib.Path('backend/app/rls_policies.sql').read_text())); c.execute(text(pathlib.Path('scripts/setup_postgres_roles.sql').read_text())); conn.__exit__(None, None, None)"
+      - name: Run pytest
+        run: pytest -v --tb=short

@@ -6,10 +6,12 @@ import uuid
 from sqlalchemy import func, asc
 import os
 
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import Cargo as DBCargo, DisciplinaDaProva as DBDisciplinaDaProva, Disciplina as DBDisciplina
 from backend.app.models import Cargo as PydanticCargo, DisciplinaProva as PydanticDisciplinaProva
 from backend.app.auth import get_current_user
+from backend.app.security import carregar_evento_autorizado, nome_arquivo_seguro, caminho_dentro_de
 
 router = APIRouter()
 
@@ -40,7 +42,7 @@ async def gerar_identificador_cargo_global(nome_cargo: str, db: AsyncSession):
 @router.get("/eventos/{event_id}/cargos", response_model=List[PydanticCargo])
 async def list_cargos_by_event(
     event_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     result = await db.execute(
@@ -68,8 +70,8 @@ async def list_cargos_by_event(
 async def create_cargo_for_event(
     event_id: str,
     cargo: dict,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     required_fields = ["nome_cargo", "nivel", "turno"]
     for field in required_fields:
@@ -160,8 +162,8 @@ async def create_cargo_for_event(
 async def update_cargo(
     cargo_id: str,
     cargo: dict,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     result = await db.execute(
         select(DBCargo)
@@ -265,8 +267,8 @@ async def update_cargo(
 @router.delete("/cargos/{cargo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_cargo_by_id(
     cargo_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     await db.execute(
         DBDisciplinaDaProva.__table__.delete().where(
@@ -286,11 +288,28 @@ async def delete_cargo_by_id(
 
     return None
 
+TAMANHO_MAX_CAPA = 20 * 1024 * 1024  # 20 MB
+
+
 @router.post("/eventos/{event_id}/cargos/upload-capa-pdf")
-async def upload_capa_pdf(event_id: str, file: UploadFile = File(...)):
+async def upload_capa_pdf(
+    event_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+):
+    evento = await carregar_evento_autorizado(event_id, db, current_user)
+    nome = nome_arquivo_seguro(file.filename, {".pdf"})
+    conteudo = await file.read(TAMANHO_MAX_CAPA + 1)
+    if len(conteudo) > TAMANHO_MAX_CAPA:
+        raise HTTPException(status_code=413, detail="Arquivo excede o limite de 20 MB.")
+    if not conteudo.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="O arquivo enviado não é um PDF válido.")
     out_dir = "static/capas"
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{event_id}_{file.filename}")
+    nome_final = f"{evento.id_evento}_{nome}"
+    caminho_dentro_de(out_dir, nome_final)  # valida que não escapa da pasta
+    out_path = os.path.join(out_dir, nome_final)
     with open(out_path, "wb") as f:
-        f.write(await file.read())
+        f.write(conteudo)
     return {"cover_pdf_paths": [out_path]}

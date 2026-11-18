@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db
 from backend.app.db_models import Tenant, User, ProvaMontada, BancoFrases, Evento, Cargo
 from backend.app.models import Tenant as PydanticTenant, TenantCreate, TenantDashboard
 from backend.app.auth import get_password_hash, get_current_user
@@ -21,7 +21,7 @@ def get_admin_geral_user(current_user: User = Depends(get_current_user)):
 
 @router.get("/admin/clients", response_model=list[PydanticTenant])
 async def list_admin_clients(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     result = await db.execute(select(Tenant))
@@ -31,7 +31,7 @@ async def list_admin_clients(
 @router.post("/admin/clients", response_model=PydanticTenant)
 async def create_admin_client(
     tenant: TenantCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     # Normaliza domínio para evitar duplicidade por maiúsculas/espacos
@@ -76,7 +76,7 @@ async def create_admin_client(
 
 @router.get("/admin/clients/dashboard", response_model=list[TenantDashboard])
 async def list_admin_clients_dashboard(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     tenants = (await db.execute(select(Tenant))).scalars().all()
@@ -174,7 +174,7 @@ async def list_admin_clients_dashboard(
 @router.post("/admin/clients/{client_id}/create-admin")
 async def create_admin_for_client(
     client_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     # Busca o cliente
@@ -226,7 +226,7 @@ async def create_admin_for_client(
 @router.get("/admin/clients/{client_id}", response_model=PydanticTenant)
 async def get_client(
     client_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user: User = Depends(get_current_user)
 ):
     tenant = await db.get(Tenant, client_id)

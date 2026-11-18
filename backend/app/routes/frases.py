@@ -7,16 +7,18 @@ from typing import List
 import csv
 import io
 
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import BancoFrases
 from backend.app.auth import get_current_user, get_admin_user
 from backend.app.models import Frase, FraseCreate
 
+from backend.app.security import is_admin_geral
 router = APIRouter()
 
 @router.get("/", response_model=List[Frase])
 async def list_frases(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     result = await db.execute(select(BancoFrases).where(BancoFrases.tenant_id == current_user.tenant_id))
@@ -26,7 +28,7 @@ async def list_frases(
 @router.post("/import/", status_code=status.HTTP_201_CREATED)
 async def import_frases_csv(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     admin_user=Depends(get_admin_user)
 ):
     if not file.filename.endswith('.csv'):
@@ -71,23 +73,32 @@ async def import_frases_csv(
             detail=f"Erro interno ao processar o arquivo: {e}"
         )
 
+def _query_frase_do_usuario(frase_id: int, current_user):
+    query = select(BancoFrases).where(BancoFrases.id == frase_id)
+    if not is_admin_geral(current_user):
+        query = query.where(BancoFrases.tenant_id == current_user.tenant_id)
+    return query
+
+
 @router.post("/", response_model=Frase, status_code=status.HTTP_201_CREATED)
 async def create_frase(
     frase_data: FraseCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
-    if not frase_data.tenant_id:
+    # Usuário comum sempre grava no próprio cliente; só o admin geral escolhe o tenant
+    tenant_id = frase_data.tenant_id if is_admin_geral(current_user) else current_user.tenant_id
+    if not tenant_id:
         raise HTTPException(status_code=400, detail="tenant_id é obrigatório!")
 
-    result = await db.execute(select(func.max(BancoFrases.id_local)).where(BancoFrases.tenant_id == frase_data.tenant_id))
+    result = await db.execute(select(func.max(BancoFrases.id_local)).where(BancoFrases.tenant_id == tenant_id))
     max_id_local = result.scalar() or 0
     next_id_local = max_id_local + 1
 
     nova_frase = BancoFrases(
         categoria=frase_data.categoria,
         texto_frase=frase_data.texto_frase,
-        tenant_id=frase_data.tenant_id,
+        tenant_id=tenant_id,
         id_local=next_id_local,
         ativo=True
     )
@@ -100,10 +111,10 @@ async def create_frase(
 async def update_frase(
     frase_id: int,
     frase_data: FraseCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
-    result = await db.execute(select(BancoFrases).where(BancoFrases.id == frase_id))
+    result = await db.execute(_query_frase_do_usuario(frase_id, current_user))
     frase_existente = result.scalars().first()
 
     if not frase_existente:
@@ -114,7 +125,8 @@ async def update_frase(
     
     frase_existente.categoria = frase_data.categoria
     frase_existente.texto_frase = frase_data.texto_frase
-    frase_existente.tenant_id = frase_data.tenant_id
+    if is_admin_geral(current_user) and frase_data.tenant_id:
+        frase_existente.tenant_id = frase_data.tenant_id
     # Não altere id_local!
     await db.commit()
     await db.refresh(frase_existente)
@@ -123,10 +135,10 @@ async def update_frase(
 @router.delete("/{frase_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_frase(
     frase_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
-    result = await db.execute(select(BancoFrases).where(BancoFrases.id == frase_id))
+    result = await db.execute(_query_frase_do_usuario(frase_id, current_user))
     frase_para_remover = result.scalars().first()
 
     if not frase_para_remover:

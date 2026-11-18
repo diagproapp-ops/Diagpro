@@ -1,5 +1,6 @@
 # backend/app/auth.py
 
+import os
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -11,10 +12,11 @@ from sqlalchemy.future import select
 
 
 # Importações da nossa aplicação
-from backend.app.database import get_db
+from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
 from backend.app.models import User as PydanticUser
 from backend.app.roles import UserRole
+from backend.app.utils_crypto import PII_FIELDS, safe_decrypt_pii
 
 # --- Modelo Pydantic para o Token ---
 class Token(BaseModel):
@@ -22,7 +24,9 @@ class Token(BaseModel):
     token_type: str
 
 # --- Configuração do JWT ---
-SECRET_KEY = "sua-chave-secreta-supersegura"
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY") or os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("A variável de ambiente JWT_SECRET_KEY não está definida.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -69,7 +73,7 @@ def decode_access_token(token: str):
 # --- FUNÇÃO CORRIGIDA E ADICIONADA ---
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_auth_db)
 ) -> PydanticUser:   # <-- Retorna Pydantic agora
     """
     Descodifica o token, obtém o username e busca o usuário no banco de dados.
@@ -85,8 +89,19 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Converte ORM -> Pydantic para evitar lazy load
-    return PydanticUser.from_orm(user)
+    if not user.is_active or (user.status is not None and user.status.lower() == "inativo"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário inativo ou aguardando aprovação.",
+        )
+
+    # Converte ORM -> Pydantic e descriptografa PII sem mutar a sessão ORM
+    user_out = PydanticUser.from_orm(user)
+    for field in PII_FIELDS:
+        val = getattr(user_out, field, None)
+        if val:
+            setattr(user_out, field, safe_decrypt_pii(val))
+    return user_out
 
 def get_admin_user(current_user: DBUser = Depends(get_current_user)):
     """

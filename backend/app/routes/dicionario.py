@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 import requests
 import re
 import logging
+from backend.app.auth import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger("dicionario")
 
 @router.post("/dicionario")
-async def dicionario(request: Request):
+async def dicionario(request: Request, current_user=Depends(get_current_user)):
     try:
         data = await request.json()
         termo = (data.get("termo") or "").strip()

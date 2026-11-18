@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import Conteudo as DBConteudo, User as DBUser, QuestoesBanco
 from backend.app.models import ConteudoCreate, ConteudoOut
 from backend.app.auth import get_current_user
@@ -37,7 +38,7 @@ async def gerar_identificador_conteudo(nome_conteudo: str, db: AsyncSession):
 @router.get("/eventos/{evento_id}/conteudos", response_model=List[ConteudoOut])
 async def list_conteudos(
     evento_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     query = select(DBConteudo).where(
@@ -77,8 +78,8 @@ async def list_conteudos(
 async def create_conteudo(
     evento_id: str,
     conteudo: ConteudoCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     data = conteudo.model_dump()
     data['evento_id'] = evento_id
@@ -105,7 +106,7 @@ async def create_conteudo(
 async def update_conteudo(
     conteudo_id: str,
     conteudo: ConteudoCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     query = select(DBConteudo).where(
@@ -138,8 +139,8 @@ async def update_conteudo(
 @router.delete("/{conteudo_id}", response_model=dict)
 async def delete_conteudo(
     conteudo_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     result = await db.execute(
         select(DBConteudo).where(
@@ -172,8 +173,8 @@ async def get_professor_id_by_name(prof_name: str, db: AsyncSession, tenant_id: 
 async def import_conteudos_csv(
     evento_id: str,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     print(">>> Iniciando importação via CSV <<<")
     content = await file.read()
@@ -229,7 +230,7 @@ async def import_conteudos_csv(
 # LISTA só os conteúdos do usuário (meus)
 @router.get("/meus", response_model=List[ConteudoOut])
 async def list_meus_conteudos(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     query = select(DBConteudo).where(

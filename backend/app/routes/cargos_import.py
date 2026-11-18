@@ -1,7 +1,8 @@
 from fastapi import APIRouter, UploadFile, File, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import Cargo as DBCargo, DisciplinaDaProva as DBDisciplinaDaProva, Disciplina as DBDisciplina
 from backend.app.auth import get_current_user
 import csv
@@ -42,8 +43,8 @@ async def gerar_identificador_cargo_global(nome_cargo: str, db: AsyncSession, us
 async def import_cargos_csv(
     event_id: str,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     content = await file.read()
     try:

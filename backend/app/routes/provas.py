@@ -8,7 +8,8 @@ import random
 import uuid
 import json
 
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import Cargo as DBCargo, ProvaMontada as DBProvaMontada, Disciplina as DBDisciplina
 from backend.app.models import (
     Cargo as PydanticCargo,
@@ -27,7 +28,7 @@ router = APIRouter()
 @router.get("/eventos/{id_evento}/cargos-com-status-prova")
 async def listar_cargos_com_status_prova(
     id_evento: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user),
 ):
     result = await db.execute(
@@ -70,7 +71,7 @@ async def listar_cargos_com_status_prova(
 async def get_prova_montada(
     id_evento: str,
     id_cargo: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user),
 ):
     result = await db.execute(
@@ -98,8 +99,8 @@ async def salvar_prova_montada(
     id_evento: str,
     id_cargo: str,
     payload: PydanticProvaMontada,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     import random
     import json
@@ -332,8 +333,8 @@ async def salvar_prova_montada(
 async def delete_prova_montada(
     id_evento: str,
     id_cargo: str,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     result = await db.execute(
         select(DBProvaMontada).where(
@@ -353,7 +354,7 @@ async def delete_prova_montada(
 @router.get("/eventos/{id_evento}/disciplinas", response_model=List[str])
 async def get_disciplinas_do_evento(
     id_evento: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user),
 ):
     result = await db.execute(
@@ -368,7 +369,7 @@ async def get_disciplinas_do_evento(
 @router.get("/eventos/{event_id}/cargos-quantidade-questoes")
 async def cargos_quantidade_questoes(
     event_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user),
 ):
     result = await db.execute(

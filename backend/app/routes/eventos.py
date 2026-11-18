@@ -7,7 +7,8 @@ from typing import List
 import uuid
 from datetime import datetime
 
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import Evento as DBEvento
 from backend.app.models import (
     EventoCreate as PydanticEventoCreate,
@@ -39,7 +40,7 @@ async def gerar_identificador_evento(nome_evento: str, db: AsyncSession):
 
 @router.get("/", response_model=List[PydanticEventoOut])
 async def list_eventos(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     result = await db.execute(
@@ -77,7 +78,7 @@ async def list_eventos(
 async def get_evento_details(
     event_id: str,
     senha: str = Query(..., description="Senha do evento"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     result = await db.execute(
@@ -113,7 +114,7 @@ async def get_evento_details(
 @router.get("/{event_id}", response_model=PydanticEventoOut)
 async def get_evento_for_edit(
     event_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     result = await db.execute(
@@ -146,8 +147,8 @@ async def get_evento_for_edit(
 @router.post("/", response_model=PydanticEventoOut)
 async def create_evento(
     evento_data: PydanticEventoCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     evento_dict = evento_data.dict()
     senha_pura = evento_dict["senha_evento"]
@@ -181,8 +182,8 @@ async def create_evento(
 async def update_evento(
     event_id: str,
     evento_data: PydanticEventoUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     result = await db.execute(
         select(DBEvento)
@@ -224,8 +225,8 @@ async def update_evento(
 @router.delete("/{event_id}", status_code=204)
 async def delete_evento(
     event_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     result = await db.execute(
         select(DBEvento).filter(

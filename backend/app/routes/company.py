@@ -3,7 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 import os
 
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import Company
 from backend.app.models import Company as CompanyModel
 from backend.app.auth import get_current_user
@@ -12,7 +13,7 @@ router = APIRouter()
 
 @router.get("/company", response_model=CompanyModel)
 async def get_company(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user = Depends(get_current_user)
 ):
     tenant_id = current_user.tenant_id
@@ -36,8 +37,8 @@ async def update_company(
     company_email: str = Form(...),
     company_website: str = Form(...),
     logo: UploadFile = File(None),
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user = Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     tenant_id = current_user.tenant_id
     result = await db.execute(select(Company).where(Company.tenant_id == tenant_id))

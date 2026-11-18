@@ -1,13 +1,10 @@
 # backend/app/db_models.py (VERSÃO FINAL COM RELACIONAMENTOS)
 
 from sqlalchemy import Column, Integer, String, ForeignKey, Text, BOOLEAN, TIMESTAMP, REAL, UniqueConstraint, DateTime, Boolean, Date, Float, JSON
-from sqlalchemy.orm import declarative_base, relationship # Importe o relationship
+from sqlalchemy.orm import relationship
 from backend.app.database import Base
-from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime, date
-
-Base = declarative_base()
 
 class Tenant(Base):
     __tablename__ = "tenants"
@@ -28,7 +25,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     username = Column(Text, unique=True, nullable=False)
     password_hash = Column(Text, nullable=False)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     role = Column(String)
     email = Column(Text, unique=True)
     full_name = Column(Text, nullable=True)
@@ -53,7 +50,7 @@ class User(Base):
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)  # <-- ESSA LINHA CORRIGE!
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)  # <-- ESSA LINHA CORRIGE!
     timestamp = Column(DateTime, nullable=False)
     usuario = Column(String, nullable=False)
     evento = Column(String)
@@ -71,7 +68,7 @@ class Evento(Base):
     __tablename__ = "Eventos"
 
     id_evento = Column(String, primary_key=True, index=True)
-    tenant_id = Column(String, nullable=False, index=True)  
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     nome_evento = Column(String, nullable=False)
     data_prova = Column(Date, nullable=False)
     status = Column(String, nullable=False)
@@ -91,7 +88,7 @@ class Cargo(Base):
     __tablename__ = "Cargos"
     id_cargo = Column(Text, primary_key=True)
     identificador_cargo = Column(Text, unique=True, nullable=True)  # <-- ADICIONE ESTA LINHA!
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     id_evento_fk = Column(Text, ForeignKey("Eventos.id_evento"))
     nome_cargo = Column(Text, nullable=False)
     codigo_cargo = Column(Text, nullable=True)
@@ -119,7 +116,7 @@ class DisciplinaDaProva(Base):
     tipo_conhecimento = Column(String, default="comum")
     observacoes = Column(Text, nullable=True)
     ordem_na_prova = Column(Integer, nullable=True)
-    tenant_id = Column(Integer, nullable=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     cargo = relationship("Cargo", back_populates="disciplinas_relacionadas")
     disciplina_base = relationship("Disciplina", back_populates="provas_relacionadas")
@@ -131,14 +128,14 @@ class Disciplina(Base):
     nome_disciplina = Column(Text, nullable=False)
     codigo_disciplina = Column(Text, nullable=True)
     descricao = Column(Text, nullable=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)  # <-- ADICIONE ESTA LINHA!
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)  # <-- ADICIONE ESTA LINHA!
 
     provas_relacionadas = relationship("DisciplinaDaProva", back_populates="disciplina_base")
 
 class ProvaMontada(Base):
     __tablename__ = "ProvasMontadas"
     id_prova_montada = Column(String, primary_key=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     id_evento_fk = Column(String, ForeignKey("Eventos.id_evento"))
     id_cargo_fk = Column(String, ForeignKey("Cargos.id_cargo"))
     nome_prova_montada = Column(String, nullable=False)
@@ -160,7 +157,7 @@ class BancoFrases(Base):
     __tablename__ = 'banco_frases'
     id = Column(Integer, primary_key=True)
     id_local = Column(Integer, nullable=False)  # <-- Novo campo!
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     categoria = Column(Text, nullable=False)
     texto_frase = Column(Text, nullable=False)  # <-- minúsculo!
     ativo = Column(BOOLEAN, nullable=False)
@@ -168,7 +165,7 @@ class BancoFrases(Base):
     tenant = relationship("Tenant")
 
     __table_args__ = (
-        UniqueConstraint('categoria', 'texto_frase', name='_categoria_texto_frase_uc'),  # <-- minúsculo!
+        UniqueConstraint('tenant_id', 'categoria', 'texto_frase', name='_tenant_categoria_texto_frase_uc'),
     )
 
     def __repr__(self):
@@ -221,7 +218,7 @@ class QuestoesBanco(Base):
     caminho_imagem_relativo = Column(Text, nullable=True)
     status_revisao = Column(String, nullable=True)
     observacao_revisor = Column(Text, nullable=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     # Relacionamentos (exemplo, ajuste conforme os nomes das classes/modelos)
     tenant = relationship("Tenant")
@@ -242,7 +239,7 @@ class OpcoesQuestao(Base):
     correta = Column(Boolean, default=False)
     feedback_opcao = Column(Text, nullable=True)
     imagem_path_opcao = Column(Text, nullable=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     questao = relationship("QuestoesBanco", backref="opcoes")
 
@@ -256,7 +253,7 @@ class ItensVerdadeiroFalso(Base):
     valor_correto = Column(Boolean, nullable=False)
     feedback_item = Column(Text, nullable=True)
     ordem = Column(Integer, nullable=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     questao = relationship("QuestoesBanco", backref="itens_vf")
 
@@ -270,7 +267,7 @@ class DetalhesQuestaoDiscursiva(Base):
     numero_linhas_resposta = Column(Integer, nullable=True)
     texto_subjetivo_orientacao = Column(Text, nullable=True)    # Para subjetiva
     texto_subjetivo_nota_maxima = Column(Text, nullable=True)   # Para subjetiva
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     questao = relationship("QuestoesBanco", backref="detalhes_discursiva")
 
@@ -278,7 +275,7 @@ class DetalhesQuestaoDiscursiva(Base):
 class Company(Base):
     __tablename__ = "company_data"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     company_name = Column(String, nullable=False, default="")
     company_cnpj = Column(String, nullable=False, default="")
     company_address = Column(String, nullable=False, default="")
@@ -305,7 +302,7 @@ class Conteudo(Base):
     evento_id = Column(String, nullable=False)
     is_deleted = Column(Boolean, default=False)
     metadados = Column(JSON, nullable=True, default=dict)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)  # NOVO!
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)  # NOVO!
     respondidas = Column(Integer, nullable=False, default=0)  # NOVO!
     quantidade = Column(Integer, nullable=False, default=0)    # Total de questões
 
@@ -332,7 +329,7 @@ class TextoReferenciaGeral(Base):
     conteudo_formatado = Column(Text)
     data_criacao = Column(String)
     data_modificacao = Column(String)
-    tenant_id = Column(Integer, nullable=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
 class HistoricoRevisaoQuestao(Base):
     __tablename__ = "HistoricoRevisaoQuestao"
@@ -343,7 +340,7 @@ class HistoricoRevisaoQuestao(Base):
     status_revisao = Column(String, nullable=False)
     observacao_revisor = Column(Text)
     dados_revisao = Column(Text)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     questao = relationship("QuestoesBanco", backref="historico_revisoes")
     tenant = relationship("Tenant")

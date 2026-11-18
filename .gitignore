@@ -27,3 +27,20 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Python & Environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/venv/
+
+# Databases & Sensitive Generated Data
+*.db
+*.db-wal
+*.db-shm
+ProvasGeradas_DG/
+avatars/
+storage_data/
+.pytest_cache/
+README.md.bak

@@ -3,7 +3,10 @@ from fastapi.responses import FileResponse
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, is_admin_geral, require_roles
+from backend.app.jobs import create_job, get_job_for_tenant, update_job
+from backend.app.rate_limit import rate_limit
+from backend.app.roles import UserRole
 from backend.app.db_models import (
     Evento as DBEvento,
     Cargo as DBCargo,
@@ -15,7 +18,9 @@ import datetime
 import tempfile
 from fastapi import BackgroundTasks
 from backend.app.auth import get_current_user
+from backend.app.security import carregar_evento_autorizado, caminho_dentro_de
 import os
+import hmac
 import json
 import logging
 import pprint
@@ -57,27 +62,40 @@ async def get_output_dir(evento_id, cargo_id, db: AsyncSession):
     evento = evento_result.scalar_one_or_none()
     if not evento:
         raise Exception("Evento não encontrado")
-    nome_evento = evento.nome_evento.strip().replace(" ", "_")
-    output_dir = os.path.join("ProvasGeradas_DG", nome_evento, cargo_id)
+    base_dir = os.path.realpath("ProvasGeradas_DG")
+    nome_evento = re.sub(r"[^A-Za-z0-9_.-]", "_", evento.nome_evento.strip().replace(" ", "_"))
+    safe_cargo_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id))
+    output_dir = os.path.realpath(os.path.join(base_dir, nome_evento, safe_cargo_id))
+    if not output_dir.startswith(base_dir + os.sep):
+        raise HTTPException(status_code=400, detail="Caminho de saída inválido.")
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
 
-@router.post("/eventos/{evento_id}/validar-senha")
-async def validar_senha_evento(evento_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+@router.post("/eventos/{evento_id}/validar-senha", dependencies=[Depends(rate_limit(5, 60, "validar-senha"))])
+async def validar_senha_evento(
+    evento_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+):
     body = await request.json()
     senha_usuario = body.get("senha", "")
-    result = await db.execute(select(DBEvento).where(DBEvento.id_evento == evento_id))
-    evento = result.scalar_one_or_none()
-    senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
-    senha_evento = decrypt_text(senha_evento_cripto)
-
-    if not evento or not senha_usuario:
+    if not senha_usuario:
         return {"valida": False}
+
+    query = select(DBEvento).where(DBEvento.id_evento == evento_id)
+    if current_user.tenant_id is not None:
+        query = query.where(DBEvento.tenant_id == current_user.tenant_id)
+    result = await db.execute(query)
+    evento = result.scalar_one_or_none()
+    if not evento:
+        return {"valida": False}
+
     senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
     if not senha_evento_cripto:
         return {"valida": False}
     senha_evento = decrypt_text(senha_evento_cripto)
-    return {"valida": senha_usuario == senha_evento}
+    return {"valida": hmac.compare_digest(senha_usuario, senha_evento)}
 
 
 async def fetch_evento_cargo_prova(
@@ -250,8 +268,8 @@ async def montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, m
 async def listar_arquivos_exportaveis(
     evento_id: str,
     cargo_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     output_dir = await get_output_dir(evento_id, cargo_id, db)
     arquivos = []
@@ -284,8 +302,8 @@ async def baixar_arquivo(
     evento_id: str = Query(...),
     cargo_id: str = Query(...),
     tipo: str = Query(..., description="prova_pdf, prova_docx, gabarito, zip"),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     logger.debug("=== CHEGOU NO ENDPOINT baixar_arquivo ===")
     import sys
@@ -502,8 +520,8 @@ async def gerar_todos_arquivos(
     evento_id: str,
     cargo_id: str,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     import os, json, time, shutil
     from pypdf import PdfWriter
@@ -697,8 +715,8 @@ async def exportar_gabarito(
     evento_id: str,
     cargo_id: str,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     import os
     # Carrega dados necessários do banco
@@ -734,8 +752,8 @@ async def zip_provas_cargos_selecionados(
     evento_id: str,
     request: Request,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     result = await db.execute(select(Evento).where(Evento.id_evento == evento_id))
     evento = result.scalar_one_or_none()
@@ -848,8 +866,8 @@ async def gerar_todos_arquivos_multiplos(
     evento_id: str,
     request: Request,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     """
     Exportação em lote, só permite com a senha correta do evento!
@@ -1096,14 +1114,16 @@ async def gerar_todos_arquivos_multiplos(
     )
 
 
+def nome_zip_evento(evento) -> str:
+    nome_evento = evento.nome_evento.strip().replace(" ", "_")
+    return f"Provas_{nome_evento}.zip"
+
+
 async def zip_provas_cargos_selecionados_interno(evento_id, cargos_id, manter_docx, db, current_user):
-    result = await db.execute(select(Evento).where(Evento.id_evento == evento_id))
-    evento = result.scalar_one_or_none()
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
     senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
     senha_evento = decrypt_text(senha_evento_cripto)
 
-    if not evento:
-        return None
     nome_evento = evento.nome_evento.strip().replace(" ", "_")
 
     # Tente pegar manterDocx do current_user ou de outra fonte se necessário (ajuste conforme seu fluxo)
@@ -1168,8 +1188,8 @@ async def zip_provas_cargos_selecionados_interno(evento_id, cargos_id, manter_do
     if not arquivos_para_zip:
         return None
 
-    zip_filename = f"Provas_{nome_evento}.zip"
-    zip_path = os.path.join("ProvasGeradas_DG", zip_filename)
+    zip_filename = nome_zip_evento(evento)
+    zip_path = caminho_dentro_de("ProvasGeradas_DG", zip_filename)
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file_path, arcname in arquivos_para_zip:
             zipf.write(file_path, arcname=arcname)
@@ -1177,15 +1197,63 @@ async def zip_provas_cargos_selecionados_interno(evento_id, cargos_id, manter_do
     return {
         "zip_filename": zip_filename,
         "zip_path": zip_path,
-        "download_url": f"/api/export/download-zip?filename={zip_filename}"
+        "download_url": f"/api/export/download-zip?evento_id={evento.id_evento}"
     }
 
 
-@router.get("/api/export/download-zip")
-async def download_zip(filename: str):
-    file_path = os.path.join("ProvasGeradas_DG", filename)
-    if not os.path.exists(file_path):
+# O router é montado com prefixo /api/export, então a rota final é /api/export/download-zip
+@router.get("/download-zip")
+async def download_zip(
+    evento_id: str = Query(...),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+):
+    # O nome do arquivo é derivado do evento autorizado; nunca do que o cliente envia.
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
+    filename = nome_zip_evento(evento)
+    file_path = caminho_dentro_de("ProvasGeradas_DG", filename)
+    if not os.path.isfile(file_path):
         raise HTTPException(404, "Arquivo ZIP não encontrado.")
     return FileResponse(file_path, filename=filename, media_type="application/zip")
 
-# ... [demais endpoints mantidos]
+
+@router.post("/eventos/{evento_id}/cargos/{cargo_id}/gerar-arquivos-async", status_code=202)
+async def gerar_arquivos_async(
+    evento_id: str,
+    cargo_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+):
+    await fetch_evento_cargo_prova(evento_id, cargo_id, db, current_user.tenant_id)
+    job = create_job(
+        tenant_id=current_user.tenant_id,
+        user=current_user.username,
+        tipo="gerar_arquivos_cargo",
+        params={"evento_id": evento_id, "cargo_id": cargo_id},
+    )
+
+    async def _run_export_job(jid: str, ev_id: str, cg_id: str, tid: int | None):
+        from backend.app.database import SessionLocal, set_tenant_context
+        update_job(jid, status="running")
+        try:
+            async with SessionLocal() as job_db:
+                await set_tenant_context(job_db, tid, bypass_rls=(tid is None))
+                out = await gerar_todos_arquivos(ev_id, cg_id, job_db, current_user)
+                update_job(jid, status="completed", result=out)
+        except Exception as exc:
+            update_job(jid, status="failed", error=type(exc).__name__)
+
+    background_tasks.add_task(_run_export_job, job["job_id"], evento_id, cargo_id, current_user.tenant_id)
+    return {"job_id": job["job_id"], "status": job["status"]}
+
+
+@router.get("/jobs/{job_id}")
+async def consultar_job_exportacao(
+    job_id: str,
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+):
+    job = get_job_for_tenant(job_id, current_user.tenant_id, is_admin_geral=is_admin_geral(current_user))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job de exportação não encontrado.")
+    return job

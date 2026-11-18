@@ -4,7 +4,8 @@ from sqlalchemy.future import select
 from typing import List, Optional
 from datetime import datetime
 import uuid, os, json, shutil, hashlib, random
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db, require_roles
+from backend.app.roles import UserRole
 from backend.app.db_models import (
     Cargo as DBCargo,
     ProvaMontada as DBProvaMontada,
@@ -21,7 +22,7 @@ router = APIRouter()
 @router.get("/eventos/{event_id}/cargos/provas-geracao")
 async def listar_cargos_para_geracao(
     event_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user),
 ):
     cargos_result = await db.execute(
@@ -75,8 +76,8 @@ async def definir_geracao_provas(
     embaralhar_questoes: bool = Form(...),
     embaralhar_alternativas: bool = Form(...),
     csv_candidatos: Optional[UploadFile] = File(None),
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     import json
     ids = json.loads(cargos_ids)
@@ -168,7 +169,7 @@ async def simular_frases_geracao(
     num_variacoes: int = Form(...),
     embaralhar_questoes: bool = Form(...),
     embaralhar_alternativas: bool = Form(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     import hashlib, random
@@ -213,7 +214,7 @@ async def simular_certo_errado_geracao(
     tipo_geracao: str = Form(...),
     num_variacoes: int = Form(...),
     embaralhar_itens: bool = Form(...),  # novo parâmetro para embaralhar
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
     """

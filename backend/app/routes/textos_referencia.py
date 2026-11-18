@@ -3,9 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.app.db_models import TextoReferenciaGeral
 from backend.app.models import TextoReferenciaOut
-from backend.app.database import get_db
+from backend.app.security import get_tenant_db
 from backend.app.utils_crypto import encrypt_text, decrypt_text
 from backend.app.utils_vinculo import sincronizar_vinculo_texto_questao
+from backend.app.security import evento_autorizado
 import uuid, os, shutil, json, random, string
 from datetime import datetime
 from cryptography.fernet import InvalidToken
@@ -33,7 +34,8 @@ def gerar_codigo_ref():
 async def listar_textos_referencia(
     evento_id: str,
     conteudo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     result = await db.execute(
         select(TextoReferenciaGeral)
@@ -79,7 +81,8 @@ async def get_texto_referencia(
     evento_id: str,
     conteudo_id: str,
     id_texto_ref: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     result = await db.execute(
         select(TextoReferenciaGeral)
@@ -137,10 +140,11 @@ async def criar_texto_referencia(
     publico: bool = Form(True),
     metadados_texto_ref: str = Form(None),
     questoes_vinculo: str = Form(None),
-    tenant_id: int = Form(...),
+    tenant_id: int | None = Form(None),  # ignorado: o tenant vem do evento autorizado
     conteudo_formatado: str = Form(None),
     imagem: UploadFile = File(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     tags_list = tags_imagem.split(",") if tags_imagem else []
     questoes_list = questoes_vinculo.split(",") if questoes_vinculo else []
@@ -190,7 +194,7 @@ async def criar_texto_referencia(
         conteudo_formatado=conteudo_formatado,
         data_criacao=str(datetime.now()),
         data_modificacao=str(datetime.now()),
-        tenant_id=tenant_id
+        tenant_id=evento.tenant_id
     )
     db.add(novo)
     await db.commit()
@@ -242,10 +246,11 @@ async def atualizar_texto_referencia(
     publico: bool = Form(None),
     metadados_texto_ref: str = Form(None),
     questoes_vinculo: str = Form(None),
-    tenant_id: int = Form(None),
+    tenant_id: int | None = Form(None),  # ignorado: o tenant do texto não pode ser alterado
     conteudo_formatado: str = Form(None),
     imagem: UploadFile = File(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     result = await db.execute(
         select(TextoReferenciaGeral)
@@ -293,8 +298,6 @@ async def atualizar_texto_referencia(
         texto.questoes_vinculo = questoes_vinculo
         lista_ids_questao = [q for q in questoes_vinculo.split(",") if q]
         await sincronizar_vinculo_texto_questao(db, id_texto_ref, lista_ids_questao)
-    if tenant_id is not None:
-        texto.tenant_id = tenant_id
     if conteudo_formatado is not None:
         texto.conteudo_formatado = conteudo_formatado
 
@@ -343,7 +346,8 @@ async def deletar_texto_referencia(
     evento_id: str,
     conteudo_id: str,
     id_texto_ref: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento=Depends(evento_autorizado)
 ):
     result = await db.execute(
         select(TextoReferenciaGeral)

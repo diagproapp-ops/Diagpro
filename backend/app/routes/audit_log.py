@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from typing import List, Optional
@@ -7,12 +7,11 @@ from datetime import datetime
 from backend.app.database import get_db
 from backend.app.db_models import AuditLogGeracao
 from backend.app.models import AuditLogGeracaoCreate, AuditLogGeracaoOut
+from backend.app.auth import get_current_user
+from backend.app.security import is_admin_geral, get_tenant_db, require_roles
+from backend.app.roles import UserRole
 
 router = APIRouter(prefix="/admin/logs/geracao", tags=["Auditoria"])
-
-def get_current_user():
-    # Troque por sua autenticação real!
-    return {"username": "admin", "tenant_id": 1, "is_superadmin": True}
 
 @router.get("/", response_model=List[AuditLogGeracaoOut])
 async def list_audit_logs(
@@ -21,12 +20,12 @@ async def list_audit_logs(
     evento: Optional[str] = None,
     cargo: Optional[str] = None,
     tenant_id: Optional[int] = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
     filters = []
-    if not current_user.get("is_superadmin"):
-        filters.append(AuditLogGeracao.tenant_id == current_user["tenant_id"])
+    if not is_admin_geral(current_user):
+        filters.append(AuditLogGeracao.tenant_id == current_user.tenant_id)
     elif tenant_id:
         filters.append(AuditLogGeracao.tenant_id == tenant_id)
     if usuario:
@@ -45,13 +44,15 @@ async def list_audit_logs(
 async def create_audit_log(
     log: AuditLogGeracaoCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
 ):
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=400, detail="Logs de geração exigem um usuário vinculado a um cliente.")
     db_log = AuditLogGeracao(
-        tenant_id=current_user["tenant_id"],
+        tenant_id=current_user.tenant_id,
         timestamp=datetime.utcnow(),
-        usuario=current_user["username"],
+        usuario=current_user.username,
         evento=log.evento,
         cargo=log.cargo,
         acao=log.acao,

@@ -6,6 +6,9 @@ from backend.app.db_models import Evento, Cargo, ProvaMontada
 from backend.app.database import get_db
 from core.document_generator import DocumentGenerator
 from backend.app.utils_crypto import decrypt_text
+from backend.app.security import evento_autorizado, get_tenant_db, require_roles
+from backend.app.roles import UserRole
+import hmac
 import tempfile, os, zipfile, csv, logging, json
 
 router = APIRouter()
@@ -51,7 +54,9 @@ def normalize_prova_montada(prova):
 async def listar_gabaritos_exportaveis(
     evento_id: str,
     cargo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento_autorizado_obj=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     """
     Lista os arquivos de gabarito disponíveis para o cargo selecionado.
@@ -73,7 +78,9 @@ async def listar_gabaritos_exportaveis(
 async def exportar_gabaritos_zip(
     evento_id: str,
     senha: str = Query(..., min_length=1),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento_autorizado_obj=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     import pyzipper  # adicione este import no início do arquivo se ainda não houver
 
@@ -89,7 +96,7 @@ async def exportar_gabaritos_zip(
     except Exception:
         raise HTTPException(status_code=500, detail="Erro ao descriptografar a senha do evento.")
 
-    if senha != senha_original:
+    if not hmac.compare_digest(senha.encode(), senha_original.encode()):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Senha inválida.")
 
     result_cargos = await db.execute(select(Cargo).filter(Cargo.id_evento_fk == evento_id))
@@ -188,7 +195,9 @@ async def visualizar_gabarito(
     evento_id: str,
     cargo_id: str,
     tipo_prova: str = "PADRÃO",  # permite escolher variação, se quiser
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento_autorizado_obj=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     # Busca evento, cargo e prova montada (igual já faz)
     result_evento = await db.execute(select(Evento).filter(Evento.id_evento == evento_id))
@@ -254,7 +263,9 @@ async def visualizar_gabarito(
 async def listar_variacoes(
     evento_id: str,
     cargo_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_tenant_db),
+    evento_autorizado_obj=Depends(evento_autorizado),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     result_prova = await db.execute(
         select(ProvaMontada).filter(

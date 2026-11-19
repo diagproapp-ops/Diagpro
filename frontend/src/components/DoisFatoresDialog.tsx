@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import api from '../api';
 
-type DadosAcesso = { access_token: string; role?: string; tenant_id?: number | null; codigos_recuperacao_restantes?: number };
+type DadosAcesso = { access_token?: string; role?: string; tenant_id?: number | null; codigos_recuperacao_restantes?: number; etapa?: string; token_2fa?: string };
 
 interface Props {
   open: boolean;

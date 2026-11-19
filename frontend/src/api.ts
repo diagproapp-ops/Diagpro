@@ -21,4 +21,20 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+// Sessão vencida ou recusada pelo servidor: volta ao login (exceto nas próprias telas de login/2FA)
+api.interceptors.response.use(
+  (resposta) => resposta,
+  (erro) => {
+    const url = String(erro?.config?.url || '');
+    if (erro?.response?.status === 401 && localStorage.getItem('authToken') && !url.startsWith('/auth/')) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userRole');
+      localStorage.removeItem('tenantId');
+      localStorage.removeItem(CLIENTE_EM_GESTAO_KEY);
+      if (!window.location.pathname.startsWith('/login')) window.location.assign('/login?sessao=expirada');
+    }
+    return Promise.reject(erro);
+  }
+);
+
 export default api;

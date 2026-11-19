@@ -98,5 +98,6 @@ def auth_headers(username: str, role: UserRole | str, tenant_id: int | None = No
     if tenant_id is not None:
         payload["tenant_id"] = tenant_id
     payload["mfa"] = True  # igual ao token real, emitido só depois do 2FA
+    payload["auth_time"] = int(__import__("time").time())
     token = create_access_token(payload)
     return {"Authorization": f"Bearer {token}"}

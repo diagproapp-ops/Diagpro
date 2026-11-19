@@ -18,6 +18,8 @@ from backend.app.field_crypto import blind_eq
 from backend.app.auth import get_current_user, verify_password
 from backend.app.roles import UserRole
 from backend.app import dois_fatores as df
+from backend.app import politica_senha
+from backend.app.auth import oauth2_scheme, decode_token_payload
 from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
 from backend.app.rate_limit import checar_bloqueio_por_falhas, rate_limit, registrar_falha
@@ -32,15 +34,26 @@ async def get_user(db: AsyncSession, username: str):
     result = await db.execute(select(DBUser).filter(blind_eq(DBUser.username, username)))
     return result.scalars().first()
 
-def verify_recaptcha(token: str) -> bool:
-    if not RECAPTCHA_SECRET_KEY or RECAPTCHA_SECRET_KEY == "SUA_CHAVE_SECRETA_VAI_AQUI":
-        print("AVISO: Chave secreta do reCAPTCHA não configurada. Verificação ignorada.")
-        return True
+# Só para testes automatizados/desenvolvimento: NUNCA em produção.
+RECAPTCHA_DESATIVADO = os.getenv("DIAGPRO_RECAPTCHA_DESATIVADO", "") == "1"
+if RECAPTCHA_DESATIVADO:
+    _diag_logging.getLogger(__name__).warning("reCAPTCHA DESATIVADO por DIAGPRO_RECAPTCHA_DESATIVADO=1 (apenas para testes).")
 
-    data = {'secret': RECAPTCHA_SECRET_KEY, 'response': token}
-    r = requests.post('https://www.google.com/recaptcha/api/siteverify', data=data)
-    result = r.json()
-    return result.get('success', False)
+
+def verify_recaptcha(token: str) -> bool:
+    """Falha fechada: sem chave, sem resposta do Google ou com erro, o login é recusado."""
+    if RECAPTCHA_DESATIVADO:
+        return True
+    if not RECAPTCHA_SECRET_KEY or RECAPTCHA_SECRET_KEY == "SUA_CHAVE_SECRETA_VAI_AQUI":
+        logger.error("RECAPTCHA_SECRET_KEY não configurada: login recusado.")
+        return False
+    try:
+        r = requests.post('https://www.google.com/recaptcha/api/siteverify',
+                          data={'secret': RECAPTCHA_SECRET_KEY, 'response': token}, timeout=5)
+        return bool(r.json().get('success', False))
+    except Exception:  # noqa: BLE001 - sem resposta do Google = não verificado
+        logger.error("Verificação do reCAPTCHA indisponível: login recusado.")
+        return False
 
 @router.post("/login", dependencies=[Depends(rate_limit(10, 60, "login"))])
 async def login_for_access_token(
@@ -70,9 +83,11 @@ async def login_for_access_token(
         )
     
     # Senha correta NÃO libera acesso: só um passe de 5 min para o segundo fator (2FA obrigatório).
+    # troca obrigatória (provisória, vencida ou fora da política): pedida DEPOIS do 2FA, antes do acesso
+    extra = {"trocar": True} if politica_senha.precisa_trocar(user, password) else {}
     if user.totp_ativo:
-        return {"etapa": "2fa", "token_2fa": df.criar_passe(user, df.SCOPE_VERIFICAR)}
-    return {"etapa": "cadastro_2fa", "token_2fa": df.criar_passe(user, df.SCOPE_CADASTRO)}
+        return {"etapa": "2fa", "token_2fa": df.criar_passe(user, df.SCOPE_VERIFICAR, **extra)}
+    return {"etapa": "cadastro_2fa", "token_2fa": df.criar_passe(user, df.SCOPE_CADASTRO, **extra)}
 
 
 # ---------------------------------------------------------------- 2FA ---
@@ -102,7 +117,13 @@ def _role(user) -> str:
     return r.value if isinstance(r, UserRole) else str(r)
 
 
-def _resposta_acesso(user, extra: dict | None = None) -> dict:
+def _resposta_acesso(user, extra: dict | None = None, payload: dict | None = None) -> dict:
+    if payload and payload.get("trocar"):
+        # 2FA ok, mas a senha precisa ser trocada antes de entrar
+        resposta = {"etapa": "trocar_senha", "token_2fa": df.criar_passe(user, df.SCOPE_TROCA_SENHA),
+                    "regras": politica_senha.regras()}
+        resposta.update(extra or {})
+        return resposta
     resposta = {"access_token": df.criar_token_acesso(user), "token_type": "bearer", "role": user.role}
     if user.tenant_id is not None:
         resposta["tenant_id"] = user.tenant_id
@@ -143,7 +164,7 @@ async def confirmar_cadastro_2fa(body: CodigoBody, db: AsyncSession = Depends(ge
     user.codigos_recuperacao = hashes
     await db.commit()
     logger.warning("2FA ativado (usuário %s)", user.id)
-    return _resposta_acesso(user, {"codigos_recuperacao": codigos})
+    return _resposta_acesso(user, {"codigos_recuperacao": codigos}, payload)
 
 
 @router.post("/2fa/verificar")
@@ -168,7 +189,7 @@ async def verificar_2fa(body: CodigoBody, db: AsyncSession = Depends(get_auth_db
         extra["codigos_recuperacao_restantes"] = len(restantes)
         logger.warning("Login com código de recuperação (usuário %s, restam %d)", user.id, len(restantes))
     await db.commit()
-    return _resposta_acesso(user, extra)
+    return _resposta_acesso(user, extra, payload)
 
 
 @router.post("/2fa/codigos-recuperacao")
@@ -196,3 +217,81 @@ async def novos_codigos_recuperacao(
     user.codigos_recuperacao = hashes
     await db.commit()
     return {"codigos_recuperacao": codigos}
+
+
+# ------------------------------------------------------- senha e sessão ---
+class TrocaSenhaBody(PasseBody):
+    nova_senha: str
+
+
+class MinhaSenhaBody(BaseModel):
+    senha_atual: str
+    nova_senha: str
+    codigo: str
+
+
+def _validar_nova_senha(user, nova: str) -> None:
+    erros = politica_senha.problemas(nova, user.username, user.email or "")
+    if politica_senha.repetida(nova, user.password_hash, user.senha_historico):
+        erros.append(f"A nova senha não pode repetir nenhuma das últimas {politica_senha.HISTORICO} senhas.")
+    if erros:
+        raise HTTPException(status_code=400, detail={"mensagem": "A senha não atende à política.", "problemas": erros})
+
+
+@router.get("/senha/regras")
+async def regras_da_senha():
+    return {"regras": politica_senha.regras(), "tamanho_minimo": politica_senha.TAMANHO_MINIMO}
+
+
+@router.post("/senha/trocar", dependencies=[Depends(rate_limit(10, 60, "troca-senha"))])
+async def trocar_senha_obrigatoria(body: TrocaSenhaBody, db: AsyncSession = Depends(get_auth_db)):
+    """Troca obrigatória logo depois do 2FA (senha provisória, vencida ou fora da política)."""
+    user = await _usuario_do_passe(db, df.ler_passe(body.token_2fa, (df.SCOPE_TROCA_SENHA,)))
+    _validar_nova_senha(user, body.nova_senha)
+    politica_senha.aplicar_nova_senha(user, body.nova_senha)
+    await db.commit()
+    logger.warning("Senha trocada no login (usuário %s)", user.id)
+    return _resposta_acesso(user)
+
+
+@router.post("/senha/minha", dependencies=[Depends(rate_limit(10, 60, "minha-senha"))])
+async def trocar_minha_senha(
+    body: MinhaSenhaBody,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_auth_db),
+):
+    """O próprio usuário troca a senha: exige a senha atual E um código atual do autenticador."""
+    tenant = None if _role(current_user) == UserRole.ADMIN_GERAL.value else current_user.tenant_id
+    query = select(DBUser).where(blind_eq(DBUser.username, current_user.username))
+    query = query.where(DBUser.tenant_id == tenant) if tenant is not None else query.where(DBUser.tenant_id.is_(None))
+    user = (await db.execute(query)).scalars().first()
+    chave = f"2fa:{user.username}:{user.tenant_id}"
+    checar_bloqueio_por_falhas(chave, _MAX_FALHAS_2FA, _JANELA_FALHAS_2FA)
+    passo = df.conferir_totp(user.totp_secret, body.codigo, user.totp_ultimo_passo)
+    if not verify_password(body.senha_atual, user.password_hash) or passo is None:
+        registrar_falha(chave)
+        raise HTTPException(status_code=400, detail="Senha atual ou código do autenticador incorretos.")
+    _validar_nova_senha(user, body.nova_senha)
+    user.totp_ultimo_passo = passo
+    politica_senha.aplicar_nova_senha(user, body.nova_senha)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/renovar")
+async def renovar_sessao(token: str = Depends(oauth2_scheme), current_user=Depends(get_current_user)):
+    """
+    Renova o token enquanto a pessoa está usando o sistema (a tela chama só se houve atividade).
+    Sem uso, o token vence em 30 min e a sessão cai. Limite absoluto de 12 h desde o login.
+    """
+    import time as _t
+    payload = decode_token_payload(token)
+    auth_time = payload.get("auth_time")
+    if not auth_time or _t.time() - int(auth_time) > df.SESSAO_MAXIMA_SEGUNDOS:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sessão encerrada. Entre novamente.",
+                            headers={"WWW-Authenticate": "Bearer"})
+    dados = {"sub": payload["sub"], "role": payload.get("role"), "mfa": True, "auth_time": int(auth_time)}
+    if payload.get("tenant_id") is not None:
+        dados["tenant_id"] = payload["tenant_id"]
+    from backend.app.auth import create_access_token
+    return {"access_token": create_access_token(dados), "token_type": "bearer"}

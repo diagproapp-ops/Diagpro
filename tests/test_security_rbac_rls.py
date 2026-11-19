@@ -732,3 +732,61 @@ async def test_two_factor_is_mandatory_for_everyone(async_client):
     a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
     assert (await async_client.post(f"/users/{alvo['id']}/2fa/resetar", headers=a2)).status_code == 404
     reset_rate_limits()
+
+
+def test_password_policy_rules():
+    from backend.app import politica_senha as ps
+    assert ps.problemas("Curta1!") and ps.problemas("somenteminusculas") and ps.problemas("Senha123!@#")
+    assert ps.problemas("Joaozinho#2026x", username="joaozinho")          # contém o usuário
+    assert ps.problemas("Abc123456789!")                                   # sequência
+    assert not ps.problemas("Verde-Montanha-77", username="maria", email="maria@x.com")
+
+
+@pytest.mark.asyncio
+async def test_forced_password_change_session_renewal_and_recaptcha(async_client, monkeypatch):
+    import pyotp, time
+    from backend.app.auth import create_access_token as _cat
+    from backend.app.routes import auth as rauth
+    reset_rate_limits()
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    base = {"username": "novo_prof", "email": "novo_prof@example.com", "role": "professor", "tenant_id": 1, "status": "ativo"}
+    # senha fraca recusada já na criação
+    r = await async_client.post("/users/", headers=a1, json={**base, "password": "fraca123"})
+    assert r.status_code == 400 and r.json()["detail"]["problemas"]
+    provisoria = "Provisoria-Forte-48"
+    assert (await async_client.post("/users/", headers=a1, json={**base, "password": provisoria})).status_code == 201
+
+    login = lambda s: async_client.post("/auth/login", data={"username": "novo_prof", "password": s, "recaptcha_token": "x"})
+    r = (await login(provisoria)).json()
+    cad = (await async_client.post("/auth/2fa/cadastro/iniciar", json={"token_2fa": r["token_2fa"]})).json()
+    totp = pyotp.TOTP(cad["segredo"])
+    ok = (await async_client.post("/auth/2fa/cadastro/confirmar", json={"token_2fa": r["token_2fa"], "codigo": totp.now()})).json()
+    # 2FA ok, mas a senha é provisória: troca antes de entrar (sem token de acesso ainda)
+    assert ok["etapa"] == "trocar_senha" and "access_token" not in ok and len(ok["codigos_recuperacao"]) == 10
+    passe = ok["token_2fa"]
+    assert (await async_client.get("/users/me", headers={"Authorization": f"Bearer {passe}"})).status_code == 401
+    assert (await async_client.post("/auth/senha/trocar", json={"token_2fa": passe, "nova_senha": "fraca"})).status_code == 400
+    assert (await async_client.post("/auth/senha/trocar", json={"token_2fa": passe, "nova_senha": provisoria})).status_code == 400  # repetida
+    nova = "Nova-Senha-Segura-91"
+    t = (await async_client.post("/auth/senha/trocar", json={"token_2fa": passe, "nova_senha": nova})).json()
+    assert t["access_token"]
+    # senha antiga não entra mais; a nova entra direto no 2FA (sem nova troca)
+    assert (await login(provisoria)).status_code == 401
+    assert "trocar" not in str((await login(nova)).json())
+
+    # trocar a própria senha exige a senha atual E o código do autenticador
+    h = {"Authorization": f"Bearer {t['access_token']}"}
+    r = await async_client.post("/auth/senha/minha", headers=h, json={"senha_atual": "errada", "nova_senha": "Outra-Senha-Boa-55", "codigo": "000000"})
+    assert r.status_code == 400
+
+    # renovação da sessão: mantém o login; passa de 12 h, cai
+    r = await async_client.post("/auth/renovar", headers=h)
+    assert r.status_code == 200 and r.json()["access_token"]
+    velho = _cat({"sub": "novo_prof", "role": "professor", "tenant_id": 1, "mfa": True, "auth_time": int(time.time()) - 13 * 3600})
+    assert (await async_client.post("/auth/renovar", headers={"Authorization": f"Bearer {velho}"})).status_code == 401
+
+    # reCAPTCHA falha fechada: sem chave, login recusado
+    monkeypatch.setattr(rauth, "RECAPTCHA_DESATIVADO", False)
+    monkeypatch.setattr(rauth, "RECAPTCHA_SECRET_KEY", "")
+    assert (await login(nova)).status_code == 400
+    reset_rate_limits()

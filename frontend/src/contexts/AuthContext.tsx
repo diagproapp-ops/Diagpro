@@ -71,6 +71,47 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(data);
   };
 
+  // Sessão: 30 min sem uso encerra; com uso, renova sozinha (limite de 12 h decidido pelo servidor)
+  useEffect(() => {
+    if (!user) return;
+    const INATIVIDADE_MS = 30 * 60 * 1000;
+    const RENOVAR_ANTES_MS = 10 * 60 * 1000;
+    let ultimaAtividade = Date.now();
+    const marcar = () => { ultimaAtividade = Date.now(); };
+    const eventos = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    eventos.forEach(ev => window.addEventListener(ev, marcar, { passive: true }));
+    const expiraEm = () => {
+      try {
+        const t = localStorage.getItem('authToken') || '';
+        const p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        return Number(p.exp) * 1000;
+      } catch { return 0; }
+    };
+    const encerrar = (motivo: string) => {
+      logout();
+      window.location.assign(`/login?sessao=${motivo}`);
+    };
+    const verificar = async () => {
+      const agora = Date.now();
+      if (agora - ultimaAtividade > INATIVIDADE_MS) { encerrar('inatividade'); return; }
+      const exp = expiraEm();
+      if (!exp || exp <= agora) { encerrar('expirada'); return; }
+      if (exp - agora < RENOVAR_ANTES_MS) {
+        try {
+          const { data } = await api.post('/auth/renovar');
+          localStorage.setItem('authToken', data.access_token);
+          api.defaults.headers.Authorization = `Bearer ${data.access_token}`;
+        } catch { encerrar('expirada'); }
+      }
+    };
+    const id = window.setInterval(verificar, 60 * 1000);
+    return () => {
+      window.clearInterval(id);
+      eventos.forEach(ev => window.removeEventListener(ev, marcar));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   const logout = () => {
     setUser(null);
     localStorage.removeItem('authToken');

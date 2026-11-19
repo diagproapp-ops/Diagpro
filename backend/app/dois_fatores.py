@@ -28,6 +28,8 @@ JANELA = 1  # aceita o código do passo anterior/seguinte (relógio do celular a
 VALIDADE_PASSE = timedelta(minutes=5)
 SCOPE_VERIFICAR = "2fa"
 SCOPE_CADASTRO = "2fa_cadastro"
+SCOPE_TROCA_SENHA = "troca_senha"
+SESSAO_MAXIMA_SEGUNDOS = 12 * 3600  # mesmo em uso contínuo, depois disso precisa entrar de novo
 QTD_CODIGOS_RECUPERACAO = 10
 
 
@@ -86,8 +88,8 @@ def consumir_codigo_recuperacao(hashes: list[str] | None, codigo: str) -> list[s
     return None
 
 
-def criar_passe(user, scope: str) -> str:
-    dados = {"sub": user.username, "scope": scope}
+def criar_passe(user, scope: str, **extra) -> str:
+    dados = {"sub": user.username, "scope": scope, **extra}
     if user.tenant_id is not None:
         dados["tenant_id"] = user.tenant_id
     return create_access_token(dados, expires_delta=VALIDADE_PASSE)
@@ -101,8 +103,9 @@ def ler_passe(passe: str, scopes: tuple[str, ...]) -> dict:
     return payload
 
 
-def criar_token_acesso(user) -> str:
-    dados = {"sub": user.username, "role": user.role, "mfa": True}
+def criar_token_acesso(user, auth_time: int | None = None) -> str:
+    """auth_time = momento do login (mantido nas renovações, para o limite de 12 h de sessão)."""
+    dados = {"sub": user.username, "role": user.role, "mfa": True, "auth_time": auth_time or int(time.time())}
     if user.tenant_id is not None:
         dados["tenant_id"] = user.tenant_id
     return create_access_token(dados)

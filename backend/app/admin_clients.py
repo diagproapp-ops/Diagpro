@@ -188,7 +188,10 @@ async def create_admin_for_client(
     username = f"admin{client_id}"
     email = f"admin{client_id}@{tenant.domain}.com"
     # senha forte e aleatória, exibida uma única vez ao administrador geral (nunca uma senha fixa)
-    password = secrets.token_urlsafe(12)
+    from backend.app import politica_senha
+    password = secrets.token_urlsafe(14)
+    while politica_senha.problemas(password, username, email):
+        password = secrets.token_urlsafe(14)
     password_hash = get_password_hash(password)
 
     # Verifica se já existe admin para esse cliente
@@ -205,6 +208,8 @@ async def create_admin_for_client(
         username=username,
         email=email,
         password_hash=password_hash,
+        senha_alterada_em=datetime.utcnow(),
+        deve_trocar_senha=True,  # senha provisória: troca obrigatória no primeiro acesso
         role="administrador",
         full_name=f"Administrador {tenant.name}",
         tenant_id=client_id,          # <-- só tenant_id!

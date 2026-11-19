@@ -22,6 +22,9 @@ from pydantic import BaseModel, EmailStr
 import os
 from uuid import uuid4
 import logging
+from datetime import datetime
+
+from backend.app import politica_senha
 
 logger = logging.getLogger(__name__)
 
@@ -138,12 +141,14 @@ async def public_register(
     except secure_files.SecureFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # 4. Cria usuário (sempre inativo até aprovação do administrador)
+    # 4. Cria usuário (sempre inativo até aprovação do administrador); senha dentro da política
+    _exigir_politica(password, username, email)
     hashed_password = get_password_hash(password)
     new_user = DBUser(
         username=username,
         email=email,
         password_hash=hashed_password,
+        senha_alterada_em=datetime.utcnow(),
         role=role,
         tenant_id=tenant_id,
         full_name=full_name,
@@ -197,6 +202,12 @@ def _verificar_role_permitida(admin_user, role) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Apenas o administrador geral pode atribuir esse perfil.",
         )
+
+
+def _exigir_politica(senha: str, username: str, email: str) -> None:
+    erros = politica_senha.problemas(senha, username, email)
+    if erros:
+        raise HTTPException(status_code=400, detail={"mensagem": "A senha não atende à política.", "problemas": erros})
 
 
 async def _buscar_usuario_gerenciavel(db: AsyncSession, user_id: int, admin_user) -> DBUser:
@@ -270,12 +281,16 @@ async def create_user(
     if tenant_id is None and role_value != UserRole.ADMIN_GERAL.value:
         raise HTTPException(status_code=400, detail="Informe o cliente do usuário.")
 
+    # senha definida pelo administrador é PROVISÓRIA: troca obrigatória no primeiro acesso
+    _exigir_politica(user_data.password, user_data.username, user_data.email)
     hashed_password = get_password_hash(user_data.password)
 
     new_user = DBUser(
         username=user_data.username,
         email=user_data.email,
         password_hash=hashed_password,
+        senha_alterada_em=datetime.utcnow(),
+        deve_trocar_senha=True,
         role=role_value,
         tenant_id=tenant_id,
         full_name=user_data.full_name,
@@ -329,7 +344,9 @@ async def update_user(
     for key, value in update_data.items():
         if key == "password":
             if value:
-                user.password_hash = get_password_hash(value)
+                # redefinida pelo administrador: provisória (troca no próximo login)
+                _exigir_politica(value, user.username, user.email or "")
+                politica_senha.aplicar_nova_senha(user, value, provisoria=True)
         elif key == "role":
             if value is not None:
                 _verificar_role_permitida(admin_user, value)

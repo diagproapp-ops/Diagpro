@@ -53,6 +53,10 @@ class User(Base):
     totp_ativo = Column(Boolean, nullable=False, default=False, server_default="false")
     totp_ultimo_passo = Column(Integer, nullable=True)  # anti-reuso do mesmo código
     codigos_recuperacao = Column(Ciphertext, nullable=True)  # lista de HMACs (cada código vale uma vez)
+    # Política de senha: validade, troca obrigatória e histórico (bcrypt das últimas senhas, cifrado)
+    senha_alterada_em = Column(DateTime, nullable=True)
+    deve_trocar_senha = Column(Boolean, nullable=False, default=False, server_default="false")
+    senha_historico = Column(Ciphertext, nullable=True)
     username_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
     email_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
     full_name_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)

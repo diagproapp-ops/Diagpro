@@ -67,8 +67,8 @@ function DroppableArea({ id, children, style }: { id: string; children: React.Re
       style={{
         minHeight: 350,
         padding: 20,
-        border: `2px dashed ${isOver ? '#1976d2' : '#e0e0e0'}`,
-        background: isOver ? '#e3f2fd' : '#fafafa',
+        border: `2px dashed ${isOver ? 'rgba(56, 189, 248, 0.9)' : 'rgba(148, 163, 184, 0.45)'}`,
+        background: isOver ? 'rgba(14, 165, 233, 0.16)' : 'rgba(6, 11, 25, 0.65)',
         borderRadius: 14,
         transition: 'background 0.3s, border 0.3s',
         ...style,
@@ -316,7 +316,7 @@ const MontagemProvaPage: React.FC = () => {
             sx={{
               height: 14,
               borderRadius: 5,
-              background: '#e0e0e0'
+              bgcolor: 'action.hover'
             }}
           />
         </Box>
@@ -358,7 +358,7 @@ const MontagemProvaPage: React.FC = () => {
                         sx={{
                           mb: 1.5,
                           borderRadius: 2,
-                          bgcolor: "#e3f2fd",
+                          bgcolor: "rgba(14, 165, 233, 0.14)",
                           boxShadow: 1,
                         }}
                       >
@@ -409,24 +409,24 @@ const MontagemProvaPage: React.FC = () => {
                             mb: 1.5,
                             p: 1.5,
                             cursor: "grab",
-                            bgcolor: "#f5f5f5",
+                            bgcolor: "rgba(15, 23, 42, 0.7)",
                             borderRadius: 2,
                             boxShadow: 1,
                             transition: "box-shadow 0.3s, border-color 0.3s",
                             border: "2px solid transparent",
                             "&:hover": {
                               boxShadow: 4,
-                              borderColor: "#1976d2",
+                              borderColor: "primary.main",
                             },
                           }}
                           elevation={0}
                         >
                           <Chip label={item.nome_conteudo} sx={{ mr: 2, fontWeight: 'bold' }} color="primary" />
-                          <Typography variant="body2" sx={{ color: "#666" }}>
+                          <Typography variant="body2" sx={{ color: "text.secondary" }}>
                             Questões disponíveis: {item.quantidade ?? 0}
                           </Typography>
                           {(item.nivel || item.turno) && (
-                            <Typography variant="caption" sx={{ ml: 2, color: "#888" }}>
+                            <Typography variant="caption" sx={{ ml: 2, color: "text.secondary" }}>
                               {item.nivel}{item.nivel && item.turno ? ' • ' : ''}{item.turno}
                             </Typography>
                           )}

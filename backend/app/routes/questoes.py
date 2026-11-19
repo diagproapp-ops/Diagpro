@@ -191,6 +191,7 @@ async def criar_questao(
             feedback_item=feedback_item_cript,
             ordem=item.get("ordem", None),
             imagem_path_item=imagem_path_item,
+            tenant_id=tenant_id,  # obrigatório: sem ele o RLS recusa a linha
         )
         db.add(novo_item)
 
@@ -210,6 +211,7 @@ async def criar_questao(
             numero_linhas_resposta=detalhes_obj.get("numero_linhas_resposta"),
             texto_subjetivo_orientacao=texto_subjetivo_orientacao_cript,
             texto_subjetivo_nota_maxima=texto_subjetivo_nota_maxima_cript,
+            tenant_id=tenant_id,  # obrigatório: sem ele o RLS recusa a linha
         )
         db.add(novo_detalhe)
 
@@ -245,7 +247,7 @@ async def criar_questao(
             valor_correto=i.valor_correto,
             feedback_item=safe_decrypt(i.feedback_item),
             ordem=i.ordem,
-            imagem_path_item=getattr(i, "imagem_path_item", None),
+            imagem_path_item=i.imagem_path_item,
         ))
 
     detalhes_result = await db.execute(
@@ -345,6 +347,7 @@ async def listar_questoes(
                 valor_correto=i.valor_correto,
                 feedback_item=safe_decrypt(i.feedback_item),
                 ordem=i.ordem,
+                imagem_path_item=i.imagem_path_item,
             ))
 
         detalhes_result = await db.execute(
@@ -495,6 +498,7 @@ async def buscar_questao(
             valor_correto=i.valor_correto,
             feedback_item=safe_decrypt(i.feedback_item),
             ordem=i.ordem,
+            imagem_path_item=i.imagem_path_item,
         ))
 
     # Discursiva/Subjetiva
@@ -758,6 +762,7 @@ async def editar_questao(
             numero_linhas_resposta=detalhes_obj.get("numero_linhas_resposta"),
             texto_subjetivo_orientacao=texto_subjetivo_orientacao_cript,
             texto_subjetivo_nota_maxima=texto_subjetivo_nota_maxima_cript,
+            tenant_id=tenant_id,  # obrigatório: sem ele o RLS recusa a linha
         )
         db.add(novo_detalhe)
 
@@ -896,15 +901,27 @@ async def revisar_questao(
         db.add(nova_opcao)
 
     # --------- ITENS VF (CERTO/ERRADO) COM IMAGEM -----------
+    # imagens já gravadas dos itens: preservadas quando o revisor não envia uma nova
+    item_anteriores = {}
+    item_result = await db.execute(
+        select(ItensVerdadeiroFalso).where(ItensVerdadeiroFalso.id_questao_fk == id_questao)
+    )
+    for idx, a in enumerate(item_result.scalars().all()):
+        item_anteriores[idx] = a.imagem_path_item
+
     await db.execute(
         ItensVerdadeiroFalso.__table__.delete().where(ItensVerdadeiroFalso.id_questao_fk == id_questao)
     )
 
-    itens_comando = form.get("itens_comando", [])
+    # A tela sempre envia itens_comando (com [""] por padrão); só questões Certo/Errado têm itens.
+    eh_certo_errado = form.get("tipo") == "CERTO_ERRADO"
+    itens_comando = form.get("itens_comando", []) if eh_certo_errado else []
     respostas_certo_errado = form.get("respostas_certo_errado", [])
     for idx, afirmacao in enumerate(itens_comando):
-        valor_correto = (respostas_certo_errado[idx] == "CERTO") if idx < len(respostas_certo_errado) else None
-        imagem_path_item = None
+        if not afirmacao or afirmacao == "<p></p>":
+            continue
+        valor_correto = (idx < len(respostas_certo_errado) and respostas_certo_errado[idx] == "CERTO")
+        imagem_path_item = item_anteriores.get(idx)
         # Pegue o argumento certo para o item (item_imagem_0, item_imagem_1, ...)
         item_imagem_file = None
         if idx == 0: item_imagem_file = item_imagem_0
@@ -938,12 +955,15 @@ async def revisar_questao(
         DetalhesQuestaoDiscursiva.__table__.delete().where(DetalhesQuestaoDiscursiva.id_questao_fk == id_questao)
     )
     if form.get("tipo") in ("DISCURSIVA", "SUBJETIVA"):
+        # num_linhas vem vazio ("") em questões subjetivas: não pode derrubar a revisão
+        linhas = str(form.get("num_linhas_discursiva") or "").strip()
         detalhes = {
             "palavras_chave_resposta": [
-                encrypt_text(palavra)
-                for palavra in (form.get("palavras_chave_discursiva", "").split(",") if form.get("palavras_chave_discursiva") else [])
+                encrypt_text(palavra.strip())
+                for palavra in str(form.get("palavras_chave_discursiva") or "").split(",")
+                if palavra.strip()
             ],
-            "numero_linhas_resposta": int(form.get("num_linhas_discursiva", 0)),
+            "numero_linhas_resposta": int(linhas) if linhas.isdigit() else None,
             "texto_subjetivo_orientacao": encrypt_text(form.get("texto_subjetivo_orientacao", "")),
             "texto_subjetivo_nota_maxima": encrypt_text(form.get("texto_subjetivo_nota_maxima", "")),
         }

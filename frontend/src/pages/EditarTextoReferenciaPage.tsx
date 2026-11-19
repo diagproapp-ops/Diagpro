@@ -486,11 +486,11 @@ export default function EditarTextoReferenciaPage() {
               <Box
                 sx={{
                   mb: 2,
-                  border: "2px dashed #ccc",
+                  border: "2px dashed rgba(148, 163, 184, 0.45)",
                   p: 2,
                   textAlign: "center",
                   borderRadius: 2,
-                  bgcolor: "#fafafa",
+                  bgcolor: "rgba(6, 11, 25, 0.65)",
                   position: "relative",
                 }}
                 onDrop={handleDrop}

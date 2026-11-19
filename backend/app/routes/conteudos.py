@@ -57,7 +57,7 @@ async def list_conteudos(
         DBConteudo.tenant_id == current_user.tenant_id
     )
     if current_user.role == "professor":
-        query = query.where(DBConteudo.professor_id == current_user.id)
+        query = query.where(DBConteudo.professor_id == str(current_user.id))  # professor_id é texto no banco
     result = await db.execute(query)
     conteudos = result.scalars().all()
 
@@ -126,7 +126,7 @@ async def update_conteudo(
     )
     # Restrição para professor
     if current_user.role == "professor":
-        query = query.where(DBConteudo.professor_id == current_user.id)
+        query = query.where(DBConteudo.professor_id == str(current_user.id))  # professor_id é texto no banco
     result = await db.execute(query)
     db_conteudo = result.scalar_one_or_none()
     if not db_conteudo:
@@ -248,7 +248,7 @@ async def list_meus_conteudos(
         DBConteudo.tenant_id == current_user.tenant_id
     )
     if current_user.role == "professor":
-        query = query.where(DBConteudo.professor_id == current_user.id)
+        query = query.where(DBConteudo.professor_id == str(current_user.id))  # professor_id é texto no banco
     result = await db.execute(query)
     conteudos = result.scalars().all()
 

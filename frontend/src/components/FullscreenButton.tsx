@@ -13,7 +13,7 @@ export default function FullscreenButton({ children }: { children: React.ReactNo
             left: 0,
             right: 0,
             bottom: 0,
-            background: "#fff",
+            background: "#0B1325",
             zIndex: 9999,
             padding: 16,
           }}

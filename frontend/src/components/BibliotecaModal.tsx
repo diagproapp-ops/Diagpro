@@ -62,7 +62,7 @@ export default function BibliotecaModal({
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          bgcolor: "#fff",
+          bgcolor: "#0B1325",
           borderRadius: 3,
           boxShadow: 8,
           width: { xs: "98vw", sm: 680 },
@@ -141,8 +141,8 @@ export default function BibliotecaModal({
                 minHeight: 160,
                 maxWidth: "98vw",
                 position: "relative",
-                bgcolor: "#f8f9fa",
-                border: "1px solid #e0e0e0",
+                bgcolor: "background.default",
+                border: "1px solid", borderColor: "divider",
                 boxShadow: 2,
                 mb: 1,
               }}
@@ -227,7 +227,7 @@ export default function BibliotecaModal({
                         key={idx}
                         variant="body2"
                         sx={{
-                          background: idx === 0 ? "#e3f2fd" : "#f5f5f5",
+                          background: idx === 0 ? "rgba(14, 165, 233, 0.14)" : "rgba(15, 23, 42, 0.7)",
                           px: 1.2,
                           borderRadius: 1,
                         }}

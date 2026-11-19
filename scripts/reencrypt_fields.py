@@ -85,8 +85,8 @@ def main() -> None:
 
     with conn.cursor() as cur:
         cur.execute("SELECT version_num FROM alembic_version")
-        if cur.fetchone()[0] != "e7b2d4f8a1c6":
-            raise SystemExit("O banco precisa estar na revisão e7b2d4f8a1c6 (alembic upgrade head).")
+        if cur.fetchone()[0] not in ("e7b2d4f8a1c6", "a9d4c2e6f0b1", "c5e8f1a3b9d2", "d8b2f4a6c1e3"):
+            raise SystemExit("O banco precisa estar na revisão e7b2d4f8a1c6 ou posterior (alembic upgrade head).")
 
         for table, spec in fc.ENCRYPTED.items():
             cur.execute("SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid "

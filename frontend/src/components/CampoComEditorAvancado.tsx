@@ -204,7 +204,7 @@ export default function CampoComEditorAvancado({
         <Typography
           variant="subtitle2"
           fontWeight={600}
-          sx={{ color: "#223", letterSpacing: 0.2, flexGrow: 1 }}
+          sx={{ color: "text.primary", letterSpacing: 0.2, flexGrow: 1 }}
           component="label"
         >
           {label} {required ? <span style={{ color: "#d32f2f" }}>*</span> : null}
@@ -223,14 +223,14 @@ export default function CampoComEditorAvancado({
       {/* Visualização do texto com KaTeX */}
       <Box
         sx={{
-          border: error ? "2px solid #d32f2f" : "1px solid #eee",
+          border: error ? "2px solid #d32f2f" : "1px solid rgba(148, 163, 184, 0.25)",
           borderRadius: 2,
           p: 2,
           minHeight: 48,
-          background: "#fafafa",
+          bgcolor: "background.default",
           mb: 1,
           fontSize: 16,
-          color: "#222",
+          color: "text.primary",
           maxHeight: 240,
           overflowY: "auto",
           overflowX: "auto",

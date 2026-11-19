@@ -5,6 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 from sqlalchemy import select
 import random
+import secrets
 import uuid
 import json
 
@@ -114,7 +115,7 @@ async def salvar_prova_montada(
         )
     )
     prova = result.scalar_one_or_none()
-    now = datetime.utcnow()
+    now = datetime.now()  # mesmo relógio das questões (data_modificacao local), para comparar
     blocos_dict = []
     
     # Busca informações do cargo para montar o nome da prova
@@ -189,7 +190,7 @@ async def salvar_prova_montada(
         if not questoes:
             bloco_dict["questoes"] = []
         else:
-            random.shuffle(questoes)
+            secrets.SystemRandom().shuffle(questoes)  # sorteio das questões imprevisível
             questoes_sorteadas = questoes[:qtd_questoes]
             bloco_dict["questoes"] = []
             for q in questoes_sorteadas:
@@ -306,8 +307,20 @@ async def salvar_prova_montada(
     blocos_json = json.dumps(blocos_dict, ensure_ascii=False)
     textos_referencia_json = json.dumps(textos_referencia, ensure_ascii=False)
 
+    # Semente secreta da prova: criada a cada montagem (que sorteia as questões de novo) e gravada
+    # cifrada. Todas as exportações desta montagem saem idênticas; ninguém prevê o gabarito.
+    meta = (prova.metadados_prova if prova else None) or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = {}
+    meta["semente_gabarito"] = secrets.token_hex(32)
+    meta_json = json.dumps(meta, ensure_ascii=False)
+
     if prova:
         prova.nome_prova_montada = nome_prova_montada
+        prova.metadados_prova = meta_json
         prova.blocos_questoes = blocos_json
         prova.textos_referencia_prova_json = textos_referencia_json
         prova.data_modificacao = now
@@ -320,6 +333,7 @@ async def salvar_prova_montada(
             nome_prova_montada=nome_prova_montada,
             blocos_questoes=blocos_json,
             textos_referencia_prova_json=textos_referencia_json,
+            metadados_prova=meta_json,
             data_criacao=now,
             data_modificacao=now,
             status_montagem="Em Andamento"
@@ -327,6 +341,82 @@ async def salvar_prova_montada(
         db.add(prova)
     await db.commit()
     return {"ok": True}
+
+# 3b. Atualizar as questões da montagem SEM sortear de novo
+def _assinatura(questao: dict) -> str:
+    """O que vai impresso de cada questão: se não mudou, a cópia fica intocada (prova idêntica)."""
+    ops = [(str(o.get("texto_opcao") or ""), bool(o.get("correta")), str(o.get("imagem_path_opcao") or ""))
+           for o in (questao.get("opcoes") or [])]
+    return json.dumps([questao.get("enunciado") or "", questao.get("resposta_correta") or "",
+                       questao.get("caminho_imagem_relativo") or "", sorted(ops),
+                       (questao.get("detalhes_discursiva") or {}).get("numero_linhas_resposta")], ensure_ascii=False)
+
+
+@router.post("/eventos/{id_evento}/provas-montadas/{id_cargo}/atualizar-questoes")
+async def atualizar_questoes_da_montagem(
+    id_evento: str,
+    id_cargo: str,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+):
+    """
+    Relê do banco as questões JÁ escolhidas na montagem (mesmas questões, mesma ordem, mesma semente).
+    Só as que mudaram desde a montagem são trocadas; as demais ficam idênticas, então a prova só muda
+    onde a questão foi corrigida. Útil quando uma questão é editada/revisada depois de montar.
+    """
+    prova = (await db.execute(select(DBProvaMontada).where(
+        DBProvaMontada.tenant_id == current_user.tenant_id,
+        DBProvaMontada.id_evento_fk == id_evento,
+        DBProvaMontada.id_cargo_fk == id_cargo,
+    ))).scalar_one_or_none()
+    if not prova:
+        raise HTTPException(status_code=404, detail="Montagem não encontrada.")
+    blocos = prova.blocos_questoes
+    if isinstance(blocos, str):
+        blocos = json.loads(blocos or "[]")
+    blocos = blocos or []
+
+    atualizadas, iguais, excluidas = [], 0, []
+    for bloco in blocos:
+        for i, antiga in enumerate(bloco.get("questoes") or []):
+            q = (await db.execute(select(QuestoesBanco).where(QuestoesBanco.id_questao == antiga.get("id_questao")))).scalar_one_or_none()
+            if q is None:
+                excluidas.append(antiga.get("codigo_curto_questao") or antiga.get("id_questao"))
+                continue
+            ops = (await db.execute(select(OpcoesQuestao).where(OpcoesQuestao.id_questao_fk == q.id_questao)
+                                    .order_by(OpcoesQuestao.ordem_original, OpcoesQuestao.letra))).scalars().all()
+            nova = dict(antiga)
+            nova["enunciado"] = q.enunciado
+            nova["resposta_correta"] = q.resposta_correta
+            nova["codigo_curto_questao"] = q.codigo_curto_questao or antiga.get("codigo_curto_questao")
+            nova["opcoes"] = []
+            if not (q.tipo and "DISCURSIVA" in q.tipo.upper()):
+                for o in ops:
+                    op = {"texto_opcao": o.texto_opcao, "correta": o.correta}
+                    if o.imagem_path_opcao:
+                        op["imagem_path_opcao"] = o.imagem_path_opcao
+                    nova["opcoes"].append(op)
+            if q.caminho_imagem_relativo:
+                nova["caminho_imagem_relativo"] = q.caminho_imagem_relativo
+            else:
+                nova.pop("caminho_imagem_relativo", None)
+            if q.tipo and q.tipo.upper() == "DISCURSIVA":
+                det = (await db.execute(select(DBDetalhesDiscursiva).where(DBDetalhesDiscursiva.id_questao_fk == q.id_questao))).scalar_one_or_none()
+                if det:
+                    nova["detalhes_discursiva"] = {"numero_linhas_resposta": det.numero_linhas_resposta}
+            if _assinatura(nova) == _assinatura(antiga):
+                iguais += 1
+                continue
+            bloco["questoes"][i] = nova
+            atualizadas.append(nova["codigo_curto_questao"] or nova.get("id_questao"))
+
+    if atualizadas:
+        prova.blocos_questoes = json.dumps(blocos, ensure_ascii=False)  # metadados (e a semente) intocados
+    # a montagem passa a refletir o banco de agora (some o aviso "editada depois da montagem")
+    prova.data_modificacao = datetime.now()
+    await db.commit()
+    return {"atualizadas": atualizadas, "sem_mudanca": iguais, "excluidas_do_banco": excluidas}
+
 
 # 4. Excluir montagem de prova
 @router.delete("/eventos/{id_evento}/provas-montadas/{id_cargo}")

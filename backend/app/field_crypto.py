@@ -180,7 +180,8 @@ ENCRYPTED: dict[str, dict[str, str]] = {
                                    "company_email", "company_website", "company_logo_path"], "text"),
     "audit_log_geracao": dict.fromkeys(["usuario", "evento", "cargo", "parametros", "frases", "seed", "ip",
                                         "user_agent"], "text"),
-    "Eventos": dict.fromkeys(["nome_evento", "numero_edital", "senha_evento_cripto", "local_prova", "observacoes"], "text"),
+    "Eventos": {**dict.fromkeys(["nome_evento", "numero_edital", "senha_evento_cripto", "local_prova", "observacoes"], "text"),
+                "preferencias_exportacao": "json"},
     "Cargos": {**dict.fromkeys(["nome_cargo", "nivel", "turno", "requisitos", "letterhead_pdf_path"], "text"),
                "cover_pdf_paths": "json"},
     "Disciplinas": dict.fromkeys(["nome_disciplina", "descricao"], "text"),
@@ -199,7 +200,7 @@ ENCRYPTED: dict[str, dict[str, str]] = {
     ], "text"),
     "OpcoesQuestao": {**dict.fromkeys(["texto_opcao", "texto_opcao_formatado", "feedback_opcao",
                                        "imagem_path_opcao"], "text"), "correta": "json"},
-    "ItensVerdadeiroFalso": {**dict.fromkeys(["afirmacao", "feedback_item"], "text"), "valor_correto": "json"},
+    "ItensVerdadeiroFalso": {**dict.fromkeys(["afirmacao", "feedback_item", "imagem_path_item"], "text"), "valor_correto": "json"},
     "DetalhesQuestaoDiscursiva": dict.fromkeys(["resposta_esperada_texto", "palavras_chave_resposta",
                                                 "texto_subjetivo_orientacao", "texto_subjetivo_nota_maxima"], "text"),
     "TextosReferenciaGeral": dict.fromkeys([

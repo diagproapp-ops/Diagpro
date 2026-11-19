@@ -398,3 +398,254 @@ async def test_debug_and_disk_persisting_export_routes_were_removed(async_client
     assert (await async_client.get("/api/export/debug_export_ping", headers=h)).status_code == 404
     assert (await async_client.get(f"/api/export/download-zip?evento_id={ev}", headers=h)).status_code == 404
     assert (await async_client.post(f"/api/export/eventos/{ev}/cargos/x/gerar-arquivos-async", headers=h)).status_code in (404, 405)
+
+
+# --------------------------------------------------------------------------- integridade de tenant e admin geral
+@pytest.mark.asyncio
+async def test_tenant_change_without_reencryption_is_blocked_by_database():
+    import uuid
+    from sqlalchemy.exc import DBAPIError
+    from backend.app.db_models import Disciplina
+    did = "ci-disc-" + uuid.uuid4().hex[:8]
+    async with PlatformSessionLocal() as p:
+        p.add(Disciplina(id_disciplina=did, nome_disciplina="Física", descricao="x", tenant_id=1))
+        await p.commit()
+        # SQL direto mantendo a cifra antiga: o banco recusa
+        with pytest.raises(DBAPIError) as exc:
+            await p.execute(text('UPDATE "Disciplinas" SET tenant_id = 2 WHERE id_disciplina = :i'), {"i": did})
+        assert "sem recifrar" in str(exc.value)
+        await p.rollback()
+        # pelo ORM a troca recifra tudo e é aceita; o valor continua legível no novo cliente
+        d = (await p.execute(select(Disciplina).where(Disciplina.id_disciplina == did))).scalars().first()
+        d.tenant_id = 2
+        await p.commit()
+    async with SessionLocal() as s:
+        async with s.begin():
+            await set_tenant_context(s, 2)
+            d2 = (await s.execute(select(Disciplina).where(Disciplina.id_disciplina == did))).scalars().first()
+            assert d2 is not None and d2.nome_disciplina == "Física"
+            await s.delete(d2)
+
+
+@pytest.mark.asyncio
+async def test_admin_geral_must_choose_valid_tenant_to_create_event(async_client):
+    h = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    base = {"nome_evento": "Evento AG", "data_prova": "2027-03-01", "status": "Aberto",
+            "senha_evento": "x1", "qtd_cargos": 1}
+    assert (await async_client.post("/eventos/", headers=h, json={**base, "tenant_id": 999})).status_code == 400
+    ok = await async_client.post("/eventos/", headers=h, json={**base, "tenant_id": 2})
+    assert ok.status_code == 200 and ok.json()["tenant_id"] == 2
+    me = await async_client.get("/users/me", headers=h)
+    assert me.status_code == 200 and me.json()["tenant_id"] is None   # admin geral não vira cliente 1
+    # admin de cliente continua preso ao próprio cliente, mesmo pedindo outro
+    h1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    r = await async_client.post("/eventos/", headers=h1, json={**base, "nome_evento": "Evento T1", "tenant_id": 2})
+    assert r.status_code == 200 and r.json()["tenant_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_geral_global_view_and_managed_client_isolation(async_client):
+    """Admin geral: visão global enxerga tudo; com um cliente em gestão, vê e grava só nele (sob RLS)."""
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+
+    # visão global: usuários de todos os clientes
+    todos = await async_client.get("/users/", headers=ag)
+    assert todos.status_code == 200
+    assert {1, 2} <= {u["tenant_id"] for u in todos.json()}
+
+    # cliente em gestão = 2: só dados do cliente 2, e /users/me reflete o cliente escolhido
+    ag2 = {**ag, "X-Tenant-Id": "2"}
+    me = await async_client.get("/users/me", headers=ag2)
+    assert me.status_code == 200 and me.json()["tenant_id"] == 2
+    usuarios = await async_client.get("/users/", headers=ag2)
+    assert usuarios.status_code == 200 and {u["tenant_id"] for u in usuarios.json()} == {2}
+    eventos = await async_client.get("/eventos/", headers=ag2)
+    assert eventos.status_code == 200 and all(e["tenant_id"] == 2 for e in eventos.json())
+    # o evento do cliente 1 não existe para quem está gerenciando o cliente 2
+    ev1 = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    assert (await async_client.get(f"/eventos/{ev1}", headers=ag2)).status_code == 404
+
+    # criar com cliente em gestão vai sempre para ele, mesmo que o corpo peça outro
+    base = {"nome_evento": "Evento Gestao", "data_prova": "2027-04-01", "status": "Aberto",
+            "senha_evento": "x1", "qtd_cargos": 1}
+    r = await async_client.post("/eventos/", headers=ag2, json={**base, "tenant_id": 1})
+    assert r.status_code == 200 and r.json()["tenant_id"] == 2
+
+    # cliente inexistente ou inválido no cabeçalho: recusado, nunca cai num cliente padrão
+    for ruim in ("999", "abc", "0", "-1"):
+        assert (await async_client.get("/users/me", headers={**ag, "X-Tenant-Id": ruim})).status_code == 400
+
+    # o cabeçalho não dá nada a quem não é admin geral: admin do cliente 1 continua no cliente 1
+    a1 = {**auth_headers("admin1", UserRole.ADMIN, tenant_id=1), "X-Tenant-Id": "2"}
+    me1 = await async_client.get("/users/me", headers=a1)
+    assert me1.status_code == 200 and me1.json()["tenant_id"] == 1
+    assert {u["tenant_id"] for u in (await async_client.get("/users/", headers=a1)).json()} == {1}
+    assert (await async_client.get("/admin/clients", headers=a1)).status_code == 403
+
+    # gestão de clientes é sempre global, mesmo com um cliente escolhido
+    clientes = await async_client.get("/admin/clients", headers=ag2)
+    assert clientes.status_code == 200 and {1, 2} <= {c["id"] for c in clientes.json()}
+    # usuário de cliente lê só o próprio cliente (antes quebrava com 500 na camada de cifra)
+    assert (await async_client.get("/admin/clients/1", headers=a1)).status_code == 200
+    assert (await async_client.get("/admin/clients/2", headers=a1)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_question_types_create_edit_review_and_professor_contents(async_client):
+    """Regressão: Certo/Errado (com imagem no item), Discursiva/Subjetiva e revisão falhavam com 500."""
+    import json as _json, struct, zlib
+
+    def _png():
+        def ch(t, d):
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+        return (b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+                + ch(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + ch(b"IEND", b""))
+
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    ev, ct = "c2438719-23aa-4f7d-8e0f-e6a310c10440", "ci-conteudo-1"
+    base = f"/eventos/{ev}/conteudos/{ct}/questoes"
+    alts = _json.dumps([{"letra": L, "texto": f"<p>{L}</p>", "correta": L == "A"} for L in "ABCDE"])
+    comum = {"indicacao_conteudo": "1", "enunciado": "<p>e</p>", "alternativas": alts, "nivel_dificuldade": "MEDIO",
+             "pontuacao": "1", "tags": "", "justificativa_questao": "", "justificativa_anulacao": "", "resposta_correta": "A",
+             "texto_referencia_vinculo": "", "texto_referencia_direto": "", "tenant_id": "1"}
+
+    # Certo/Errado com imagem no item: cria, devolve itens e imagem (URL assinada)
+    itens = _json.dumps([{"afirmacao": "<p>i1</p>", "valor_correto": True}, {"afirmacao": "<p>i2</p>", "valor_correto": False}])
+    r = await async_client.post(base, headers=h, data={**comum, "tipo": "CERTO_ERRADO", "anulada": "false", "itens_vf": itens},
+                                files={"item_imagem_0": ("i.png", _png(), "image/png")})
+    assert r.status_code == 200, r.text
+    qce = r.json()["id_questao"]
+    d = (await async_client.get(f"{base}/{qce}", headers=h)).json()
+    assert [i["valor_correto"] for i in d["itens_vf"]] == [True, False]
+    assert str(d["itens_vf"][0]["imagem_path_item"]).startswith("api/files/1/")
+
+    # revisão de Certo/Errado mantém itens e imagem
+    dados = {"tipo": "CERTO_ERRADO", "itens_comando": ["<p>i1</p>", "<p>i2</p>"], "respostas_certo_errado": ["CERTO", "ERRADO"],
+             "alternativas": [], "enunciado": "<p>e</p>"}
+    rv = {"status_revisao": "APROVADA", "observacao_revisor": "", "usuario_revisor": "admin1", "tenant_id": "1"}
+    assert (await async_client.patch(f"{base}/{qce}/revisao", headers=h, data={**rv, "dados_revisao": _json.dumps(dados)})).status_code == 200
+    d = (await async_client.get(f"{base}/{qce}", headers=h)).json()
+    assert len(d["itens_vf"]) == 2 and d["itens_vf"][0]["imagem_path_item"]
+
+    # Discursiva e Subjetiva: criar e revisar (num_linhas vazio na subjetiva não pode derrubar)
+    for tipo, det in (("DISCURSIVA", {"palavras_chave_resposta": ["a", "b"], "numero_linhas_resposta": 15}),
+                      ("SUBJETIVA", {"palavras_chave_resposta": [], "texto_subjetivo_orientacao": "o", "texto_subjetivo_nota_maxima": "10"})):
+        r = await async_client.post(base, headers=h, data={**comum, "tipo": tipo, "detalhes_discursiva": _json.dumps(det)})
+        assert r.status_code == 200, r.text
+        q = r.json()["id_questao"]
+        dados = {"tipo": tipo, "itens_comando": [""], "palavras_chave_discursiva": "a, b" if tipo == "DISCURSIVA" else "",
+                 "num_linhas_discursiva": 15 if tipo == "DISCURSIVA" else "", "texto_subjetivo_orientacao": det.get("texto_subjetivo_orientacao", ""),
+                 "texto_subjetivo_nota_maxima": det.get("texto_subjetivo_nota_maxima", ""), "alternativas": []}
+        assert (await async_client.patch(f"{base}/{q}/revisao", headers=h, data={**rv, "dados_revisao": _json.dumps(dados)})).status_code == 200
+        dd = (await async_client.get(f"{base}/{q}", headers=h)).json()["detalhes_discursiva"]
+        if tipo == "DISCURSIVA":
+            assert dd["palavras_chave_resposta"] == ["a", "b"] and dd["numero_linhas_resposta"] == 15
+
+    # revisar uma múltipla escolha (a tela manda itens_comando [""]) não cria itens Certo/Errado
+    r = await async_client.post(base, headers=h, data={**comum, "tipo": "MULTIPLA_ESCOLHA", "anulada": "false"})
+    qme = r.json()["id_questao"]
+    dados = {"tipo": "MULTIPLA_ESCOLHA", "itens_comando": [""], "respostas_certo_errado": [""], "alternativas": [], "enunciado": "<p>e</p>"}
+    assert (await async_client.patch(f"{base}/{qme}/revisao", headers=h, data={**rv, "dados_revisao": _json.dumps(dados)})).status_code == 200
+    assert (await async_client.get(f"{base}/{qme}", headers=h)).json()["itens_vf"] == []
+
+    # professor: "Meus Conteúdos" e conteúdos do evento (professor_id é texto no banco)
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    assert (await async_client.get("/conteudos/meus", headers=hp)).status_code == 200
+    assert (await async_client.get(f"/conteudos/eventos/{ev}/conteudos", headers=hp)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_finished_exam_and_answer_key_require_event_password(async_client):
+    """Prova pronta e gabarito: só com a senha do evento (cabeçalho), com bloqueio após erros."""
+    reset_rate_limits()
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    cargos = (await async_client.get(f"/eventos/{ev}/cargos", headers=h)).json()
+    cargo = cargos[0]["id_cargo"] if cargos else "qualquer"
+    url_gab = f"/api/gabarito/eventos/{ev}/cargos/{cargo}/gabarito"
+
+    # sem senha / senha errada: recusado (403); a senha não vale mais na URL
+    assert (await async_client.get(url_gab, headers=h)).status_code == 403
+    assert (await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "errada"})).status_code == 403
+    assert (await async_client.post(f"/api/gabarito/eventos/{ev}/exportar-gabaritos-zip?senha=1234", headers=h)).status_code == 403
+    for rota in (f"/api/export/download?evento_id={ev}&cargo_id={cargo}&tipo=gabarito",):
+        assert (await async_client.get(rota, headers=h)).status_code == 403
+    for rota in (f"/api/export/eventos/{ev}/cargos/{cargo}/exportar-gabarito", f"/api/export/eventos/{ev}/cargos/{cargo}/gerar-arquivos"):
+        assert (await async_client.post(rota, headers=h, json={})).status_code == 403
+    # senha certa: passa da trava (o resultado depende de haver prova montada, mas nunca é 403)
+    r = await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "1234"})
+    assert r.status_code != 403, r.text
+    assert (await async_client.post(f"/api/export/eventos/{ev}/validar-senha", headers=h, json={"senha": "1234"})).json() == {"valida": True}
+
+    # outro cliente nunca chega à senha (evento não existe para ele)
+    h2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    assert (await async_client.get(url_gab, headers={**h2, "X-Senha-Evento": "1234"})).status_code == 404
+
+    # bloqueio: 5 erros em 10 min travam até a senha certa (por usuário + evento)
+    reset_rate_limits()
+    for _ in range(5):
+        assert (await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "x"})).status_code == 403
+    assert (await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "1234"})).status_code == 429
+    reset_rate_limits()
+
+
+def test_generator_refuses_ciphertext():
+    from fastapi import HTTPException as _HTTPExc
+    from backend.app.security import exigir_texto_claro
+    exigir_texto_claro([{"questoes": [{"enunciado": "<p>Quanto é 2+2?</p>"}]}])
+    for lixo in ("gAAAAA" + "B" * 60 + "==", "e1.1." + "x" * 40):
+        with pytest.raises(_HTTPExc) as exc:
+            exigir_texto_claro([{"questoes": [{"enunciado": lixo}]}])
+        assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_app_custom_headers(async_client):
+    """O navegador só envia X-Senha-Evento / X-Tenant-Id se o pré-voo CORS os permitir."""
+    for metodo, rota in (("GET", "/api/gabarito/eventos/x/cargos/y/gabarito"), ("POST", "/api/gabarito/eventos/x/exportar-gabaritos-zip"), ("GET", "/users/me")):
+        r = await async_client.options(rota, headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": metodo,
+                                                      "Access-Control-Request-Headers": "authorization,x-senha-evento,x-tenant-id"})
+        assert r.status_code == 200, (rota, r.status_code, r.text)
+
+
+def test_exam_seed_is_secret_reproducible_and_legacy_compatible():
+    """Semente: com segredo gravado é imprevisível e estável; sem segredo, mantém a fórmula antiga."""
+    import logging as _lg
+    from core.document_generator import DocxProofGenerator, rotulo_variacao
+
+    def gerador(meta):
+        g = DocxProofGenerator.__new__(DocxProofGenerator)
+        g.prova_montada = {"metadados_prova": meta}
+        g.logger = _lg.getLogger("t")
+        return g
+
+    antigo = gerador({})
+    assert antigo._semente("1-TOTAL") == "1-TOTAL"  # prova antiga: idêntica ao que já foi exportado
+    s1, s2 = gerador({"semente_gabarito": "a" * 64}), gerador({"semente_gabarito": "b" * 64})
+    seq = lambda g: g.gerar_gabarito_balanceado(30, seed=g._semente("1-TOTAL"))
+    assert seq(s1) == seq(s1)                      # mesma prova: sempre igual
+    assert seq(s1) != seq(s2)                      # provas diferentes: gabaritos diferentes
+    assert seq(s1) != seq(antigo)                  # não é a sequência previsível antiga
+    assert gerador('{"semente_gabarito": "' + "a" * 64 + '"}')._semente("x") == s1._semente("x")  # JSON em texto
+    assert rotulo_variacao(1, 1) == "PADRÃO" and rotulo_variacao(2, 3) == "Tipo B"
+
+
+@pytest.mark.asyncio
+async def test_export_preferences_and_precheck_endpoints(async_client):
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    r = await async_client.put(f"/api/export/eventos/{ev}/preferencias", headers=h,
+                               json={"fonte": "Arial", "tamanhoFonte": 20, "duasColunas": True, "exibir_gabarito_marcado": True})
+    assert r.status_code == 200 and r.json() == {"fonte": "Arial", "tamanhoFonte": 20, "duasColunas": True}
+    assert (await async_client.get(f"/api/export/eventos/{ev}/preferencias", headers=h)).json()["tamanhoFonte"] == 20
+    for ruim in ({"tamanhoFonte": 500}, {"tamanhoFonte": "12"}, {"duasColunas": "sim"}, {"fonte": ""}):
+        assert (await async_client.put(f"/api/export/eventos/{ev}/preferencias", headers=h, json=ruim)).status_code == 400
+    # professor não mexe no padrão; outro cliente não enxerga o evento
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    assert (await async_client.get(f"/api/export/eventos/{ev}/preferencias", headers=hp)).status_code == 403
+    h2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    assert (await async_client.get(f"/api/export/eventos/{ev}/preferencias", headers=h2)).status_code == 404
+    # checagem: exige cargos; cargo sem prova montada aparece como bloqueio
+    assert (await async_client.post(f"/api/export/eventos/{ev}/verificar", headers=h, json={"cargos_id": []})).status_code == 400
+    r = await async_client.post(f"/api/export/eventos/{ev}/verificar", headers=h, json={"cargos_id": ["inexistente"]})
+    assert r.status_code == 200 and r.json()[0]["bloqueios"]

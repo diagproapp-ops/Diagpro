@@ -34,6 +34,28 @@ const GabaritoPage: React.FC = () => {
   const [carregandoGabarito, setCarregandoGabarito] = useState(false);
   const [snackbar, setSnackbar] = useState<{ open: boolean, message: string, severity: "success" | "error" | "info" }>({ open: false, message: '', severity: "success" });
 
+  // Senha do evento: o gabarito só aparece para quem a informa (fica só em memória, nunca na URL)
+  const [senhaEvento, setSenhaEvento] = useState('');
+  const [senhaLiberada, setSenhaLiberada] = useState('');
+  const comSenha = { headers: { 'X-Senha-Evento': senhaLiberada } };
+  const tratarErroGabarito = (err: any, padrao: string) => {
+    const status = err?.response?.status;
+    const det = err?.response?.data?.detail;
+    if (status === 403 || status === 429) {
+      setSenhaLiberada('');
+      setGabarito([]);
+      setSnackbar({ open: true, message: det || "Senha do evento inválida.", severity: "error" });
+    } else if (status === 409 && det && typeof det === 'object') {
+      // prova com problema (ex.: questão sem alternativa correta): o gabarito sairia errado
+      const lista = (det.verificacao || []).flatMap((v: any) => v.bloqueios.map((b: any) =>
+        `${v.cargo}: questão ${b.questao ?? '-'} (${b.codigo}) — ${b.problema}`));
+      setGabarito([]);
+      setSnackbar({ open: true, message: [det.mensagem, ...lista.slice(0, 5)].join(' | '), severity: "error" });
+    } else {
+      setSnackbar({ open: true, message: padrao, severity: "error" });
+    }
+  };
+
   // Exportação ZIP
   const [exportarZipModalOpen, setExportarZipModalOpen] = useState(false);
   const [senhaZip, setSenhaZip] = useState('');
@@ -82,7 +104,7 @@ const GabaritoPage: React.FC = () => {
 
   // Buscar o gabarito para o cargo/tipoProva selecionado OU buscar todos quando filtra por código curto
   useEffect(() => {
-    if (!cargo) {
+    if (!cargo || !senhaLiberada) {
       setGabarito([]);
       setDisciplinas([]);
       return;
@@ -92,7 +114,7 @@ const GabaritoPage: React.FC = () => {
     if (!filtroCodigoCurto) {
       // Busca normal, por variação
       api
-        .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(tipoProva)}`)
+        .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(tipoProva)}`, comSenha)
         .then(res => {
           setGabarito(res.data);
           const dists = Array.from(
@@ -104,7 +126,7 @@ const GabaritoPage: React.FC = () => {
           );
           setDisciplinas(dists);
         })
-        .catch(() => setSnackbar({ open: true, message: "Erro ao buscar gabarito.", severity: "error" }))
+        .catch(err => tratarErroGabarito(err, "Erro ao buscar gabarito."))
         .finally(() => setCarregandoGabarito(false));
     } else {
       // Busca de todas as variações, filtra pelo código curto
@@ -114,7 +136,7 @@ const GabaritoPage: React.FC = () => {
         Promise.all(
           variacoesApi.map(v =>
             api
-              .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(v)}`)
+              .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(v)}`, comSenha)
               .then(res2 => 
                 Array.isArray(res2.data)
                   ? res2.data.map((q: any) => ({ ...q, tipo_prova: v })) // garante o campo tipo_prova
@@ -147,7 +169,7 @@ const GabaritoPage: React.FC = () => {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cargo, eventId, tipoProva, filtroCodigoCurto]);
+  }, [cargo, eventId, tipoProva, filtroCodigoCurto, senhaLiberada]);
 
   // Exportar ZIP com senha
   const handleExportarZip = async () => {
@@ -156,11 +178,12 @@ const GabaritoPage: React.FC = () => {
         setExportSnackbar({ open: true, message: "Digite a senha do evento.", severity: "error" });
         return;
       }
-      const response = await fetch(`/api/gabarito/eventos/${eventId}/exportar-gabaritos-zip?senha=${encodeURIComponent(senhaZip)}`, {
-        method: 'POST',
-      });
-      if (!response.ok) throw new Error('Senha inválida ou erro ao exportar');
-      const blob = await response.blob();
+      const response = await api.post(
+        `/api/gabarito/eventos/${eventId}/exportar-gabaritos-zip`,
+        null,
+        { headers: { 'X-Senha-Evento': senhaZip }, responseType: 'blob' }
+      );
+      const blob = new Blob([response.data], { type: 'application/zip' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -170,8 +193,23 @@ const GabaritoPage: React.FC = () => {
       a.remove();
       setExportarZipModalOpen(false);
       setExportSnackbar({ open: true, message: "Gabarito exportado com sucesso!", severity: "success" });
-    } catch (e) {
-      setExportSnackbar({ open: true, message: "Senha inválida ou erro ao exportar.", severity: "error" });
+    } catch (e: any) {
+      let detalhe = "Senha inválida ou erro ao exportar.";
+      try {
+        const corpo = e?.response?.data;
+        const info = corpo instanceof Blob ? JSON.parse(await corpo.text()) : corpo;
+        const det = info?.detail;
+        if (det && typeof det === 'object') {
+          const lista = (det.verificacao || []).flatMap((v: any) => v.bloqueios.map((b: any) =>
+            `${v.cargo}: questão ${b.questao ?? '-'} (${b.codigo}) — ${b.problema}`));
+          detalhe = [det.mensagem, ...lista.slice(0, 5)].join(' | ');
+        } else {
+          detalhe = det || detalhe;
+        }
+      } catch { /* mantém a mensagem genérica */ }
+      setExportSnackbar({ open: true, message: detalhe, severity: "error" });
+    } finally {
+      setSenhaZip('');
     }
   };
 
@@ -214,6 +252,37 @@ const GabaritoPage: React.FC = () => {
           </Box>
         </Box>
         <Divider sx={{ mb: 3 }} />
+
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="center" sx={{ mb: 2 }}>
+          {senhaLiberada ? (
+            <>
+              <Alert severity="success" sx={{ flex: 1, py: 0 }}>Gabarito liberado com a senha do evento.</Alert>
+              <Button variant="outlined" onClick={() => { setSenhaLiberada(''); setSenhaEvento(''); }}>
+                Bloquear
+              </Button>
+            </>
+          ) : (
+            <>
+              <TextField
+                label="Senha do evento"
+                type="password"
+                size="small"
+                value={senhaEvento}
+                onChange={e => setSenhaEvento(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && senhaEvento) { setSenhaLiberada(senhaEvento); setSenhaEvento(''); } }}
+                autoComplete="off"
+                sx={{ flex: 1 }}
+              />
+              <Button
+                variant="contained"
+                disabled={!senhaEvento}
+                onClick={() => { setSenhaLiberada(senhaEvento); setSenhaEvento(''); }}
+              >
+                Liberar gabarito
+              </Button>
+            </>
+          )}
+        </Stack>
 
         <Stack direction={{ xs: "column", sm: "row" }} spacing={3} alignItems="center" sx={{ mb: 3 }}>
           <FormControl fullWidth size="small" disabled={carregandoCargos}>
@@ -280,30 +349,32 @@ const GabaritoPage: React.FC = () => {
           </Box>
         ) : gabaritoFiltrado.length === 0 ? (
           <Typography color="text.secondary" align="center" sx={{ mt: 6 }}>
-            {cargo ? "Nenhum gabarito disponível para este filtro." : "Selecione um cargo para ver o gabarito."}
+            {!senhaLiberada
+              ? "Informe a senha do evento para ver o gabarito."
+              : cargo ? "Nenhum gabarito disponível para este filtro." : "Selecione um cargo para ver o gabarito."}
           </Typography>
         ) : (
           <Box sx={{ overflowX: "auto" }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Tipo Prova</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Questão</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Disciplina</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Letra</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc'}}>Alternativa Correta</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Código Curto</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Tipo Prova</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Questão</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Disciplina</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Letra</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)'}}>Alternativa Correta</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Código Curto</th>
                 </tr>
               </thead>
               <tbody>
                 {gabaritoFiltrado.map((q, idx) => (
                   <tr key={idx}>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.tipo_prova}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.numero_questao}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.disciplina}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.letra_correta}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', maxWidth: 300, wordBreak: 'break-word'}}>{q.texto_correto}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.codigo_curto}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.tipo_prova}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.numero_questao}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.disciplina}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.letra_correta}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', maxWidth: 300, wordBreak: 'break-word'}}>{q.texto_correto}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.codigo_curto}</td>
                   </tr>
                 ))}
               </tbody>

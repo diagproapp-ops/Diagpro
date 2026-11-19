@@ -1,6 +1,6 @@
 // src/contexts/AuthContext.tsx
 import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import api from '../api';
+import api, { CLIENTE_EM_GESTAO_KEY } from '../api';
 import { User as UserType } from '../types';
 
 interface AuthContextType {
@@ -46,11 +46,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     formData.append('recaptcha_token', recaptchaToken);
     const response = await api.post('/auth/login', formData);
     const { access_token, role, tenant_id } = response.data; // <-- Corrigido aqui!
+    localStorage.removeItem(CLIENTE_EM_GESTAO_KEY); // todo login começa na visão global
     localStorage.setItem('authToken', access_token);
     api.defaults.headers.Authorization = `Bearer ${access_token}`;
-    localStorage.setItem('userRole', role);
+    if (role) localStorage.setItem('userRole', role);
     localStorage.setItem('tenantId', String(tenant_id ?? '')); // <-- Corrigido aqui!
     const { data } = await api.get<UserType>('/users/me');
+    if (data.role) localStorage.setItem('userRole', data.role);
     setUser(data);
   };
 
@@ -59,6 +61,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.removeItem('authToken');
     localStorage.removeItem('userRole');
     localStorage.removeItem('tenantId');
+    localStorage.removeItem(CLIENTE_EM_GESTAO_KEY);
     delete api.defaults.headers.Authorization;
   };
 

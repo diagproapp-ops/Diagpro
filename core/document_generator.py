@@ -33,6 +33,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL, WD_ROW_HEIGHT
 from docx.oxml import OxmlElement
 import json
+import threading
+from pathlib import Path
 import unicodedata
 from core.utils import parse_enunciado_formatado
 from backend.app.utils_crypto import decrypt_text
@@ -147,6 +149,17 @@ except ImportError as e_dg_core_types_local:
     COLUNA_TIPO_PROVA_CSV = "STUB_Tipo_Prova_CSV" # type: ignore
     # ... (defina stubs para TODAS as outras constantes importadas)
     # from .stubs import KStub as K # Se K for usado
+
+_FILA_LIBREOFFICE = threading.Lock()
+
+
+def rotulo_variacao(variacao_num: int, num_variacoes: int) -> str:
+    """Nome único da variação, igual ao impresso na prova: "PADRÃO" (uma só) ou "Tipo A", "Tipo B"..."""
+    return "PADRÃO" if (num_variacoes or 1) <= 1 else f"Tipo {chr(ord('A') + variacao_num - 1)}"
+
+
+AVISO_GABARITO_MARCADO = "VERSÃO COM GABARITO MARCADO — USO INTERNO. NÃO IMPRIMIR PARA CANDIDATOS."
+
 
 def remover_tags_metadados(texto):
         # Remove tudo entre colchetes [TEXTO: ...] ou [NIVEL: ...] ou [PONTOS: ...] ou [TAGS: ...] etc.
@@ -347,6 +360,23 @@ class DocxProofGenerator:
         if isinstance(obj, dict):
             return obj.get(field, default)
         return getattr(obj, field, default)
+
+    def _semente(self, base: str) -> str:
+        """
+        Semente dos sorteios (ordem das questões, alternativas e letras do gabarito).
+        Com a semente SECRETA gravada na montagem (metadados_prova.semente_gabarito), o resultado é
+        imprevisível para quem não tem acesso ao banco e IDÊNTICO a cada exportação da mesma prova.
+        Sem ela (provas montadas antes desta mudança) usa a fórmula antiga, para não alterar provas
+        que já foram exportadas.
+        """
+        meta = self._get_field(self.prova_montada, "metadados_prova", {}) or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except ValueError:
+                meta = {}
+        segredo = meta.get("semente_gabarito") if isinstance(meta, dict) else None
+        return f"{segredo}|{base}" if segredo else base
     
     def renderizar_conteudo_formatado(self, document, conteudo_formatado, fonte="Arial", tamanho=Pt(12)):
         """
@@ -823,6 +853,7 @@ class DocxProofGenerator:
         # ----- CABEÇALHO -----
         header = section.header
 
+
         nome_evento = self._get_field(self.evento, "nome_evento", "NOME DO EVENTO")
 
         if header.tables:
@@ -867,6 +898,16 @@ class DocxProofGenerator:
             tbl = table._tbl
             for border in tbl.xpath(".//w:tblBorders"):
                 border.getparent().remove(border)
+
+        # Versão com gabarito marcado: aviso em vermelho no cabeçalho de TODAS as páginas (depois de
+        # montado o cabeçalho, que limpa os parágrafos), para nunca ser confundida na gráfica.
+        if self.format_options.get("exibir_gabarito_marcado") in (True, 1, "true", "1", "on"):
+            aviso = header.add_paragraph()
+            aviso.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run_aviso = aviso.add_run(AVISO_GABARITO_MARCADO)
+            run_aviso.bold = True
+            run_aviso.font.size = Pt(9)
+            run_aviso.font.color.rgb = RGBColor(255, 0, 0)
 
         # ----- RODAPÉ -----
         footer = section.footer
@@ -1418,7 +1459,7 @@ class DocxProofGenerator:
             key=lambda b: get_field(b, "ordem_bloco", 999)
         )
         total_questoes = sum(len(get_field(bloco, "questoes", [])) for bloco in blocos_ordenados)
-        letras_gabarito_total = self.gerar_gabarito_balanceado(total_questoes, seed=f"{variacao_num}-TOTAL")
+        letras_gabarito_total = self.gerar_gabarito_balanceado(total_questoes, seed=self._semente(f"{variacao_num}-TOTAL"))
         idx_global_gabarito = 0
         bloco_discursivo = None
         nova_secao = None
@@ -1496,7 +1537,7 @@ class DocxProofGenerator:
             # ORDENA OS GRUPOS (referências primeiro, depois questões sem referência)
             for id_ref in sorted(grupos.keys(), key=lambda x: (x is None, x)):
                 questoes_grupo = grupos[id_ref][:]
-                rng = random.Random(f"{bloco_idx}-{id_ref}-{variacao_num}")
+                rng = random.Random(self._semente(f"{bloco_idx}-{id_ref}-{variacao_num}"))
                 rng.shuffle(questoes_grupo)
 
                 # IMPRIME O TEXTO OU IMAGEM DE REFERÊNCIA (APENAS UMA VEZ)
@@ -1609,7 +1650,7 @@ class DocxProofGenerator:
                         continue
 
                     alternativa_correta = next((alt for alt in alternativas_orig if get_field(alt, "correta", False)), None)
-                    semente_alt = f"{get_field(questao, 'id_questao', '?')}-VAR{variacao_num}-ALTS"
+                    semente_alt = self._semente(f"{get_field(questao, 'id_questao', '?')}-VAR{variacao_num}-ALTS")
                     rng_alt = random.Random(semente_alt)
                     alternativas_final = list(alternativas_orig)
                     rng_alt.shuffle(alternativas_final)
@@ -1929,6 +1970,9 @@ class DocxProofGenerator:
         p_espaco = document.add_paragraph()
         questao_paragraphs.append(p_espaco)
 
+        # Gabarito marcado (vermelho) SÓ quando o usuário pede na exportação; a prova normal sai sem marcação.
+        marcar_gabarito = self.format_options.get("exibir_gabarito_marcado") in (True, 1, "true", "1", "on")
+
         alternativa_paragraphs = []
         for i, opcao_obj in enumerate(opcoes_para_imprimir):
             texto_opcao_val = get_field(opcao_obj, 'texto_opcao', '') or ''
@@ -1938,7 +1982,7 @@ class DocxProofGenerator:
             texto_opcao_vazio = not texto_opcao_val.strip()
             imagem_opcao = get_field(opcao_obj, 'imagem_path_opcao', None)
             is_correta = get_field(opcao_obj, 'correta', False)
-            cor_gabarito = RGBColor(255, 0, 0) if is_correta else None
+            cor_gabarito = RGBColor(255, 0, 0) if (is_correta and marcar_gabarito) else None
 
             if texto_opcao_vazio and imagem_opcao:
                 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT, WD_ROW_HEIGHT
@@ -1993,7 +2037,7 @@ class DocxProofGenerator:
                         p_opcao,
                         texto_opcao_formatado,
                         correta=is_correta,
-                        mostrar_gabarito=False
+                        mostrar_gabarito=marcar_gabarito
                     )
                 else:
                     if texto_opcao_val.strip():
@@ -2346,19 +2390,27 @@ class PdfConverter:
         abs_docx_path = os.path.abspath(docx_path)
         abs_output_dir = os.path.abspath(output_dir) # Usar output_dir (parâmetro corrigido)
 
+        # Perfil do LibreOffice EXCLUSIVO desta conversão (dentro da pasta da requisição, apagada no fim).
+        # Com o perfil padrão compartilhado, uma segunda instância (outra conversão ou um LibreOffice aberto
+        # na máquina) entregava o trabalho à primeira e saía sem gerar o PDF ("arquivo em uso por outro processo").
+        perfil = os.path.join(abs_output_dir, ".perfil_libreoffice")
+        os.makedirs(perfil, exist_ok=True)
         command = [
             self.soffice_path,
-            "--headless",            
-            "--convert-to", "pdf",   
-            "--outdir", abs_output_dir,  
-            abs_docx_path            
+            f"-env:UserInstallation={Path(perfil).as_uri()}",
+            "--headless",
+            "--norestore",
+            "--convert-to", "pdf",
+            "--outdir", abs_output_dir,
+            abs_docx_path
         ]
         
         self.logger.info(f"Executando conversão para PDF: {' '.join(command)}")
         self._log_ui(f"Convertendo '{os.path.basename(docx_path)}' para PDF...", "info")
 
         try:
-            process = subprocess.run(command, timeout=120, capture_output=True, text=True, check=False, encoding='utf-8', errors='replace')
+            with _FILA_LIBREOFFICE:  # uma conversão por vez neste processo
+                process = subprocess.run(command, timeout=180, capture_output=True, text=True, check=False, encoding='utf-8', errors='replace')
             
             if process.returncode != 0:
                 self.logger.error(f"Falha na conversão para PDF (código {process.returncode}): STDOUT: {process.stdout} STDERR: {process.stderr}")
@@ -2984,7 +3036,7 @@ class DocumentGenerator:
 
                 if docx_path_variacao:
                     lista_corpos_docx_gerados_para_cargo.append(docx_path_variacao)
-                    nome_variacao = f"Tipo {chr(ord('A') + variacao_num - 1)}"
+                    nome_variacao = rotulo_variacao(variacao_num, num_variacoes_prova)
                     gabaritos_por_variacao[nome_variacao] = gabarito_data_variacao
                     self._log_ui(f"DOCX '{os.path.basename(docx_path_variacao)}' gerado.", "info")
                 else:
@@ -3194,7 +3246,7 @@ class DocumentGenerator:
 
         gabaritos_por_variacao = {}
         for variacao_num in range(1, num_variacoes_prova + 1):
-            nome_variacao = f"Tipo {chr(ord('A') + variacao_num - 1)}"
+            nome_variacao = rotulo_variacao(variacao_num, num_variacoes_prova)
             # Instancia um gerador para cada variação
             docx_gen = DocxProofGenerator(
                 prova_montada_obj=prova_montada,

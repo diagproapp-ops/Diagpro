@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi.security import OAuth2PasswordBearer
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -14,7 +14,7 @@ from sqlalchemy.future import select
 # Importações da nossa aplicação
 from backend.app.field_crypto import blind_eq
 from backend.app.database import SessionLocal, PlatformSessionLocal, set_tenant_context
-from backend.app.db_models import User as DBUser
+from backend.app.db_models import Tenant as DBTenant, User as DBUser
 from backend.app.models import User as PydanticUser
 from backend.app.roles import UserRole
 from backend.app.utils_crypto import PII_FIELDS, safe_decrypt_pii
@@ -113,7 +113,29 @@ async def _load_user_from_token(payload: dict) -> DBUser | None:
         return result.scalars().first()
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> PydanticUser:
+CLIENTE_EM_GESTAO_HEADER = "X-Tenant-Id"
+
+
+async def _cliente_em_gestao(request: Request) -> int | None:
+    """
+    Cliente que o administrador geral escolheu gerenciar nesta requisição (cabeçalho X-Tenant-Id).
+    Sem cabeçalho = visão global. Com cabeçalho, o cliente tem de existir; nunca há cliente padrão.
+    """
+    raw = (request.headers.get(CLIENTE_EM_GESTAO_HEADER) or "").strip()
+    if not raw:
+        return None
+    try:
+        tid = int(raw)
+    except ValueError:
+        tid = 0
+    if tid > 0:
+        async with PlatformSessionLocal() as db:
+            if (await db.execute(select(DBTenant.id).where(DBTenant.id == tid))).first():
+                return tid
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cliente selecionado inválido.")
+
+
+async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> PydanticUser:
     """Valida o token e carrega o usuário (ver _load_user_from_token)."""
     payload = decode_token_payload(token)
     user = await _load_user_from_token(payload)
@@ -128,7 +150,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> PydanticUser:
         )
 
     # Converte ORM -> Pydantic e descriptografa PII sem mutar a sessão ORM
+    # O administrador geral NÃO pertence a nenhum cliente (tenant_id nulo no banco). Ele só passa a
+    # atuar num cliente quando escolhe explicitamente qual (X-Tenant-Id); aí a requisição inteira roda
+    # sob o RLS daquele cliente (ver security.get_tenant_db). Nunca há cliente padrão.
     user_out = PydanticUser.from_orm(user)
+    if user.role == UserRole.ADMIN_GERAL.value and user.tenant_id is None:
+        user_out.tenant_id = await _cliente_em_gestao(request)
     for field in PII_FIELDS:
         val = getattr(user_out, field, None)
         if val:

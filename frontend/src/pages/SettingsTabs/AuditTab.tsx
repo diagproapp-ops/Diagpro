@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import DownloadIcon from '@mui/icons-material/Download';
-import axios from 'axios';
+import api from '../../api';
 
 // Se você só tem um tenant por admin, remova o filtro tenant_id abaixo e garanta backend filtrando pelo usuário autenticado.
 // Se há superadmin, inclua o filtro tenant_id na interface e backend.
@@ -15,8 +15,9 @@ const fetchAuditLogs = async (filters: any) => {
   const cleanFilters = Object.fromEntries(
     Object.entries(filters).filter(([_, v]) => v !== '' && v !== null && v !== undefined)
   );
-  const { data } = await axios.get('http://localhost:8000/admin/logs/geracao', { params: cleanFilters, withCredentials: true });
-  return data;
+  // cliente da API com o token de login (antes: axios direto, sem token -> 401 e a aba ficava vazia)
+  const { data } = await api.get('/admin/logs/geracao/', { params: cleanFilters });
+  return Array.isArray(data) ? data : [];
 };
 
 const AuditTab: React.FC = () => {
@@ -41,7 +42,7 @@ const AuditTab: React.FC = () => {
   // }, []);
 
   useEffect(() => {
-    fetchAuditLogs(filters).then(setLogs);
+    fetchAuditLogs(filters).then(setLogs).catch(() => setLogs([]));
   }, [filters]);
 
   const handleExport = () => {
@@ -109,6 +110,8 @@ const AuditTab: React.FC = () => {
             onChange={e => setFilters(f => ({ ...f, acao: e.target.value }))}
           >
             <MenuItem value="">Todas</MenuItem>
+            <MenuItem value="exportacao_provas">Exportação de provas</MenuItem>
+            <MenuItem value="exportacao_gabaritos">Exportação de gabaritos</MenuItem>
             <MenuItem value="Definir Geração">Definir Geração</MenuItem>
             <MenuItem value="Exportar">Exportar</MenuItem>
             <MenuItem value="Restaurar">Restaurar</MenuItem>

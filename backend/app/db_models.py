@@ -80,6 +80,7 @@ class AuditLogGeracao(Base):
 
 class Evento(Base):
     __tablename__ = "Eventos"
+    __table_args__ = (UniqueConstraint('tenant_id', 'identificador_evento', name='uq_eventos_tenant_identificador_evento'),)
 
     id_evento = Column(String, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
@@ -91,8 +92,9 @@ class Evento(Base):
     senha_evento_cripto = Column(Ciphertext, nullable=True)
     local_prova = Column(Ciphertext, nullable=True)
     observacoes = Column(Ciphertext, nullable=True)
+    preferencias_exportacao = Column(Ciphertext, nullable=True)  # padrão sugerido na tela de exportação (JSON)
     qtd_cargos = Column(Integer, nullable=False, default=1) 
-    identificador_evento = Column(String, unique=True, nullable=False)
+    identificador_evento = Column(String, nullable=False)  # único por cliente (ver __table_args__)
     is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime, default=None, nullable=True)
 
@@ -100,8 +102,9 @@ class Evento(Base):
 
 class Cargo(Base):
     __tablename__ = "Cargos"
+    __table_args__ = (UniqueConstraint('tenant_id', 'identificador_cargo', name='uq_cargos_tenant_identificador_cargo'),)
     id_cargo = Column(Text, primary_key=True)
-    identificador_cargo = Column(Text, unique=True, nullable=True)  # <-- ADICIONE ESTA LINHA!
+    identificador_cargo = Column(Text, nullable=True)  # único por cliente (ver __table_args__)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     id_evento_fk = Column(Text, ForeignKey("Eventos.id_evento"))
     nome_cargo = Column(Ciphertext, nullable=False)
@@ -190,9 +193,10 @@ class BancoFrases(Base):
 
 class QuestoesBanco(Base):
     __tablename__ = "QuestoesBanco"
+    __table_args__ = (UniqueConstraint('tenant_id', 'codigo_curto_questao', name='uq_questoesbanco_tenant_codigo_curto_questao'),)
 
     id_questao = Column(String, primary_key=True)
-    codigo_curto_questao = Column(String, unique=True, nullable=True)
+    codigo_curto_questao = Column(String, nullable=True)  # único por cliente (ver __table_args__)
     id_evento_fk = Column(String, ForeignKey("Eventos.id_evento"))
     enunciado = Column(Ciphertext, nullable=True)
     enunciado_formatado = Column(Ciphertext, nullable=True)
@@ -270,6 +274,7 @@ class ItensVerdadeiroFalso(Base):
     valor_correto = Column(Ciphertext, nullable=False)
     feedback_item = Column(Ciphertext, nullable=True)
     ordem = Column(Integer, nullable=True)
+    imagem_path_item = Column(Ciphertext, nullable=True)  # referência cifrada da imagem do item (sf1:...)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     questao = relationship("QuestoesBanco", backref="itens_vf")
@@ -305,8 +310,9 @@ class Company(Base):
 
 class Conteudo(Base):
     __tablename__ = 'conteudos'
+    __table_args__ = (UniqueConstraint('tenant_id', 'identificador_conteudo', name='uq_conteudos_tenant_identificador_conteudo'),)
     id_conteudo = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    identificador_conteudo = Column(String, unique=True, nullable=True)  # NOVO!
+    identificador_conteudo = Column(String, nullable=True)  # único por cliente (ver __table_args__)
     nome_conteudo = Column(Ciphertext, nullable=False)
     descricao = Column(Ciphertext)
     disciplina = Column(Ciphertext)

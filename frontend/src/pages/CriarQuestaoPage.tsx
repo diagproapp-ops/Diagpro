@@ -505,8 +505,8 @@ export default function CriarQuestaoPage() {
                     mb: 2,
                     p: 0,
                     borderRadius: 1,
-                    background: idx === 0 ? "#fffbe6" : "#fff",
-                    border: idx === 0 ? "2px solid #ff9800" : "1px solid #eee",
+                    background: idx === 0 ? "rgba(245, 158, 11, 0.12)" : "rgba(11, 19, 37, 0.8)",
+                    border: idx === 0 ? "2px solid #ff9800" : "1px solid rgba(148, 163, 184, 0.25)",
                     boxShadow: 0,
                     width: "100%",
                   }}
@@ -669,7 +669,7 @@ export default function CriarQuestaoPage() {
           />
 
           {form.autor_elaborador && (
-            <Typography variant="subtitle2" sx={{ color: "#888", mb: 1 }}>
+            <Typography variant="subtitle2" sx={{ color: "text.secondary", mb: 1 }}>
               Autor: {form.autor_elaborador}
             </Typography>
           )}

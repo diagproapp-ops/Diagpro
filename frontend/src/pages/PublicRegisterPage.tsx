@@ -149,12 +149,12 @@ export default function PublicRegisterPage() {
   }
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: '#f5f6fa', display: 'flex', alignItems: 'center' }}>
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', display: 'flex', alignItems: 'center' }}>
       <Paper elevation={4} sx={{ p: { xs: 2, md: 4 }, maxWidth: 520, mx: 'auto', borderRadius: 5 }}>
         {/* LOGO E NOME NO TOPO */}
         <Stack direction="column" alignItems="center" spacing={1} sx={{ mb: 2 }}>
           {/* Substitua pelo seu logo se quiser */}
-          <Avatar sx={{ width: 64, height: 64, mb: 1, bgcolor: "#1976d2", fontWeight: "bold" }}>D</Avatar>
+          <Avatar sx={{ width: 64, height: 64, mb: 1, bgcolor: "primary.main", fontWeight: "bold" }}>D</Avatar>
           <Typography variant="h4" fontWeight="bold" color="primary">DiagPro</Typography>
         </Stack>
         <Typography color="text.secondary" align="center" gutterBottom>
@@ -168,7 +168,7 @@ export default function PublicRegisterPage() {
           <Stack direction="column" alignItems="center" spacing={1} sx={{ mb: 2 }}>
             <Avatar
               src={avatarPreview || undefined}
-              sx={{ width: 90, height: 90, fontSize: 40, bgcolor: "#e3e3e3" }}
+              sx={{ width: 90, height: 90, fontSize: 40, bgcolor: "action.hover" }}
             />
             <Button
               variant="contained"

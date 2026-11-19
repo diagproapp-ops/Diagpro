@@ -31,7 +31,7 @@ export default function PlagioModal({ open, onClose, plagioResult, loadingPlagio
     <Modal open={open} onClose={onClose} sx={{ zIndex: 1601 }}>
       <Box sx={{
         position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-        bgcolor: "#fff", borderRadius: 3, boxShadow: 8, width: { xs: "98vw", sm: 480 }, minHeight: 380,
+        bgcolor: "#0B1325", borderRadius: 3, boxShadow: 8, width: { xs: "98vw", sm: 480 }, minHeight: 380,
         display: "block", zIndex: 1601
       }}>
         <Box sx={{ bgcolor: "#f44336", color: "#fff", p: 2, borderRadius: "12px 12px 0 0", display: "flex", alignItems: "center" }}>
@@ -46,7 +46,7 @@ export default function PlagioModal({ open, onClose, plagioResult, loadingPlagio
               <LinearProgress
                 variant="determinate"
                 value={plagioResult.percentual || 0}
-                sx={{ height: 13, borderRadius: 2, mb: 2, bgcolor: "#ffe0e0" }}
+                sx={{ height: 13, borderRadius: 2, mb: 2, bgcolor: "rgba(244, 67, 54, 0.18)" }}
                 color={riskColor(plagioResult.percentual)}
               />
               <Stack direction="row" alignItems="center" mb={2}>
@@ -63,7 +63,7 @@ export default function PlagioModal({ open, onClose, plagioResult, loadingPlagio
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Fontes encontradas:</Typography>
               {plagioResult.fontes.length === 0 && <Typography color="text.secondary">Nenhuma fonte suspeita encontrada.</Typography>}
               {plagioResult.fontes.map((fonte, i) => (
-                <Card key={i} sx={{ mb: 1, bgcolor: "#f9fbe7" }}>
+                <Card key={i} sx={{ mb: 1, bgcolor: "background.default" }}>
                   <CardContent>
                     <Typography variant="body2" gutterBottom>
                       <Link href={fonte.url} target="_blank" underline="hover" fontWeight={600}>{fonte.titulo || fonte.url}</Link>

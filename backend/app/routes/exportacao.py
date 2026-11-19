@@ -28,7 +28,9 @@ import datetime
 import tempfile
 from fastapi import BackgroundTasks
 from backend.app.auth import get_current_user
-from backend.app.security import carregar_evento_autorizado, caminho_dentro_de
+from backend.app.security import (
+    caminho_dentro_de, carregar_evento_autorizado, conferir_senha_evento, evento_com_senha, exigir_texto_claro,
+)
 import os
 import hmac
 import json
@@ -101,19 +103,14 @@ async def validar_senha_evento(
     if not senha_usuario:
         return {"valida": False}
 
-    query = select(DBEvento).where(DBEvento.id_evento == evento_id)
-    if current_user.tenant_id is not None:
-        query = query.where(DBEvento.tenant_id == current_user.tenant_id)
-    result = await db.execute(query)
-    evento = result.scalar_one_or_none()
-    if not evento:
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
+    try:
+        conferir_senha_evento(evento, senha_usuario, current_user)
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            raise
         return {"valida": False}
-
-    senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
-    if not senha_evento_cripto:
-        return {"valida": False}
-    senha_evento = decrypt_text(senha_evento_cripto)
-    return {"valida": hmac.compare_digest(senha_usuario, senha_evento)}
+    return {"valida": True}
 
 
 async def fetch_evento_cargo_prova(
@@ -154,12 +151,24 @@ async def fetch_evento_cargo_prova(
             blocos_questoes = json.loads(blocos_questoes)
         except Exception:
             blocos_questoes = []
+    tem_questoes = isinstance(blocos_questoes, list) and any(
+        (b.get("questoes") or b.get("questions")) for b in blocos_questoes if isinstance(b, dict)
+    )
+    if not tem_questoes:
+        # montagem iniciada e nunca preenchida: antes quebrava com erro 500 sem explicação
+        raise HTTPException(
+            status_code=409,
+            detail=f"A prova do cargo \"{getattr(cargo, 'nome_cargo', '')}\" está vazia. Faça a montagem antes de gerar.",
+        )
     metadados_prova = prova_montada.metadados_prova
     if isinstance(metadados_prova, str):
         try:
             metadados_prova = json.loads(metadados_prova)
         except Exception:
             metadados_prova = {}
+    if not isinstance(metadados_prova, dict):
+        # prova montada sem "Definir geração": usa os padrões (1 variação) em vez de quebrar com 500
+        metadados_prova = {}
 
     return evento, cargo, prova_montada, blocos_questoes, metadados_prova
 
@@ -271,6 +280,9 @@ async def montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, m
                 "descricao_imagem": getattr(t, "descricao_imagem", None),
             })
 
+    # nunca gerar prova com texto cifrado (dados legados): falha clara em vez de imprimir lixo
+    exigir_texto_claro({"blocos": blocos_questoes, "textos": textos_referencia_prova}, "prova")
+
     prova_dict = {
         "id_prova_montada": prova_montada.id_prova_montada,
         "nome_prova_montada": getattr(prova_montada, "nome_prova_montada", ""),
@@ -310,6 +322,7 @@ async def baixar_arquivo(
     tipo: str = Query(..., description="prova_pdf, prova_docx, gabarito, zip"),
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    evento_liberado=Depends(evento_com_senha),  # prova pronta só com a senha do evento
     workdir: str = Depends(secure_files.request_workdir),
 ):
     logger.debug("=== CHEGOU NO ENDPOINT baixar_arquivo ===")
@@ -528,6 +541,7 @@ async def gerar_todos_arquivos(
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    evento_liberado=Depends(evento_com_senha),  # prova pronta só com a senha do evento
     workdir: str = Depends(secure_files.request_workdir),
 ):
     import os, json, time, shutil
@@ -569,7 +583,7 @@ async def gerar_todos_arquivos(
     codigo_cargo = getattr(cargo, "codigo_cargo", "")
     textos_map = {}
 
-    num_variacoes = metadados_prova.get("definicao_geracao", {}).get("num_variacoes", 1)
+    num_variacoes = (metadados_prova.get("definicao_geracao") or {}).get("num_variacoes", 1)
     docx_paths = []
     pdf_paths = []
 
@@ -721,6 +735,7 @@ async def exportar_gabarito(
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    evento_liberado=Depends(evento_com_senha),  # prova pronta só com a senha do evento
     workdir: str = Depends(secure_files.request_workdir),
 ):
     import os
@@ -771,26 +786,11 @@ async def gerar_todos_arquivos_multiplos(
     if not cargos_id or not isinstance(cargos_id, list):
         return {"erro": "Nenhum cargo selecionado."}
 
-    # Busca o evento e a senha criptografada
-    result = await db.execute(select(DBEvento).where(DBEvento.id_evento == evento_id))
-    evento = result.scalar_one_or_none()
-    senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
-    senha_evento = decrypt_text(senha_evento_cripto)
-
-    if not evento:
-        return {"erro": "Evento não encontrado."}
+    # Evento do cliente do usuário + senha conferida ANTES de gerar qualquer arquivo
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
+    conferir_senha_evento(evento, senha_usuario, current_user)
     nome_evento = evento.nome_evento.strip().replace(" ", "_")
-    senha_evento_cripto = getattr(evento, "senha_evento_cripto", "")
-
-    # Valida a senha ANTES de gerar qualquer arquivo
-    if not senha_usuario:
-        return {"erro": "Senha não informada."}
-    if not senha_evento_cripto:
-        return {"erro": "Evento não possui senha cadastrada."}
-    senha_evento = decrypt_text(senha_evento_cripto)
-    if not hmac.compare_digest(senha_usuario.encode(), senha_evento.encode()):
-        logger.warning("Tentativa de exportação em lote com senha inválida (evento %s)", evento_id)
-        return {"erro": "Senha do evento inválida!"}
+    senha_evento = evento.senha_evento_cripto  # usada para cifrar o ZIP
 
     # Opções de formatação e exportação
     fonte = body.get("fonte", "Calibri")
@@ -822,6 +822,7 @@ async def gerar_todos_arquivos_multiplos(
         fetch_evento_cargo_prova, montar_prova_completa, document_generator, montar_dados_capa
     )
 
+    pdfs_finais: dict[str, list[str]] = {}
     for cargo_id in cargos_id:
         output_dir = os.path.join(workdir, "saida", re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id)))
         os.makedirs(output_dir, exist_ok=True)
@@ -832,7 +833,7 @@ async def gerar_todos_arquivos_multiplos(
         prova_dict = secure_files.materialize_into(prova_dict, current_user.tenant_id, workdir)
         nome_cargo = cargo.nome_cargo
         codigo_cargo = getattr(cargo, "codigo_cargo", "")
-        num_variacoes = metadados_prova.get("definicao_geracao", {}).get("num_variacoes", 1)
+        num_variacoes = (metadados_prova.get("definicao_geracao") or {}).get("num_variacoes", 1)
         cover_pdf_paths = getattr(cargo, 'cover_pdf_paths', None)
         cover_pdf_paths = secure_files.materialize_into({'cover_pdf_paths': cover_pdf_paths}, current_user.tenant_id, workdir)['cover_pdf_paths']
 
@@ -939,11 +940,12 @@ async def gerar_todos_arquivos_multiplos(
                     merger.write(f_out)
             elif pdf_path and os.path.exists(pdf_path):
                 shutil.copy2(pdf_path, caminho_pdf_final)
+            if os.path.exists(caminho_pdf_final):
+                pdfs_finais.setdefault(str(cargo_id), []).append(caminho_pdf_final)
 
     # --- Monta lista de arquivos para o ZIP ---
     base_dir = os.path.join(workdir, "saida")
     arquivos_para_zip = []
-    padrao_pdf = r"^\d+\s*-\s*[^-]+-\s*Tipo_([A-Z]|PADRAO|PADRÃO)\.pdf$"
 
     for cargo_id in cargos_id:
         dir_cargo = os.path.join(base_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id)))
@@ -958,11 +960,10 @@ async def gerar_todos_arquivos_multiplos(
             codigo_cargo = cargo_id
             nome_cargo = cargo_id
         nome_pasta_cargo = f"{codigo_cargo}_{nome_cargo.replace(' ', '_')}".replace('/', '_')
-        for file in os.listdir(dir_cargo):
-            file_path = os.path.join(dir_cargo, file)
-            if file.lower().endswith('.pdf') and re.match(padrao_pdf, file, re.IGNORECASE):
-                arcname = f"{nome_pasta_cargo}/{file}"
-                arquivos_para_zip.append((file_path, arcname))
+        # PDFs finais efetivamente gerados (antes: filtro por nome que exigia código numérico e
+        # descartava em silêncio o PDF de cargos com código como "AN-01" ou nome com hífen)
+        for file_path in pdfs_finais.get(str(cargo_id), []):
+            arquivos_para_zip.append((file_path, f"{nome_pasta_cargo}/{os.path.basename(file_path)}"))
         if manterDocx:
             for file in os.listdir(dir_cargo):
                 if file.lower().endswith('.docx'):

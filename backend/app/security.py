@@ -1,16 +1,23 @@
 # backend/app/security.py
 """Helpers de autorização e de manipulação segura de arquivos."""
 
+import hmac
+import json
+import logging
 import os
+import re
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from backend.app.auth import get_current_user
 from backend.app.database import SessionLocal, PlatformSessionLocal, set_tenant_context
 from backend.app.db_models import Evento as DBEvento
+from backend.app.rate_limit import checar_bloqueio_por_falhas, registrar_falha
 from backend.app.roles import UserRole
+
+_log = logging.getLogger(__name__)
 
 
 def is_admin_geral(user) -> bool:
@@ -79,6 +86,56 @@ async def evento_autorizado(
 ) -> DBEvento:
     """Dependência para rotas com o parâmetro de caminho {evento_id}."""
     return await carregar_evento_autorizado(evento_id, db, current_user)
+
+
+_TOKEN_CIFRADO = re.compile(r"gAAAAA[\w-]{40,}={0,2}|\be1\.\d+\.[\w-]{20,}")
+
+
+def exigir_texto_claro(dados, contexto: str = "prova") -> None:
+    """
+    Trava do gerador: recusa montar prova/gabarito se algum texto ainda estiver no formato cifrado
+    (Fernet legado ou e1). Melhor falhar com mensagem clara do que imprimir lixo cifrado na prova.
+    Não registra o conteúdo, só a quantidade.
+    """
+    texto = json.dumps(dados, ensure_ascii=False, default=str)
+    achados = len(_TOKEN_CIFRADO.findall(texto))
+    if achados:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(f"A {contexto} contém {achados} texto(s) ainda cifrado(s) e não pode ser gerada. "
+                    "Salve a montagem da prova novamente ou avise o suporte."),
+        )
+
+
+SENHA_EVENTO_HEADER = "X-Senha-Evento"
+_MAX_FALHAS_SENHA = 5
+_JANELA_FALHAS_SENHA = 600  # segundos
+
+
+def conferir_senha_evento(evento: DBEvento, senha: str | None, current_user) -> None:
+    """
+    Regra do DiagPro: prova pronta e gabarito só para quem tem a senha do evento.
+    Comparação em tempo constante; erros contam para bloqueio (5 em 10 min por usuário/evento).
+    """
+    chave = f"senha-evento:{getattr(current_user, 'id', '?')}:{evento.id_evento}"
+    checar_bloqueio_por_falhas(chave, _MAX_FALHAS_SENHA, _JANELA_FALHAS_SENHA)
+    if not senha:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Informe a senha do evento.")
+    guardada = evento.senha_evento_cripto or ""  # o ORM já entrega decifrada
+    if not guardada or not hmac.compare_digest(senha.encode(), guardada.encode()):
+        registrar_falha(chave)
+        _log.warning("Senha do evento inválida (evento %s, usuário %s)", evento.id_evento, getattr(current_user, "id", "?"))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Senha do evento inválida.")
+
+
+async def evento_com_senha(
+    evento: DBEvento = Depends(evento_autorizado),
+    current_user=Depends(get_current_user),
+    x_senha_evento: str | None = Header(None, alias=SENHA_EVENTO_HEADER),
+) -> DBEvento:
+    """Dependência: evento do cliente do usuário E senha do evento correta no cabeçalho X-Senha-Evento."""
+    conferir_senha_evento(evento, x_senha_evento, current_user)
+    return evento
 
 
 def nome_arquivo_seguro(nome: str | None, extensoes_permitidas: set[str] | None = None) -> str:

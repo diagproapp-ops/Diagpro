@@ -8,7 +8,7 @@ from backend.app.db_models import Evento, Cargo, ProvaMontada
 from backend.app.database import get_db
 from core.document_generator import DocumentGenerator
 from backend.app.utils_crypto import decrypt_text
-from backend.app.security import evento_autorizado, get_tenant_db, require_roles
+from backend.app.security import evento_autorizado, evento_com_senha, exigir_texto_claro, get_tenant_db, require_roles
 from backend.app.roles import UserRole
 import hmac
 import tempfile, os, zipfile, csv, logging, json
@@ -45,6 +45,8 @@ def normalize_prova_montada(prova):
             prova.blocos_questoes = json.loads(blocos)
         except Exception:
             prova.blocos_questoes = []
+    # nunca gerar gabarito com texto cifrado (dados legados)
+    exigir_texto_claro(prova.blocos_questoes, "prova")
     # campos string importantes
     if getattr(prova, "identificador_prova", None) is None:
         prova.identificador_prova = ""
@@ -75,28 +77,14 @@ async def listar_gabaritos_exportaveis(
 @router.post("/eventos/{evento_id}/exportar-gabaritos-zip", dependencies=[Depends(rate_limit(5, 60, "gabaritos-zip"))])
 async def exportar_gabaritos_zip(
     evento_id: str,
-    senha: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_tenant_db),
-    evento_autorizado_obj=Depends(evento_autorizado),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    evento: Evento = Depends(evento_com_senha),  # senha no cabeçalho X-Senha-Evento (antes ia na URL)
     workdir: str = Depends(secure_files.request_workdir),
 ):
     import pyzipper
 
-    result = await db.execute(select(Evento).filter(Evento.id_evento == evento_id))
-    evento: Evento = result.scalar_one_or_none()
-    if not evento:
-        raise HTTPException(status_code=404, detail="Evento não encontrado.")
-
-    if not evento.senha_evento_cripto:
-        raise HTTPException(status_code=500, detail="Senha do evento não cadastrada.")
-    try:
-        senha_original = decrypt_text(evento.senha_evento_cripto)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Erro ao descriptografar a senha do evento.")
-
-    if not hmac.compare_digest(senha.encode(), senha_original.encode()):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Senha inválida.")
+    senha_original = evento.senha_evento_cripto  # o ORM entrega decifrada; também cifra o ZIP
 
     result_cargos = await db.execute(select(Cargo).filter(Cargo.id_evento_fk == evento_id))
     cargos = result_cargos.scalars().all()
@@ -201,8 +189,8 @@ async def visualizar_gabarito(
     cargo_id: str,
     tipo_prova: str = "PADRÃO",  # permite escolher variação, se quiser
     db: AsyncSession = Depends(get_tenant_db),
-    evento_autorizado_obj=Depends(evento_autorizado),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    evento_liberado=Depends(evento_com_senha),  # gabarito é prova pronta: só com a senha do evento
 ):
     # Busca evento, cargo e prova montada (igual já faz)
     result_evento = await db.execute(select(Evento).filter(Evento.id_evento == evento_id))

@@ -552,3 +552,57 @@ async def test_question_types_create_edit_review_and_professor_contents(async_cl
     hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
     assert (await async_client.get("/conteudos/meus", headers=hp)).status_code == 200
     assert (await async_client.get(f"/conteudos/eventos/{ev}/conteudos", headers=hp)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_finished_exam_and_answer_key_require_event_password(async_client):
+    """Prova pronta e gabarito: só com a senha do evento (cabeçalho), com bloqueio após erros."""
+    reset_rate_limits()
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    cargos = (await async_client.get(f"/eventos/{ev}/cargos", headers=h)).json()
+    cargo = cargos[0]["id_cargo"] if cargos else "qualquer"
+    url_gab = f"/api/gabarito/eventos/{ev}/cargos/{cargo}/gabarito"
+
+    # sem senha / senha errada: recusado (403); a senha não vale mais na URL
+    assert (await async_client.get(url_gab, headers=h)).status_code == 403
+    assert (await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "errada"})).status_code == 403
+    assert (await async_client.post(f"/api/gabarito/eventos/{ev}/exportar-gabaritos-zip?senha=1234", headers=h)).status_code == 403
+    for rota in (f"/api/export/download?evento_id={ev}&cargo_id={cargo}&tipo=gabarito",):
+        assert (await async_client.get(rota, headers=h)).status_code == 403
+    for rota in (f"/api/export/eventos/{ev}/cargos/{cargo}/exportar-gabarito", f"/api/export/eventos/{ev}/cargos/{cargo}/gerar-arquivos"):
+        assert (await async_client.post(rota, headers=h, json={})).status_code == 403
+    # senha certa: passa da trava (o resultado depende de haver prova montada, mas nunca é 403)
+    r = await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "1234"})
+    assert r.status_code != 403, r.text
+    assert (await async_client.post(f"/api/export/eventos/{ev}/validar-senha", headers=h, json={"senha": "1234"})).json() == {"valida": True}
+
+    # outro cliente nunca chega à senha (evento não existe para ele)
+    h2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    assert (await async_client.get(url_gab, headers={**h2, "X-Senha-Evento": "1234"})).status_code == 404
+
+    # bloqueio: 5 erros em 10 min travam até a senha certa (por usuário + evento)
+    reset_rate_limits()
+    for _ in range(5):
+        assert (await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "x"})).status_code == 403
+    assert (await async_client.get(url_gab, headers={**h, "X-Senha-Evento": "1234"})).status_code == 429
+    reset_rate_limits()
+
+
+def test_generator_refuses_ciphertext():
+    from fastapi import HTTPException as _HTTPExc
+    from backend.app.security import exigir_texto_claro
+    exigir_texto_claro([{"questoes": [{"enunciado": "<p>Quanto é 2+2?</p>"}]}])
+    for lixo in ("gAAAAA" + "B" * 60 + "==", "e1.1." + "x" * 40):
+        with pytest.raises(_HTTPExc) as exc:
+            exigir_texto_claro([{"questoes": [{"enunciado": lixo}]}])
+        assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_app_custom_headers(async_client):
+    """O navegador só envia X-Senha-Evento / X-Tenant-Id se o pré-voo CORS os permitir."""
+    for metodo, rota in (("GET", "/api/gabarito/eventos/x/cargos/y/gabarito"), ("POST", "/api/gabarito/eventos/x/exportar-gabaritos-zip"), ("GET", "/users/me")):
+        r = await async_client.options(rota, headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": metodo,
+                                                      "Access-Control-Request-Headers": "authorization,x-senha-evento,x-tenant-id"})
+        assert r.status_code == 200, (rota, r.status_code, r.text)

@@ -34,6 +34,21 @@ const GabaritoPage: React.FC = () => {
   const [carregandoGabarito, setCarregandoGabarito] = useState(false);
   const [snackbar, setSnackbar] = useState<{ open: boolean, message: string, severity: "success" | "error" | "info" }>({ open: false, message: '', severity: "success" });
 
+  // Senha do evento: o gabarito só aparece para quem a informa (fica só em memória, nunca na URL)
+  const [senhaEvento, setSenhaEvento] = useState('');
+  const [senhaLiberada, setSenhaLiberada] = useState('');
+  const comSenha = { headers: { 'X-Senha-Evento': senhaLiberada } };
+  const tratarErroGabarito = (err: any, padrao: string) => {
+    const status = err?.response?.status;
+    if (status === 403 || status === 429) {
+      setSenhaLiberada('');
+      setGabarito([]);
+      setSnackbar({ open: true, message: err.response?.data?.detail || "Senha do evento inválida.", severity: "error" });
+    } else {
+      setSnackbar({ open: true, message: padrao, severity: "error" });
+    }
+  };
+
   // Exportação ZIP
   const [exportarZipModalOpen, setExportarZipModalOpen] = useState(false);
   const [senhaZip, setSenhaZip] = useState('');
@@ -82,7 +97,7 @@ const GabaritoPage: React.FC = () => {
 
   // Buscar o gabarito para o cargo/tipoProva selecionado OU buscar todos quando filtra por código curto
   useEffect(() => {
-    if (!cargo) {
+    if (!cargo || !senhaLiberada) {
       setGabarito([]);
       setDisciplinas([]);
       return;
@@ -92,7 +107,7 @@ const GabaritoPage: React.FC = () => {
     if (!filtroCodigoCurto) {
       // Busca normal, por variação
       api
-        .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(tipoProva)}`)
+        .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(tipoProva)}`, comSenha)
         .then(res => {
           setGabarito(res.data);
           const dists = Array.from(
@@ -104,7 +119,7 @@ const GabaritoPage: React.FC = () => {
           );
           setDisciplinas(dists);
         })
-        .catch(() => setSnackbar({ open: true, message: "Erro ao buscar gabarito.", severity: "error" }))
+        .catch(err => tratarErroGabarito(err, "Erro ao buscar gabarito."))
         .finally(() => setCarregandoGabarito(false));
     } else {
       // Busca de todas as variações, filtra pelo código curto
@@ -114,7 +129,7 @@ const GabaritoPage: React.FC = () => {
         Promise.all(
           variacoesApi.map(v =>
             api
-              .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(v)}`)
+              .get(`/api/gabarito/eventos/${eventId}/cargos/${cargo}/gabarito?tipo_prova=${encodeURIComponent(v)}`, comSenha)
               .then(res2 => 
                 Array.isArray(res2.data)
                   ? res2.data.map((q: any) => ({ ...q, tipo_prova: v })) // garante o campo tipo_prova
@@ -147,7 +162,7 @@ const GabaritoPage: React.FC = () => {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cargo, eventId, tipoProva, filtroCodigoCurto]);
+  }, [cargo, eventId, tipoProva, filtroCodigoCurto, senhaLiberada]);
 
   // Exportar ZIP com senha
   const handleExportarZip = async () => {
@@ -156,11 +171,12 @@ const GabaritoPage: React.FC = () => {
         setExportSnackbar({ open: true, message: "Digite a senha do evento.", severity: "error" });
         return;
       }
-      const response = await fetch(`/api/gabarito/eventos/${eventId}/exportar-gabaritos-zip?senha=${encodeURIComponent(senhaZip)}`, {
-        method: 'POST',
-      });
-      if (!response.ok) throw new Error('Senha inválida ou erro ao exportar');
-      const blob = await response.blob();
+      const response = await api.post(
+        `/api/gabarito/eventos/${eventId}/exportar-gabaritos-zip`,
+        null,
+        { headers: { 'X-Senha-Evento': senhaZip }, responseType: 'blob' }
+      );
+      const blob = new Blob([response.data], { type: 'application/zip' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -170,8 +186,16 @@ const GabaritoPage: React.FC = () => {
       a.remove();
       setExportarZipModalOpen(false);
       setExportSnackbar({ open: true, message: "Gabarito exportado com sucesso!", severity: "success" });
-    } catch (e) {
-      setExportSnackbar({ open: true, message: "Senha inválida ou erro ao exportar.", severity: "error" });
+    } catch (e: any) {
+      let detalhe = "Senha inválida ou erro ao exportar.";
+      try {
+        const corpo = e?.response?.data;
+        const info = corpo instanceof Blob ? JSON.parse(await corpo.text()) : corpo;
+        detalhe = info?.detail || detalhe;
+      } catch { /* mantém a mensagem genérica */ }
+      setExportSnackbar({ open: true, message: detalhe, severity: "error" });
+    } finally {
+      setSenhaZip('');
     }
   };
 
@@ -214,6 +238,37 @@ const GabaritoPage: React.FC = () => {
           </Box>
         </Box>
         <Divider sx={{ mb: 3 }} />
+
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="center" sx={{ mb: 2 }}>
+          {senhaLiberada ? (
+            <>
+              <Alert severity="success" sx={{ flex: 1, py: 0 }}>Gabarito liberado com a senha do evento.</Alert>
+              <Button variant="outlined" onClick={() => { setSenhaLiberada(''); setSenhaEvento(''); }}>
+                Bloquear
+              </Button>
+            </>
+          ) : (
+            <>
+              <TextField
+                label="Senha do evento"
+                type="password"
+                size="small"
+                value={senhaEvento}
+                onChange={e => setSenhaEvento(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && senhaEvento) { setSenhaLiberada(senhaEvento); setSenhaEvento(''); } }}
+                autoComplete="off"
+                sx={{ flex: 1 }}
+              />
+              <Button
+                variant="contained"
+                disabled={!senhaEvento}
+                onClick={() => { setSenhaLiberada(senhaEvento); setSenhaEvento(''); }}
+              >
+                Liberar gabarito
+              </Button>
+            </>
+          )}
+        </Stack>
 
         <Stack direction={{ xs: "column", sm: "row" }} spacing={3} alignItems="center" sx={{ mb: 3 }}>
           <FormControl fullWidth size="small" disabled={carregandoCargos}>
@@ -280,7 +335,9 @@ const GabaritoPage: React.FC = () => {
           </Box>
         ) : gabaritoFiltrado.length === 0 ? (
           <Typography color="text.secondary" align="center" sx={{ mt: 6 }}>
-            {cargo ? "Nenhum gabarito disponível para este filtro." : "Selecione um cargo para ver o gabarito."}
+            {!senhaLiberada
+              ? "Informe a senha do evento para ver o gabarito."
+              : cargo ? "Nenhum gabarito disponível para este filtro." : "Selecione um cargo para ver o gabarito."}
           </Typography>
         ) : (
           <Box sx={{ overflowX: "auto" }}>

@@ -77,3 +77,33 @@ def rate_limit(max_requests: int, window_seconds: int, key_prefix: str):
             q.append(now)
 
     return _limiter
+
+
+# --- Limite só de FALHAS (ex.: senha do evento errada) -------------------------------------------
+# Acertos não contam: telas que fazem várias chamadas legítimas seguidas não são travadas,
+# mas quem tenta adivinhar a senha é bloqueado depois de poucas tentativas.
+
+def _podar(q: deque, window_seconds: int) -> None:
+    cutoff = time.monotonic() - window_seconds
+    while q and q[0] <= cutoff:
+        q.popleft()
+
+
+def checar_bloqueio_por_falhas(key: str, max_falhas: int, window_seconds: int) -> None:
+    if os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "false":
+        return
+    with _LOCK:
+        q = _BUCKETS[f"falhas:{key}"]
+        _podar(q, window_seconds)
+        if len(q) >= max_falhas:
+            retry_after = max(1, int(window_seconds - (time.monotonic() - q[0])))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Muitas tentativas com senha errada. Aguarde antes de tentar novamente.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+
+def registrar_falha(key: str) -> None:
+    with _LOCK:
+        _BUCKETS[f"falhas:{key}"].append(time.monotonic())

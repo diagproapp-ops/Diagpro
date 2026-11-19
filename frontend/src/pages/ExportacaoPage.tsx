@@ -192,6 +192,13 @@ const ExportacaoProvaPage: React.FC = () => {
     setProgresso(100);
     setExportando(false);
 
+    // A API responde JSON (ex.: {"erro": ...}) quando não há o que gerar: não baixar isso como ZIP
+    if (String(response.headers['content-type'] || '').includes('application/json')) {
+      const info = JSON.parse(await (response.data as Blob).text());
+      setSnackbar({ open: true, message: `Erro na exportação: ${info.erro || info.detail || 'resposta inesperada'}`, severity: "error" });
+      return;
+    }
+
     // Força o download do ZIP
     const blob = new Blob([response.data], { type: "application/zip" });
     const url = window.URL.createObjectURL(blob);
@@ -206,9 +213,16 @@ const ExportacaoProvaPage: React.FC = () => {
     setSnackbar({ open: true, message: "Exportação concluída! ZIP baixado.", severity: "success" });
   } catch (e: any) {
     setExportando(false);
+    // Com responseType 'blob', a mensagem do servidor (ex.: senha inválida, prova vazia) vem dentro de um Blob
+    let detalhe = e.message;
+    try {
+      const corpo = e.response?.data;
+      const info = corpo instanceof Blob ? JSON.parse(await corpo.text()) : corpo;
+      detalhe = info?.detail || info?.erro || detalhe;
+    } catch { /* mantém a mensagem genérica */ }
     setSnackbar({
       open: true,
-      message: `Erro na exportação: ${(e.response?.data?.detail || e.message)}`,
+      message: `Erro na exportação: ${detalhe}`,
       severity: "error"
     });
   }

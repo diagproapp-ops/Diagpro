@@ -21,6 +21,9 @@ from pydantic import BaseModel, EmailStr
 
 import os
 from uuid import uuid4
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -340,6 +343,27 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
     return _serialize_user(user)
+
+@router.post("/{user_id}/2fa/resetar", status_code=status.HTTP_204_NO_CONTENT)
+async def resetar_2fa(
+    user_id: int = Path(..., description="ID do usuário"),
+    db: AsyncSession = Depends(get_tenant_db),
+    admin_user: DBUser = Depends(get_admin_user),
+):
+    """
+    Celular perdido: apaga o autenticador e os códigos de recuperação do usuário; no próximo login ele
+    cadastra de novo. Ninguém reseta o próprio 2FA (uma sessão roubada não troca o autenticador).
+    """
+    user = await _buscar_usuario_gerenciavel(db, user_id, admin_user)
+    if user.id == admin_user.id:
+        raise HTTPException(status_code=403, detail="Peça a outro administrador para resetar o seu 2FA.")
+    user.totp_secret = None
+    user.totp_ativo = False
+    user.totp_ultimo_passo = None
+    user.codigos_recuperacao = None
+    await db.commit()
+    logger.warning("2FA resetado (usuário %s por administrador %s)", user.id, admin_user.id)
+
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(

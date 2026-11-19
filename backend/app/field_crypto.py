@@ -173,9 +173,10 @@ def blind_index(value: str | None, *, scope: str, purpose: str, normalizer: str 
 # e fluxo, datas, números, booleanos não sensíveis e hashes de senha.
 ENCRYPTED: dict[str, dict[str, str]] = {
     "tenants": dict.fromkeys(["name", "domain", "responsible_name", "responsible_email", "responsible_phone"], "text"),
-    "users": dict.fromkeys(["username", "email", "full_name", "cpf", "phone", "department", "institution",
-                            "birth_date", "notes", "address", "avatar_url", "specialty", "pix_key", "banco",
-                            "agencia", "conta_corrente", "terms_acceptance"], "text"),
+    "users": {**dict.fromkeys(["username", "email", "full_name", "cpf", "phone", "department", "institution",
+                               "birth_date", "notes", "address", "avatar_url", "specialty", "pix_key", "banco",
+                               "agencia", "conta_corrente", "terms_acceptance", "totp_secret"], "text"),
+              "codigos_recuperacao": "json"},
     "company_data": dict.fromkeys(["company_name", "company_cnpj", "company_address", "company_phone",
                                    "company_email", "company_website", "company_logo_path"], "text"),
     "audit_log_geracao": dict.fromkeys(["usuario", "evento", "cargo", "parametros", "frases", "seed", "ip",

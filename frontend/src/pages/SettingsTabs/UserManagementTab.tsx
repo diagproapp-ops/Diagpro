@@ -3,7 +3,8 @@ import {
   Box, Button, Typography, Table, TableBody, TableCell, TableHead, TableRow, Paper, Stack, Alert,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, IconButton, TableContainer
 } from '@mui/material';
-import { Edit, Delete } from '@mui/icons-material';
+import { Edit, Delete, PhonelinkLock } from '@mui/icons-material';
+import { Chip, Tooltip } from '@mui/material';
 import api from '../../api';
 import { Switch } from '@mui/material';
 import { useAuth } from '../../contexts/AuthContext';
@@ -147,6 +148,17 @@ export default function UserManagementTab() {
     setOpen(true);
   }
 
+  // Celular perdido: apaga o autenticador; no próximo login a pessoa cadastra de novo
+  function handleResetar2fa(u: UserForm) {
+    if (!u.id) return;
+    if (!window.confirm(`Resetar a verificação em duas etapas de ${u.username}?\n\nNo próximo login a pessoa vai cadastrar o autenticador de novo. Faça isso só depois de confirmar a identidade dela.`)) return;
+    api.post(`/users/${u.id}/2fa/resetar`)
+      .then(() => setMessage(`2FA de ${u.username} resetado. Ela cadastra o autenticador no próximo login.`))
+      .catch(err => setError(
+        typeof err?.response?.data?.detail === "string" ? err.response.data.detail : "Erro ao resetar o 2FA."
+      ));
+  }
+
   function handleDelete(id?: number) {
     if (!id) return;
     if (window.confirm("Tem certeza que deseja excluir este usuário?")) {
@@ -190,6 +202,7 @@ export default function UserManagementTab() {
               <TableCell>Função</TableCell>
               <TableCell>Departamento</TableCell>
               <TableCell>Instituição</TableCell>
+              <TableCell>2FA</TableCell>
               <TableCell>Ações</TableCell>
             </TableRow>
           </TableHead>
@@ -210,7 +223,16 @@ export default function UserManagementTab() {
                 <TableCell>{u.department || '-'}</TableCell>
                 <TableCell>{u.institution || '-'}</TableCell>
                 <TableCell>
+                  <Chip size="small" label={(u as any).totp_ativo ? 'Ativo' : 'Pendente'}
+                        color={(u as any).totp_ativo ? 'success' : 'warning'} variant="outlined" />
+                </TableCell>
+                <TableCell>
                   <IconButton onClick={() => handleEdit(u)}><Edit /></IconButton>
+                  <Tooltip title="Resetar 2FA (celular perdido)">
+                    <span>
+                      <IconButton onClick={() => handleResetar2fa(u)} disabled={!(u as any).totp_ativo}><PhonelinkLock /></IconButton>
+                    </span>
+                  </Tooltip>
                   <IconButton onClick={() => handleDelete(u.id)}><Delete /></IconButton>
                 </TableCell>
               </TableRow>

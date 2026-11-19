@@ -671,3 +671,64 @@ def test_generator_renders_editor_html_inline_and_answer_lines():
     g._add_linhas_resposta(doc, 7)
     novas = doc.paragraphs[antes:]
     assert sum(1 for q in novas if q._p.pPr is not None and q._p.pPr.find(_qn("w:pBdr")) is not None) == 7
+
+
+@pytest.mark.asyncio
+async def test_two_factor_is_mandatory_for_everyone(async_client):
+    """Senha certa não libera acesso; 2FA obrigatório (cadastro, verificação, reuso, recuperação, bloqueio, reset)."""
+    import pyotp
+    from backend.app.auth import create_access_token as _cat
+    reset_rate_limits()
+    login = lambda: async_client.post("/auth/login", data={"username": "vhugo1234", "password": "TestPassword123!", "recaptcha_token": "x"})
+
+    r = (await login()).json()
+    assert r["etapa"] == "cadastro_2fa" and "access_token" not in r
+    passe = r["token_2fa"]
+    # o passe de 2FA não abre nada
+    assert (await async_client.get("/users/me", headers={"Authorization": f"Bearer {passe}"})).status_code == 401
+    # token antigo (sem a marca de 2FA) também não
+    velho = _cat({"sub": "vhugo1234", "role": "diagramador", "tenant_id": 1})
+    assert (await async_client.get("/users/me", headers={"Authorization": f"Bearer {velho}"})).status_code == 401
+
+    cad = (await async_client.post("/auth/2fa/cadastro/iniciar", json={"token_2fa": passe})).json()
+    assert cad["qr_code"].startswith("data:image/png;base64,")
+    totp = pyotp.TOTP(cad["segredo"])
+    assert (await async_client.post("/auth/2fa/cadastro/confirmar", json={"token_2fa": passe, "codigo": "000000"})).status_code == 400
+    codigo_usado = totp.now()
+    ok = (await async_client.post("/auth/2fa/cadastro/confirmar", json={"token_2fa": passe, "codigo": codigo_usado})).json()
+    assert len(ok["codigos_recuperacao"]) == 10 and ok["access_token"]
+    h = {"Authorization": f"Bearer {ok['access_token']}"}
+    me = (await async_client.get("/users/me", headers=h)).json()
+    assert me["totp_ativo"] is True and "totp_secret" not in me and "codigos_recuperacao" not in me
+
+    # próximo login pede o código; o mesmo código não vale duas vezes
+    r = (await login()).json()
+    assert r["etapa"] == "2fa"
+    reuso = await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": codigo_usado})
+    assert reuso.status_code == 400
+    # código de recuperação: vale uma vez
+    cod = ok["codigos_recuperacao"][0]
+    v = (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": cod})).json()
+    assert v["access_token"] and v["codigos_recuperacao_restantes"] == 9
+    assert (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": cod})).status_code == 400
+
+    # bloqueio depois de erros seguidos
+    reset_rate_limits()
+    r = (await login()).json()
+    for _ in range(5):
+        assert (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": "123456"})).status_code == 400
+    assert (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": totp.now()})).status_code == 429
+    reset_rate_limits()
+
+    # reset pelo administrador do cliente; ninguém reseta o próprio
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    usuarios = (await async_client.get("/users/", headers=a1)).json()
+    alvo = next(u for u in usuarios if u["username"] == "vhugo1234")
+    eu = next(u for u in usuarios if u["username"] == "admin1")
+    assert (await async_client.post(f"/users/{eu['id']}/2fa/resetar", headers=a1)).status_code == 403
+    assert (await async_client.post(f"/users/{alvo['id']}/2fa/resetar", headers=a1)).status_code == 204
+    assert (await login()).json()["etapa"] == "cadastro_2fa"
+    # admin de outro cliente não alcança o usuário
+    a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    assert (await async_client.post(f"/users/{alvo['id']}/2fa/resetar", headers=a2)).status_code == 404
+    reset_rate_limits()

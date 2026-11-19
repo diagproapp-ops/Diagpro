@@ -48,6 +48,11 @@ class User(Base):
     conta_corrente = Column(Ciphertext, nullable=True)     # <--- NOVO
     is_active = Column(Boolean, default=True)
     terms_acceptance = Column(Ciphertext, nullable=True)
+    # 2FA (TOTP) obrigatório para todos: segredo e códigos de recuperação cifrados
+    totp_secret = Column(Ciphertext, nullable=True)
+    totp_ativo = Column(Boolean, nullable=False, default=False, server_default="false")
+    totp_ultimo_passo = Column(Integer, nullable=True)  # anti-reuso do mesmo código
+    codigos_recuperacao = Column(Ciphertext, nullable=True)  # lista de HMACs (cada código vale uma vez)
     username_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
     email_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
     full_name_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)

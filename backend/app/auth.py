@@ -138,6 +138,14 @@ async def _cliente_em_gestao(request: Request) -> int | None:
 async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> PydanticUser:
     """Valida o token e carrega o usuário (ver _load_user_from_token)."""
     payload = decode_token_payload(token)
+    # 2FA obrigatório: só vale token emitido DEPOIS do segundo fator. Passes de 2FA (com "scope") e
+    # tokens antigos (sem "mfa") não dão acesso a nada.
+    if payload.get("scope") or payload.get("mfa") is not True:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sessão sem verificação em duas etapas. Faça login novamente.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     user = await _load_user_from_token(payload)
 
     if user is None:

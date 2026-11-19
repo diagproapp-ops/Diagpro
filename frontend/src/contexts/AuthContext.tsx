@@ -7,9 +7,15 @@ interface AuthContextType {
   isAuthenticated: boolean;
   user: UserType | null;
   loading: boolean;
-  login: (username: string, password: string, recaptchaToken: string) => Promise<void>;
+  login: (username: string, password: string, recaptchaToken: string) => Promise<ResultadoLogin>;
+  concluirLogin: (dados: { access_token: string; role?: string; tenant_id?: number | null }) => Promise<void>;
   logout: () => void;
 }
+
+// Senha certa não libera acesso: o servidor pede o segundo fator (2FA obrigatório para todos).
+export type ResultadoLogin =
+  | { etapa: 'ok' }
+  | { etapa: '2fa' | 'cadastro_2fa'; token_2fa: string };
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
@@ -39,13 +45,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     checkAuth();
   }, []);
 
-  const login = async (username: string, password: string, recaptchaToken: string) => {
+  const login = async (username: string, password: string, recaptchaToken: string): Promise<ResultadoLogin> => {
     const formData = new FormData();
     formData.append('username', username);
     formData.append('password', password);
     formData.append('recaptcha_token', recaptchaToken);
     const response = await api.post('/auth/login', formData);
-    const { access_token, role, tenant_id } = response.data; // <-- Corrigido aqui!
+    if (response.data?.etapa === '2fa' || response.data?.etapa === 'cadastro_2fa') {
+      return { etapa: response.data.etapa, token_2fa: response.data.token_2fa };
+    }
+    await concluirLogin(response.data);
+    return { etapa: 'ok' };
+  };
+
+  // Chamado depois do 2FA: grava o token de acesso e carrega o usuário
+  const concluirLogin = async (dados: { access_token: string; role?: string; tenant_id?: number | null }) => {
+    const { access_token, role, tenant_id } = dados;
     localStorage.removeItem(CLIENTE_EM_GESTAO_KEY); // todo login começa na visão global
     localStorage.setItem('authToken', access_token);
     api.defaults.headers.Authorization = `Bearer ${access_token}`;
@@ -66,7 +81,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated: !!user, user, loading, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated: !!user, user, loading, login, concluirLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

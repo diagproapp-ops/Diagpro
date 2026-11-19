@@ -278,6 +278,10 @@ export default function EditarQuestaoPage() {
         errors.num_linhas_discursiva = "Número de linhas obrigatório.";
     }
     if (form.tipo === "SUBJETIVA") {
+      // linhas impressas abaixo do enunciado na prova diagramada
+      const linhas = Number(String(form.num_linhas_discursiva ?? "").trim());
+      if (!linhas || linhas < 1 || linhas > 60)
+        errors.num_linhas_discursiva = "Informe de 1 a 60 linhas.";
       if (!form.texto_subjetivo_orientacao.trim())
         errors.texto_subjetivo_orientacao = "Orientação é obrigatória.";
       if (!form.texto_subjetivo_nota_maxima.trim())
@@ -344,7 +348,7 @@ export default function EditarQuestaoPage() {
             .split(",")
             .map(t => t.trim())
             .filter(Boolean),
-          numero_linhas_resposta: form.tipo === "DISCURSIVA"
+          numero_linhas_resposta: (form.tipo === "DISCURSIVA" || form.tipo === "SUBJETIVA")
             ? Number(form.num_linhas_discursiva)
             : undefined,
           texto_subjetivo_orientacao: form.tipo === "SUBJETIVA"
@@ -676,6 +680,17 @@ export default function EditarQuestaoPage() {
           {form.tipo === "SUBJETIVA" && (
             <>
               <Divider sx={{ my: 2 }}>Campos Subjetiva</Divider>
+              <TextField
+                label="Número de linhas para resposta *"
+                value={form.num_linhas_discursiva}
+                onChange={e => setForm(prev => ({ ...prev, num_linhas_discursiva: e.target.value }))}
+                error={!!fieldErrors.num_linhas_discursiva}
+                helperText={fieldErrors.num_linhas_discursiva || "Linhas impressas abaixo do enunciado na prova."}
+                type="number"
+                inputProps={{ min: 1, max: 60 }}
+                fullWidth
+                sx={{ mb: 2 }}
+              />
               <CampoComEditorAvancado
                 label="Orientação da Resposta *"
                 value={form.texto_subjetivo_orientacao}

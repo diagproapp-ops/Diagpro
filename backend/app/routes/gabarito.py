@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, HTTPException, Request, status, Depends
 
 from backend.app.auditoria_exportacao import registrar_exportacao
 from backend.app.verificacao_prova import verificar_prova
+from backend.app.dados_prova import completar_questoes
 from fastapi.responses import FileResponse, Response
 from backend.app import secure_files
 from backend.app.rate_limit import rate_limit
@@ -120,6 +121,7 @@ async def exportar_gabaritos_zip(
 
         prova_montada.evento = evento
         prova_montada.cargo = cargo
+        await completar_questoes(db, blocos)
 
         # gabarito de prova com problema sairia errado: mesma checagem da exportação das provas
         checagem = await verificar_prova(db, cargo, prova_montada, blocos)
@@ -240,6 +242,7 @@ async def visualizar_gabarito(
     prova_montada = normalize_prova_montada(prova_montada)
     prova_montada.evento = evento
     prova_montada.cargo = cargo
+    await completar_questoes(db, prova_montada.blocos_questoes)
 
     checagem = await verificar_prova(db, cargo, prova_montada, prova_montada.blocos_questoes)
     if checagem["bloqueios"]:
@@ -301,6 +304,7 @@ async def listar_variacoes(
     if not prova_montada:
         return []
     prova_montada = normalize_prova_montada(prova_montada)
+    await completar_questoes(db, prova_montada.blocos_questoes)
     # Use o mesmo generator da exportação
     prova_montada.evento = evento_id  # ou o objeto evento, se necessário para o generator
     prova_montada.cargo = cargo_id    # ou o objeto cargo, se necessário

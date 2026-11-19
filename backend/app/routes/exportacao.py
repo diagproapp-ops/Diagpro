@@ -32,6 +32,7 @@ from backend.app.security import (
     caminho_dentro_de, carregar_evento_autorizado, conferir_senha_evento, evento_com_senha, exigir_texto_claro,
 )
 from backend.app.verificacao_prova import verificar_prova
+from backend.app.dados_prova import completar_questoes
 from backend.app.auditoria_exportacao import registrar_exportacao
 import os
 import hmac
@@ -205,6 +206,9 @@ async def montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, m
         cargo_dict["company"] = {"company_logo_path": ""}
     # --- FIM PATCH LOGO ---
     print("DEBUG cargo_dict final:", cargo_dict)
+
+    # Tipo, itens de Certo/Errado e linhas de Subjetiva/Discursiva que montagens antigas não guardavam
+    await completar_questoes(db, blocos_questoes)
 
     # Preenche alternativas se necessário
     for bloco in blocos_questoes:

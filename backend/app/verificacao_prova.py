@@ -14,10 +14,10 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.dados_prova import LINHAS_PADRAO_SUBJETIVA, completar_questoes
 from backend.app.db_models import DisciplinaDaProva, QuestoesBanco
 
 _TAGS = re.compile(r"<[^>]+>")
-TIPOS_NAO_DIAGRAMADOS = {"CERTO_ERRADO": "Certo/Errado", "SUBJETIVA": "Subjetiva"}
 
 
 def _texto(html) -> str:
@@ -27,6 +27,7 @@ def _texto(html) -> str:
 async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) -> dict:
     bloqueios: list[dict] = []
     avisos: list[dict] = []
+    await completar_questoes(db, blocos)
     itens = [(b, q) for b in (blocos or []) if isinstance(b, dict) for q in (b.get("questoes") or [])]
     ids = [q.get("id_questao") for _, q in itens if q.get("id_questao")]
     no_banco = {}
@@ -53,9 +54,22 @@ async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) 
         if not _texto(q.get("enunciado")) and not q.get("caminho_imagem_relativo"):
             add(bloqueios, "Enunciado vazio.")
 
-        if tipo in TIPOS_NAO_DIAGRAMADOS:
-            add(avisos, f"Questão {TIPOS_NAO_DIAGRAMADOS[tipo]}: a diagramação ainda não imprime este tipo; a prova sairá sem ela.")
-        elif "DISCURSIVA" not in tipo:
+        if tipo == "CERTO_ERRADO":
+            itens_vf = q.get("itens_vf") or []
+            if not itens_vf:
+                add(bloqueios, "Questão Certo/Errado sem itens.")
+            for pos, it in enumerate(itens_vf, start=1):
+                if not _texto(it.get("afirmacao")) and not it.get("imagem_path_item"):
+                    add(bloqueios, f"Item {pos} da Certo/Errado sem texto nem imagem.")
+                if not isinstance(it.get("valor_correto"), bool):
+                    add(bloqueios, f"Item {pos} da Certo/Errado sem resposta (Certo ou Errado).")
+        elif tipo == "SUBJETIVA":
+            if not (q.get("detalhes_discursiva") or {}).get("numero_linhas_resposta"):
+                add(avisos, f"Subjetiva sem quantidade de linhas definida: sairá com {LINHAS_PADRAO_SUBJETIVA} linhas.")
+        elif "DISCURSIVA" in tipo:
+            if "discursiva" not in disciplina.lower():
+                add(avisos, "Questão Discursiva fora de um bloco \"Discursiva\": a diagramação não a imprime.")
+        else:
             opcoes = q.get("opcoes") or []
             if not opcoes:
                 add(bloqueios, "Questão sem alternativas.")

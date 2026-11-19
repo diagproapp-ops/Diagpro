@@ -577,6 +577,11 @@ async def test_finished_exam_and_answer_key_require_event_password(async_client)
     assert r.status_code != 403, r.text
     assert (await async_client.post(f"/api/export/eventos/{ev}/validar-senha", headers=h, json={"senha": "1234"})).json() == {"valida": True}
 
+    # detalhes do evento: senha errada = 403 (nunca 401, que o app trata como sessão expirada e desloga)
+    assert (await async_client.get(f"/eventos/{ev}/detalhes?senha=errada", headers=h)).status_code == 403
+    r = await async_client.get(f"/eventos/{ev}/detalhes?senha=1234", headers=h)
+    assert r.status_code == 200 and r.json()["nome_evento"] == "Evento CI Teste", r.text
+
     # outro cliente nunca chega à senha (evento não existe para ele)
     h2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
     assert (await async_client.get(url_gab, headers={**h2, "X-Senha-Evento": "1234"})).status_code == 404

@@ -19,6 +19,7 @@ from backend.app.auth import get_current_user, verify_password
 from backend.app.roles import UserRole
 from backend.app import dois_fatores as df
 from backend.app import politica_senha
+from backend.app import configuracoes
 from backend.app.auth import oauth2_scheme, decode_token_payload
 from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
@@ -84,7 +85,8 @@ async def login_for_access_token(
     
     # Senha correta NÃO libera acesso: só um passe de 5 min para o segundo fator (2FA obrigatório).
     # troca obrigatória (provisória, vencida ou fora da política): pedida DEPOIS do 2FA, antes do acesso
-    extra = {"trocar": True} if politica_senha.precisa_trocar(user, password) else {}
+    cfg = (await configuracoes.ler_plataforma())["seguranca"]
+    extra = {"trocar": True} if politica_senha.precisa_trocar(user, password, cfg) else {}
     if user.totp_ativo:
         return {"etapa": "2fa", "token_2fa": df.criar_passe(user, df.SCOPE_VERIFICAR, **extra)}
     return {"etapa": "cadastro_2fa", "token_2fa": df.criar_passe(user, df.SCOPE_CADASTRO, **extra)}
@@ -117,14 +119,17 @@ def _role(user) -> str:
     return r.value if isinstance(r, UserRole) else str(r)
 
 
-def _resposta_acesso(user, extra: dict | None = None, payload: dict | None = None) -> dict:
+async def _resposta_acesso(user, extra: dict | None = None, payload: dict | None = None) -> dict:
     if payload and payload.get("trocar"):
         # 2FA ok, mas a senha precisa ser trocada antes de entrar
+        cfg = (await configuracoes.ler_plataforma())["seguranca"]
         resposta = {"etapa": "trocar_senha", "token_2fa": df.criar_passe(user, df.SCOPE_TROCA_SENHA),
-                    "regras": politica_senha.regras()}
+                    "regras": politica_senha.regras(cfg)}
         resposta.update(extra or {})
         return resposta
-    resposta = {"access_token": df.criar_token_acesso(user), "token_type": "bearer", "role": user.role}
+    minutos = await configuracoes.inatividade_do_usuario(user.tenant_id)
+    resposta = {"access_token": df.criar_token_acesso(user, minutos=minutos), "token_type": "bearer",
+                "role": user.role, "inatividade_minutos": minutos}
     if user.tenant_id is not None:
         resposta["tenant_id"] = user.tenant_id
     resposta.update(extra or {})
@@ -164,7 +169,7 @@ async def confirmar_cadastro_2fa(body: CodigoBody, db: AsyncSession = Depends(ge
     user.codigos_recuperacao = hashes
     await db.commit()
     logger.warning("2FA ativado (usuário %s)", user.id)
-    return _resposta_acesso(user, {"codigos_recuperacao": codigos}, payload)
+    return await _resposta_acesso(user, {"codigos_recuperacao": codigos}, payload)
 
 
 @router.post("/2fa/verificar")
@@ -189,7 +194,7 @@ async def verificar_2fa(body: CodigoBody, db: AsyncSession = Depends(get_auth_db
         extra["codigos_recuperacao_restantes"] = len(restantes)
         logger.warning("Login com código de recuperação (usuário %s, restam %d)", user.id, len(restantes))
     await db.commit()
-    return _resposta_acesso(user, extra, payload)
+    return await _resposta_acesso(user, extra, payload)
 
 
 @router.post("/2fa/codigos-recuperacao")
@@ -230,28 +235,32 @@ class MinhaSenhaBody(BaseModel):
     codigo: str
 
 
-def _validar_nova_senha(user, nova: str) -> None:
-    erros = politica_senha.problemas(nova, user.username, user.email or "")
+async def _validar_nova_senha(user, nova: str) -> dict:
+    cfg = (await configuracoes.ler_plataforma())["seguranca"]
+    erros = politica_senha.problemas(nova, user.username, user.email or "", cfg)
     if politica_senha.repetida(nova, user.password_hash, user.senha_historico):
-        erros.append(f"A nova senha não pode repetir nenhuma das últimas {politica_senha.HISTORICO} senhas.")
+        erros.append(f"A nova senha não pode repetir nenhuma das últimas {cfg['senha_historico']} senhas.")
     if erros:
         raise HTTPException(status_code=400, detail={"mensagem": "A senha não atende à política.", "problemas": erros})
+    return cfg
 
 
 @router.get("/senha/regras")
 async def regras_da_senha():
-    return {"regras": politica_senha.regras(), "tamanho_minimo": politica_senha.TAMANHO_MINIMO}
+    cfg = (await configuracoes.ler_plataforma())["seguranca"]
+    return {"regras": politica_senha.regras(cfg), "tamanho_minimo": cfg["senha_tamanho_minimo"],
+            "tipos_minimos": cfg["senha_tipos_minimos"]}
 
 
 @router.post("/senha/trocar", dependencies=[Depends(rate_limit(10, 60, "troca-senha"))])
 async def trocar_senha_obrigatoria(body: TrocaSenhaBody, db: AsyncSession = Depends(get_auth_db)):
     """Troca obrigatória logo depois do 2FA (senha provisória, vencida ou fora da política)."""
     user = await _usuario_do_passe(db, df.ler_passe(body.token_2fa, (df.SCOPE_TROCA_SENHA,)))
-    _validar_nova_senha(user, body.nova_senha)
-    politica_senha.aplicar_nova_senha(user, body.nova_senha)
+    cfg = await _validar_nova_senha(user, body.nova_senha)
+    politica_senha.aplicar_nova_senha(user, body.nova_senha, cfg=cfg)
     await db.commit()
     logger.warning("Senha trocada no login (usuário %s)", user.id)
-    return _resposta_acesso(user)
+    return await _resposta_acesso(user)
 
 
 @router.post("/senha/minha", dependencies=[Depends(rate_limit(10, 60, "minha-senha"))])
@@ -271,9 +280,9 @@ async def trocar_minha_senha(
     if not verify_password(body.senha_atual, user.password_hash) or passo is None:
         registrar_falha(chave)
         raise HTTPException(status_code=400, detail="Senha atual ou código do autenticador incorretos.")
-    _validar_nova_senha(user, body.nova_senha)
+    cfg = await _validar_nova_senha(user, body.nova_senha)
     user.totp_ultimo_passo = passo
-    politica_senha.aplicar_nova_senha(user, body.nova_senha)
+    politica_senha.aplicar_nova_senha(user, body.nova_senha, cfg=cfg)
     await db.commit()
     return {"ok": True}
 
@@ -287,11 +296,15 @@ async def renovar_sessao(token: str = Depends(oauth2_scheme), current_user=Depen
     import time as _t
     payload = decode_token_payload(token)
     auth_time = payload.get("auth_time")
-    if not auth_time or _t.time() - int(auth_time) > df.SESSAO_MAXIMA_SEGUNDOS:
+    maximo = (await configuracoes.ler_plataforma())["seguranca"]["sessao_maxima_horas"] * 3600
+    if not auth_time or _t.time() - int(auth_time) > maximo:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sessão encerrada. Entre novamente.",
                             headers={"WWW-Authenticate": "Bearer"})
     dados = {"sub": payload["sub"], "role": payload.get("role"), "mfa": True, "auth_time": int(auth_time)}
     if payload.get("tenant_id") is not None:
         dados["tenant_id"] = payload["tenant_id"]
     from backend.app.auth import create_access_token
-    return {"access_token": create_access_token(dados), "token_type": "bearer"}
+    from datetime import timedelta as _td
+    minutos = await configuracoes.inatividade_do_usuario(payload.get("tenant_id"))
+    return {"access_token": create_access_token(dados, expires_delta=_td(minutes=minutos)), "token_type": "bearer",
+            "inatividade_minutos": minutos}

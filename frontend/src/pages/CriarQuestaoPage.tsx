@@ -97,6 +97,19 @@ export default function CriarQuestaoPage() {
   });
   const [sending, setSending] = useState(false);
 
+  // Tipos que a banca usa (Configurações > Regras das questões)
+  const [tiposPermitidos, setTiposPermitidos] = useState<string[]>(TIPO_QUESTAO.map(t => t.value));
+  useEffect(() => {
+    api.get('/config/regras-questoes')
+      .then(({ data }) => {
+        const tipos: string[] = Array.isArray(data?.tipos_permitidos) && data.tipos_permitidos.length ? data.tipos_permitidos : TIPO_QUESTAO.map(t => t.value);
+        setTiposPermitidos(tipos);
+        setForm(prev => tipos.includes(prev.tipo) ? prev : { ...prev, tipo: tipos[0] });
+      })
+      .catch(() => {});
+  }, []);
+  const opcoesTipo = TIPO_QUESTAO.filter(t => tiposPermitidos.includes(t.value));
+
   // Textos de Referência
   const [textosReferencia, setTextosReferencia] = useState<TextoReferenciaType[]>([]);
   const [carregandoTextosReferencia, setCarregandoTextosReferencia] = useState(false);
@@ -345,7 +358,7 @@ export default function CriarQuestaoPage() {
         {/* Tipo de Questão */}
         <Box sx={{ mb: 3, maxWidth: 320 }}>
           <Autocomplete
-            options={TIPO_QUESTAO}
+            options={opcoesTipo}
             getOptionLabel={opt => opt.label}
             value={TIPO_QUESTAO.find(opt => opt.value === form.tipo) || null}
             onChange={(_, newValue) =>

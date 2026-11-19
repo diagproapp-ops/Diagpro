@@ -562,7 +562,12 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             gap: 1.25,
           }}
         >
-          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0 }}>
+          <Stack
+            direction="row" spacing={1.25} alignItems="center"
+            sx={{ minWidth: 0, cursor: 'pointer', borderRadius: 2, '&:hover': { opacity: 0.85 } }}
+            title="Minha conta: senha, verificação em duas etapas e sessão"
+            onClick={() => navigate('/minha-conta')}
+          >
             <Box
               sx={{
                 width: 36,

@@ -188,9 +188,10 @@ async def create_admin_for_client(
     username = f"admin{client_id}"
     email = f"admin{client_id}@{tenant.domain}.com"
     # senha forte e aleatória, exibida uma única vez ao administrador geral (nunca uma senha fixa)
-    from backend.app import politica_senha
-    password = secrets.token_urlsafe(14)
-    while politica_senha.problemas(password, username, email):
+    from backend.app import configuracoes, politica_senha
+    cfg = (await configuracoes.ler_plataforma())["seguranca"]
+    password = secrets.token_urlsafe(max(14, cfg["senha_tamanho_minimo"]))
+    while politica_senha.problemas(password, username, email, cfg):
         password = secrets.token_urlsafe(14)
     password_hash = get_password_hash(password)
 

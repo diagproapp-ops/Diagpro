@@ -74,7 +74,7 @@ Classificação adotada:
 | Dicionário (`dicio.com.br`) | **Implementada parcialmente** | Scraping HTML via regex; não testado. |
 | Biblioteca de Questões (`/api/biblioteca`) | **Implementada e verificada** | Busca em conteúdo cifrado (decifra só as questões do próprio cliente na memória); isolamento tenant 1 × tenant 2 testado. |
 | Frontend Web (React/TS) | **Implementada parcialmente** | `frontend/src/` versionado neste repositório. Rotas de montagem, geração, exportação, gabaritos, templates, questões (criar/editar/revisar), textos de referência, "Meus Conteúdos" e cadastro público registradas em `App.tsx`; telas adaptadas ao tema ativo. Verificado por `tsc --noEmit` e pelas chamadas de API de cada tela; os fluxos que gravam dados não foram exercitados pela interface. |
-| Suíte de Testes Automatizados | **Implementada parcialmente** | 30 testes `pytest` (2FA, política de senha, sessão, segurança, RBAC, RLS, cifra, arquivos, logs, gestão multi-cliente, tipos de questão, senha do evento, CORS, semente, exportação e renderização), executados por `scripts/run_tests.py` num banco descartável. Cobertura de isolamento ainda parcial. |
+| Suíte de Testes Automatizados | **Implementada parcialmente** | 31 testes `pytest` (2FA, política de senha, sessão, configurações, segurança, RBAC, RLS, cifra, arquivos, logs, gestão multi-cliente, tipos de questão, senha do evento, CORS, semente, exportação e renderização), executados por `scripts/run_tests.py` num banco descartável. Cobertura de isolamento ainda parcial. |
 | Rate Limiting | **Implementada e verificada** | `rate_limit.py` (memória; Redis se `REDIS_URL`). Login 10/60 s; validar senha, lote e ZIP de gabaritos 5/60 s; cadastro 5/60 s; IA/plágio 20/60 s. |
 | CI/CD | **Estruturada, mas não validada** | `.github/workflows/ci.yml` (PostgreSQL 16, chave mestra efêmera, migrações, RLS, roles, `pytest`). Execuções no GitHub Actions não foram verificadas. |
 | Filas assíncronas e Object Storage (S3/MinIO) | **Estruturada, mas não validada** | `jobs.py` (registro em memória) e `storage.py` (backend S3 depende de `boto3`, ausente). A rota de exportação assíncrona foi removida por não funcionar. |
@@ -169,6 +169,7 @@ DiagPro/
 │                                 #   -> d8b2f4a6c1e3 (padrão de exportação por evento, cifrado)
 │                                 #   -> e9c3a5b7d2f4 (2FA: segredo TOTP e códigos de recuperação cifrados)
 │                                 #   -> f1a7c3e5b9d2 (política de senha: validade, troca obrigatória, histórico cifrado)
+│                                 #   -> a2b4c6d8e0f1 (configurações da plataforma e de cada banca, cifradas, com RLS)
 ├── alembic.ini
 ├── .env.example                  # Modelo de variáveis (somente placeholders)
 ├── Dockerfile                    # Imagem da API (Python 3.11, Java 17, LibreOffice)
@@ -186,6 +187,8 @@ DiagPro/
 │   │   ├── security.py           # require_roles, get_tenant_db, evento_autorizado, senha do evento, helpers de caminho
 │   │   ├── verificacao_prova.py  # Checagem da prova montada antes de exportar (bloqueios e avisos)
 │   │   ├── dados_prova.py        # Completa a cópia da montagem (tipo, itens Certo/Errado, linhas)
+│   │   ├── configuracoes.py      # Configurações da plataforma e da banca (padrões, limites, cache)
+│   │   ├── politica_senha.py     # Política de senha (valores vindos das configurações)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
 │   │   ├── rls_policies.sql      # Políticas RLS (16 tabelas, sem bypass)
 │   │   ├── rate_limit.py, jobs.py, storage.py, models.py, roles.py, ...
@@ -204,7 +207,7 @@ DiagPro/
 │   └── migrate_files_to_secure_store.py  # Move arquivos em claro para o armazenamento cifrado (executado na fase 2a)
 ├── tests/
 │   ├── conftest.py               # Cliente ASGI, tokens e seed sintético (role de plataforma)
-│   └── test_security_rbac_rls.py # 30 testes
+│   └── test_security_rbac_rls.py # 31 testes
 ├── docker-compose.yml            # PostgreSQL, Redis e MinIO (somente 127.0.0.1)
 ├── storage_data/                 # Arquivos cifrados (ignorado pelo Git)
 ├── templates_eventos/            # Templates DOCX cifrados (*.enc, ignorado pelo Git)
@@ -348,6 +351,11 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 - Nenhuma prova gerada é armazenada; a pasta temporária da requisição é apagada ao final.
 - `log_redaction.py` mascara `senha=`, `sig=`, tokens `Bearer`, caminhos e nomes de arquivo em todos os logs, inclusive no log de acesso do uvicorn (testado com servidor real). Logs de depuração ficam desligados por padrão.
 
+**Configurações** (`configuracoes.py`, tabela `configuracoes` cifrada e com RLS)
+- Plataforma (só admin geral, visão global): política de senha e sessão para todas as bancas, com limites seguros (ex.: senha mínima de 8 a 64).
+- Banca (administrador do cliente): sessão mais curta que a da plataforma (nunca mais longa), instruções impressas por bloco/disciplina e da discursiva (padrão = textos anteriores, prova idêntica enquanto não editar), tipos de questão usados e revisão obrigatória para exportar (vira bloqueio na checagem).
+- Pessoal (`/minha-conta`, qualquer perfil): trocar a própria senha (senha atual + código do autenticador) e gerar novos códigos de recuperação.
+
 **Autenticação e HTTP**
 - Política de senha (`politica_senha.py`): mínimo de 12 caracteres e 3 de 4 tipos, sem usuário/e-mail, sem senha comum ou sequência, sem repetir as 5 últimas (histórico bcrypt cifrado), validade de 180 dias. Senha definida por administrador é provisória. Troca obrigatória (provisória, vencida ou fora da política) acontece depois do 2FA e antes do acesso. Trocar a própria senha exige a senha atual e um código do autenticador.
 - Sessão: token de 30 min renovado pela tela só enquanto há uso (`/auth/renovar`); 30 min sem uso encerram; limite absoluto de 12 h desde o login (`auth_time`). 401 em qualquer tela leva ao login com aviso.
@@ -426,7 +434,7 @@ docker exec diagpro_postgres sh -c 'cd $PGDATA && chown postgres:postgres server
 docker exec diagpro_postgres psql -U diagpro_admin -d diagpro -c "ALTER SYSTEM SET ssl = 'on'" -c "ALTER SYSTEM SET ssl_min_protocol_version = 'TLSv1.2'" -c "SELECT pg_reload_conf()"
 
 # 4. Schema, RLS e roles (role administrativa em ALEMBIC_DATABASE_URL)
-.\.venv\Scripts\alembic.exe upgrade head          # deve terminar em f1a7c3e5b9d2
+.\.venv\Scripts\alembic.exe upgrade head          # deve terminar em a2b4c6d8e0f1
 Get-Content backend/app/rls_policies.sql -Raw | docker exec -i diagpro_postgres psql -U diagpro_admin -d diagpro
 .\.venv\Scripts\python.exe scripts/setup_postgres_roles.py --rotate   # cria as roles e grava as senhas no .env
 
@@ -453,13 +461,13 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, 30 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, 31 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
 | Área | Testes |
 | :--- | :--- |
-| Autenticação e RBAC | `test_two_factor_is_mandatory_for_everyone`, `test_password_policy_rules`, `test_forced_password_change_session_renewal_and_recaptcha`, `test_unauthenticated_endpoints_return_401`, `test_public_register_blocks_admin_escalation_and_bad_uploads`, `test_rbac_matrix_five_roles` |
+| Autenticação e RBAC | `test_two_factor_is_mandatory_for_everyone`, `test_password_policy_rules`, `test_forced_password_change_session_renewal_and_recaptcha`, `test_platform_and_bank_settings_take_effect`, `test_unauthenticated_endpoints_return_401`, `test_public_register_blocks_admin_escalation_and_bad_uploads`, `test_rbac_matrix_five_roles` |
 | Isolamento e RLS | `test_http_tenant_isolation_between_tenant_1_and_tenant_2`, `test_postgres_rls_isolation_and_pool_non_leakage`, `test_runtime_role_cannot_bypass_rls_via_session_variable`, `test_health_request_id_and_biblioteca_tenant_isolation`, `test_storage_path_traversal_and_export_jobs_tenant_isolation` |
 | Cifra de campos | `test_field_crypto_roundtrip_binding_and_blind_index`, `test_database_stores_only_ciphertext_and_orm_returns_plaintext`, `test_plaintext_write_to_encrypted_column_is_blocked`, `test_runtime_session_refuses_rows_of_other_tenant_even_with_tampered_context` |
 | Arquivos | `test_secure_files_store_sign_and_isolation`, `test_upload_returns_signed_url_and_public_folders_are_gone` |
@@ -471,7 +479,7 @@ Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagp
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.
 
 ### Verificações executadas (19/11/2026, Windows, `.venv` da raiz)
-- **Suíte:** 30 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
+- **Suíte:** 31 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
 - **Migração `a9d4c2e6f0b1` no banco real**, precedida de backup cifrado: 16 gatilhos e 4 restrições únicas por cliente criados; `UPDATE` direto de `tenant_id` recusado.
 - **Migração `c5e8f1a3b9d2` no banco real**, precedida de backup cifrado verificado: coluna `imagem_path_item` criada e incluída na trava de troca de tenant.
 - **Prova mista no banco de teste** (múltipla escolha + Certo/Errado com imagem + Subjetiva de 7 linhas): numeração 1..7 sem saltos, comando sem número, itens em sequência, 7 linhas, gabarito C/E nos números certos, versão marcada com (C)/(E), sem tags HTML, exportações idênticas.

@@ -790,3 +790,57 @@ async def test_forced_password_change_session_renewal_and_recaptcha(async_client
     monkeypatch.setattr(rauth, "RECAPTCHA_SECRET_KEY", "")
     assert (await login(nova)).status_code == 400
     reset_rate_limits()
+
+
+@pytest.mark.asyncio
+async def test_platform_and_bank_settings_take_effect(async_client):
+    import json as _json
+    reset_rate_limits()
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+
+    # plataforma: só admin geral; limites validados
+    assert (await async_client.get("/config/plataforma", headers=a1)).status_code == 403
+    r = await async_client.put("/config/plataforma", headers=ag, json={"seguranca": {"senha_tamanho_minimo": 4}})
+    assert r.status_code == 400 and r.json()["detail"]["problemas"]
+    r = await async_client.put("/config/plataforma", headers=ag, json={"seguranca": {"senha_tamanho_minimo": 16, "sessao_inatividade_minutos": 20}})
+    assert r.status_code == 200 and r.json()["seguranca"]["senha_tamanho_minimo"] == 16
+    try:
+        assert (await async_client.get("/auth/senha/regras")).json()["tamanho_minimo"] == 16
+        r = await async_client.post("/users/", headers=a1, json={"username": "cfg_u", "email": "cfg_u@example.com", "password": "Doze-Chars-9x",
+                                                                 "role": "professor", "tenant_id": 1, "status": "ativo"})
+        assert r.status_code == 400  # 13 caracteres < 16 configurado
+        # banca: não pode passar do teto da plataforma; pode encurtar
+        assert (await async_client.put("/config/banca", headers=a1, json={"seguranca": {"sessao_inatividade_minutos": 45}})).status_code == 400
+        assert (await async_client.put("/config/banca", headers=a1, json={"seguranca": {"sessao_inatividade_minutos": 10}})).status_code == 200
+        assert (await async_client.get("/config/sessao", headers=a1)).json()["inatividade_minutos"] == 10
+        assert (await async_client.post("/auth/renovar", headers=a1)).json()["inatividade_minutos"] == 10
+        # outro cliente não enxerga nem herda a configuração do cliente 1
+        assert (await async_client.get("/config/sessao", headers=a2)).json()["inatividade_minutos"] == 20
+        assert (await async_client.get("/config/banca", headers=a2)).json()["seguranca"]["sessao_inatividade_minutos"] is None
+        # professor não altera a banca
+        hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+        assert (await async_client.put("/config/banca", headers=hp, json={})).status_code == 403
+
+        # regras: tipo desabilitado é recusado; revisão obrigatória vira bloqueio na checagem
+        assert (await async_client.put("/config/banca", headers=a1, json={"regras_questoes": {"tipos_permitidos": ["MULTIPLA_ESCOLHA"], "revisao_obrigatoria": True}})).status_code == 200
+        assert (await async_client.get("/config/regras-questoes", headers=hp)).json()["tipos_permitidos"] == ["MULTIPLA_ESCOLHA"]
+        base = {"indicacao_conteudo": "1", "enunciado": "<p>e</p>", "alternativas": "[]", "nivel_dificuldade": "MEDIO", "pontuacao": "1",
+                "tags": "", "justificativa_questao": "", "justificativa_anulacao": "", "resposta_correta": "", "texto_referencia_vinculo": "",
+                "texto_referencia_direto": "", "tenant_id": "1", "anulada": "false",
+                "itens_vf": _json.dumps([{"afirmacao": "<p>i</p>", "valor_correto": True}])}
+        r = await async_client.post(f"/eventos/{ev}/conteudos/ci-conteudo-1/questoes", headers=a1, data={**base, "tipo": "CERTO_ERRADO"})
+        assert r.status_code == 400
+
+        # identidade da prova: validação das regras de instrução
+        r = await async_client.put("/config/banca", headers=a1, json={"identidade_prova": {"instrucoes_por_bloco": [{"contem": "", "instrucoes": []}]}})
+        assert r.status_code == 400
+        r = await async_client.put("/config/banca", headers=a1, json={"identidade_prova": {"instrucoes_por_bloco": [{"contem": "português", "instrucoes": ["Leia com atenção."]}], "instrucoes_discursiva": []}})
+        assert r.status_code == 200 and r.json()["identidade_prova"]["instrucoes_por_bloco"][0]["contem"] == "português"
+    finally:
+        await async_client.put("/config/plataforma", headers=ag, json={"seguranca": {"senha_tamanho_minimo": 12, "sessao_inatividade_minutos": 30}})
+        await async_client.put("/config/banca", headers=a1, json={"seguranca": {"sessao_inatividade_minutos": None},
+                                                                  "regras_questoes": {"tipos_permitidos": ["MULTIPLA_ESCOLHA", "CERTO_ERRADO", "DISCURSIVA", "SUBJETIVA"], "revisao_obrigatoria": False}})
+        reset_rate_limits()

@@ -33,6 +33,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL, WD_ROW_HEIGHT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from core.instrucoes_padrao import INSTRUCOES_DISCURSIVA, INSTRUCOES_POR_BLOCO
 import json
 import threading
 from pathlib import Path
@@ -1629,11 +1630,13 @@ class DocxProofGenerator:
             add_gray_shading(p_titulo_bloco)
             doc.add_paragraph()
 
-            # INSTRUÇÕES PARA INFORMÁTICA
-            if "informática" in titulo_disciplina.lower():
-                instrucoes_informatica = [
-                    "Nas questões que abordarem conteúdos de informática e/ou tecnologia da informação, presume-se que todos os programas citados estão configurados em seus padrões originais, sem quaisquer limitações de acesso, funcionamento ou uso em relação aos softwares, arquivos, pastas, recursos e dispositivos mencionados.",
-                ]
+            # INSTRUÇÕES DO BLOCO: regras da banca (Configurações > Identidade da prova). Padrão: o texto de
+            # Informática que antes era fixo aqui, então a prova sai igual enquanto a banca não editar.
+            instrucoes_informatica = []
+            for regra in self.format_options.get("instrucoes_por_bloco", INSTRUCOES_POR_BLOCO) or []:
+                if str(regra.get("contem", "")).strip().lower() in titulo_disciplina.lower():
+                    instrucoes_informatica.extend(regra.get("instrucoes") or [])
+            if instrucoes_informatica:
                 style_name = 'List Bullet'
                 if style_name not in doc.styles:
                     style_name = None
@@ -1907,13 +1910,7 @@ class DocxProofGenerator:
             add_gray_shading(p_titulo_discursiva)
             doc.add_paragraph()
 
-            instrucoes_discursiva = [
-                "Nesta prova, faça o que se pede, usando, caso deseje, o espaço para rascunho indicado no presente caderno. Em seguida, transcreva o texto para o respectivo Caderno de Texto Definitivo, no local apropriado, pois não serão avaliados fragmentos de texto escritos em locais indevidos. A resposta deverá conter a extensão mínima e máxima de linhas para o texto conforme o edital.",
-                "Qualquer fragmento de texto que ultrapassar a extensão máxima de linhas será desconsiderado. Também será desconsiderado o texto que não for escrito no Caderno de Texto Definitivo.",
-                "O texto deverá ser manuscrito, em letra legível, com caneta esferográfica de tinta azul ou preta, fabricada com material transparente.",
-                "Será admitida a assinatura apenas no campo apropriado.",
-                "O Caderno de Texto Definitivo será o único documento válido para avaliação da prova discursiva."
-            ]
+            instrucoes_discursiva = self.format_options.get("instrucoes_discursiva", INSTRUCOES_DISCURSIVA)
 
             style_name = 'List Bullet'
             if style_name not in doc.styles:

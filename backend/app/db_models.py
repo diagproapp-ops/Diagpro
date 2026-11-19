@@ -67,6 +67,16 @@ class User(Base):
         UniqueConstraint('email_bidx', name='uq_users_email_bidx'),
     )
 
+class Configuracao(Base):
+    """Configurações: tenant_id nulo = plataforma (só admin geral, via role de plataforma); senão, da banca."""
+    __tablename__ = "configuracoes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    dados = Column(Ciphertext, nullable=False)
+    atualizado_em = Column(DateTime, nullable=True)
+    atualizado_por = Column(Ciphertext, nullable=True)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

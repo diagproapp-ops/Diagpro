@@ -71,11 +71,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(data);
   };
 
-  // Sessão: 30 min sem uso encerra; com uso, renova sozinha (limite de 12 h decidido pelo servidor)
+  // Sessão: X min sem uso encerra (Configurações: plataforma/banca); com uso, renova sozinha
+  // (limite máximo de horas decidido pelo servidor)
+  const [inatividadeMin, setInatividadeMin] = useState(30);
   useEffect(() => {
     if (!user) return;
-    const INATIVIDADE_MS = 30 * 60 * 1000;
-    const RENOVAR_ANTES_MS = 10 * 60 * 1000;
+    api.get('/config/sessao').then(({ data }) => {
+      if (data?.inatividade_minutos) setInatividadeMin(Number(data.inatividade_minutos));
+    }).catch(() => {});
+  }, [user]);
+  useEffect(() => {
+    if (!user) return;
+    const INATIVIDADE_MS = inatividadeMin * 60 * 1000;
+    const RENOVAR_ANTES_MS = Math.min(10, Math.max(2, Math.floor(inatividadeMin / 3))) * 60 * 1000;
     let ultimaAtividade = Date.now();
     const marcar = () => { ultimaAtividade = Date.now(); };
     const eventos = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
@@ -110,7 +118,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       eventos.forEach(ev => window.removeEventListener(ev, marcar));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, inatividadeMin]);
 
   const logout = () => {
     setUser(null);

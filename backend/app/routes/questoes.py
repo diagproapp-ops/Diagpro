@@ -12,6 +12,7 @@ from sqlalchemy import select
 from backend.app import secure_files
 from backend.app.db_models import QuestoesBanco, OpcoesQuestao, ItensVerdadeiroFalso, DetalhesQuestaoDiscursiva, Conteudo
 from backend.app.models import QuestaoOut, OpcaoQuestao, ItemVerdadeiroFalso, DetalhesQuestaoDiscursiva as DetalhesQuestaoDiscursivaModel
+from backend.app import configuracoes
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.utils_crypto import encrypt_text, decrypt_text
@@ -76,6 +77,10 @@ async def criar_questao(
     evento=Depends(evento_autorizado)
 ):
     tenant_id = evento.tenant_id
+    # tipos de questão que a banca usa (Configurações > Regras das questões)
+    permitidos = (await configuracoes.ler_banca(db, tenant_id))["regras_questoes"]["tipos_permitidos"]
+    if str(tipo or "").upper() not in permitidos:
+        raise HTTPException(status_code=400, detail="Este tipo de questão não está habilitado para a banca.")
     tags_list = tags.split(",") if tags else []
     metadados_dict = None
     if metadados:

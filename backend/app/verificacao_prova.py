@@ -14,6 +14,7 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app import configuracoes
 from backend.app.dados_prova import LINHAS_PADRAO_SUBJETIVA, completar_questoes
 from backend.app.db_models import DisciplinaDaProva, QuestoesBanco
 
@@ -28,6 +29,8 @@ async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) 
     bloqueios: list[dict] = []
     avisos: list[dict] = []
     await completar_questoes(db, blocos)
+    tenant_cargo = getattr(cargo, "tenant_id", None)
+    revisao_obrigatoria = bool(tenant_cargo) and (await configuracoes.ler_banca(db, tenant_cargo))["regras_questoes"]["revisao_obrigatoria"]
     itens = [(b, q) for b in (blocos or []) if isinstance(b, dict) for q in (b.get("questoes") or [])]
     ids = [q.get("id_questao") for _, q in itens if q.get("id_questao")]
     no_banco = {}
@@ -89,7 +92,9 @@ async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) 
         else:
             status = (atual.status_revisao or "").upper()
             if status != "APROVADA":
-                add(avisos, f"Não aprovada na revisão ({status.title() if status else 'sem revisão'}).")
+                # a banca pode exigir revisão aprovada (Configurações > Regras das questões)
+                add(bloqueios if revisao_obrigatoria else avisos,
+                    f"Não aprovada na revisão ({status.title() if status else 'sem revisão'}).")
             if getattr(atual, "anulada", False):
                 add(avisos, "Questão marcada como anulada.")
             alterada = getattr(atual, "data_modificacao", None)

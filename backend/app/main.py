@@ -30,6 +30,7 @@ from backend.app.routes.questoes import router as questoes_router
 from backend.app.routes.provas import router as provas
 from backend.app.routes.provas_geracao import router as provas_geracao_router
 from backend.app.routes import audit_log
+from backend.app.routes import configuracoes as configuracoes_routes
 from backend.app.routes.exportacao import router as export_router
 from backend.app.routes.gabarito import router as gabarito_router
 from backend.app.routes.templates import router as templates_router
@@ -87,6 +88,7 @@ app.include_router(dicionario_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(provas_geracao_router)
 app.include_router(audit_log.router)
+app.include_router(configuracoes_routes.router)
 app.include_router(export_router, prefix="/api/export")
 app.include_router(gabarito_router, prefix="/api/gabarito")
 app.include_router(templates_router, prefix="/api")

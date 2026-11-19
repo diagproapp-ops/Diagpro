@@ -33,6 +33,7 @@ from backend.app.security import (
 )
 from backend.app.verificacao_prova import verificar_prova
 from backend.app.dados_prova import completar_questoes
+from backend.app import configuracoes
 from backend.app.auditoria_exportacao import registrar_exportacao
 import os
 import hmac
@@ -174,6 +175,13 @@ async def fetch_evento_cargo_prova(
         metadados_prova = {}
 
     return evento, cargo, prova_montada, blocos_questoes, metadados_prova
+
+async def _identidade_da_prova(db: AsyncSession, tenant_id: int | None) -> dict:
+    if tenant_id is None:
+        return {}
+    ident = (await configuracoes.ler_banca(db, tenant_id))["identidade_prova"]
+    return {"instrucoes_por_bloco": ident["instrucoes_por_bloco"], "instrucoes_discursiva": ident["instrucoes_discursiva"]}
+
 
 async def montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db):
     evento_dict = {
@@ -578,6 +586,8 @@ async def gerar_todos_arquivos(
         "exibir_codigo_curto_questao": exibir_codigo_curto_questao,
         "exibir_gabarito_marcado": exibir_gabarito_marcado,
     }
+    # instruções da prova configuradas pela banca (padrão = textos de antes)
+    format_options.update(await _identidade_da_prova(db, current_user.tenant_id))
 
     output_dir = await get_output_dir(evento_id, cargo_id, db, workdir)
     evento, cargo, prova_montada, blocos_questoes, metadados_prova = await fetch_evento_cargo_prova(
@@ -893,6 +903,8 @@ async def gerar_todos_arquivos_multiplos(
         "exibir_codigo_curto_questao": exibir_codigo_curto_questao,
         "exibir_gabarito_marcado": exibir_gabarito_marcado,
     }
+    # instruções da prova configuradas pela banca (padrão = textos de antes)
+    format_options.update(await _identidade_da_prova(db, current_user.tenant_id))
 
     # --- Geração dos arquivos para cada cargo ---
     from backend.app.routes.exportacao import (

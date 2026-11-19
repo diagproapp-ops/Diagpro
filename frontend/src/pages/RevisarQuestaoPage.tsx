@@ -518,6 +518,15 @@ export default function RevisarQuestaoPage() {
         {form.tipo === "SUBJETIVA" && (
           <>
             <Divider sx={{ my: 2 }}>Campos Subjetiva</Divider>
+            <TextField
+              label="Número de linhas para resposta *"
+              value={form.num_linhas_discursiva}
+              disabled
+              type="number"
+              inputProps={{ min: 1, max: 60 }}
+              fullWidth
+              sx={{ mb: 2 }}
+            />
             <CampoComEditorAvancado
               label="Orientação da Resposta *"
               value={form.texto_subjetivo_orientacao}

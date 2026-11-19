@@ -67,14 +67,14 @@ Classificação adotada:
 | CRUD de Eventos, Cargos, Disciplinas e Conteúdos | **Implementada parcialmente** | Fluxos principais testados (criar/editar/listar). O CRUD completo e o isolamento entre tenants de todos os recursos não têm teste automatizado. |
 | Banco de Questões, Textos de Referência e Revisão | **Implementada parcialmente** | Criar, editar e revisar questões dos 4 tipos (múltipla escolha, Certo/Errado com imagem por item, discursiva e subjetiva) e textos de referência (texto e imagem) testados via API num banco de teste, com os mesmos envios das telas; telas abertas sem erro em navegador automatizado. O salvamento por cliques reais na interface não foi exercitado. |
 | Importação de Questões via DOCX | **Implementada parcialmente** | Imagens extraídas vão direto para o armazenamento cifrado; a confirmação aceita só referências de arquivo do próprio cliente (testado). A extração DOCX em si não tem teste automatizado. |
-| Montagem, Simulação e Geração de Provas/Gabaritos | **Implementada parcialmente** | Ponta a ponta testado num banco de teste com dados sintéticos (19/11/2026): montagem, lote ZIP AES com PDF e DOCX legíveis (acentos, alternativas, texto de referência), gabarito batendo com a ordem impressa da alternativa correta, ZIP de gabaritos. Prova pronta e gabarito só com a senha do evento. Geração das provas reais não executada (exige a senha do evento). Sorteios (ordem das questões, alternativas e letras do gabarito) derivam de uma semente secreta gravada (cifrada) na montagem: cada exportação da mesma montagem sai idêntica e o gabarito não é previsível; montagens anteriores a 19/11/2026 mantêm a fórmula antiga para não mudar provas já exportadas. Checagem antes de exportar (bloqueios e avisos), relatório no ZIP, nomes únicos por variação ("PADRÃO" ou "Tipo A"...), versão com gabarito marcado identificada, auditoria com SHA-256, padrão de exportação por evento (só sugestão) e "Atualizar questões da montagem" sem novo sorteio. Certo/Errado e Subjetiva ainda não são impressas pela diagramação (a checagem avisa). |
+| Montagem, Simulação e Geração de Provas/Gabaritos | **Implementada parcialmente** | Ponta a ponta testado num banco de teste com dados sintéticos (19/11/2026): montagem, lote ZIP AES com PDF e DOCX legíveis (acentos, alternativas, texto de referência), gabarito batendo com a ordem impressa da alternativa correta, ZIP de gabaritos. Prova pronta e gabarito só com a senha do evento. Geração das provas reais não executada (exige a senha do evento). Sorteios (ordem das questões, alternativas e letras do gabarito) derivam de uma semente secreta gravada (cifrada) na montagem: cada exportação da mesma montagem sai idêntica e o gabarito não é previsível; montagens anteriores a 19/11/2026 mantêm a fórmula antiga para não mudar provas já exportadas. Checagem antes de exportar (bloqueios e avisos), relatório no ZIP, nomes únicos por variação ("PADRÃO" ou "Tipo A"...), versão com gabarito marcado identificada, auditoria com SHA-256, padrão de exportação por evento (só sugestão) e "Atualizar questões da montagem" sem novo sorteio. Certo/Errado: comando sem número e itens numerados na sequência da prova toda, gabarito C/E por item. Subjetiva: enunciado e a quantidade de linhas definida na questão (padrão 10). Alternativas e itens vindos do editor (HTML) saem com a formatação, sem tags. |
 | Auditoria de Geração (`audit_log_geracao`) | **Implementada parcialmente** | Gravação e filtro por usuário (índice cego) testados; cobre geração, não leitura/edição geral. |
 | Chat com IA (OpenAI) | **Implementada parcialmente** | `ia_chat.py` usa `openai.ChatCompletion`, removido no SDK v1; `requirements.txt` fixa `openai==1.109.1`, então a rota falha. |
 | Verificação de Plágio (Bing) | **Implementada parcialmente** | Autenticada, rate limit 20/60 s; chamada externa não testada. |
 | Dicionário (`dicio.com.br`) | **Implementada parcialmente** | Scraping HTML via regex; não testado. |
 | Biblioteca de Questões (`/api/biblioteca`) | **Implementada e verificada** | Busca em conteúdo cifrado (decifra só as questões do próprio cliente na memória); isolamento tenant 1 × tenant 2 testado. |
 | Frontend Web (React/TS) | **Implementada parcialmente** | `frontend/src/` versionado neste repositório. Rotas de montagem, geração, exportação, gabaritos, templates, questões (criar/editar/revisar), textos de referência, "Meus Conteúdos" e cadastro público registradas em `App.tsx`; telas adaptadas ao tema ativo. Verificado por `tsc --noEmit` e pelas chamadas de API de cada tela; os fluxos que gravam dados não foram exercitados pela interface. |
-| Suíte de Testes Automatizados | **Implementada parcialmente** | 26 testes `pytest` (segurança, RBAC, RLS, cifra, arquivos, logs, gestão multi-cliente, tipos de questão, senha do evento, CORS, semente e exportação), executados por `scripts/run_tests.py` num banco descartável. Cobertura de isolamento ainda parcial. |
+| Suíte de Testes Automatizados | **Implementada parcialmente** | 27 testes `pytest` (segurança, RBAC, RLS, cifra, arquivos, logs, gestão multi-cliente, tipos de questão, senha do evento, CORS, semente, exportação e renderização), executados por `scripts/run_tests.py` num banco descartável. Cobertura de isolamento ainda parcial. |
 | Rate Limiting | **Implementada e verificada** | `rate_limit.py` (memória; Redis se `REDIS_URL`). Login 10/60 s; validar senha, lote e ZIP de gabaritos 5/60 s; cadastro 5/60 s; IA/plágio 20/60 s. |
 | CI/CD | **Estruturada, mas não validada** | `.github/workflows/ci.yml` (PostgreSQL 16, chave mestra efêmera, migrações, RLS, roles, `pytest`). Execuções no GitHub Actions não foram verificadas. |
 | Filas assíncronas e Object Storage (S3/MinIO) | **Estruturada, mas não validada** | `jobs.py` (registro em memória) e `storage.py` (backend S3 depende de `boto3`, ausente). A rota de exportação assíncrona foi removida por não funcionar. |
@@ -183,6 +183,7 @@ DiagPro/
 │   │   ├── log_redaction.py      # Filtro que mascara senhas, assinaturas, tokens e caminhos nos logs
 │   │   ├── security.py           # require_roles, get_tenant_db, evento_autorizado, senha do evento, helpers de caminho
 │   │   ├── verificacao_prova.py  # Checagem da prova montada antes de exportar (bloqueios e avisos)
+│   │   ├── dados_prova.py        # Completa a cópia da montagem (tipo, itens Certo/Errado, linhas)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
 │   │   ├── rls_policies.sql      # Políticas RLS (16 tabelas, sem bypass)
 │   │   ├── rate_limit.py, jobs.py, storage.py, models.py, roles.py, ...
@@ -201,7 +202,7 @@ DiagPro/
 │   └── migrate_files_to_secure_store.py  # Move arquivos em claro para o armazenamento cifrado (executado na fase 2a)
 ├── tests/
 │   ├── conftest.py               # Cliente ASGI, tokens e seed sintético (role de plataforma)
-│   └── test_security_rbac_rls.py # 26 testes
+│   └── test_security_rbac_rls.py # 27 testes
 ├── docker-compose.yml            # PostgreSQL, Redis e MinIO (somente 127.0.0.1)
 ├── storage_data/                 # Arquivos cifrados (ignorado pelo Git)
 ├── templates_eventos/            # Templates DOCX cifrados (*.enc, ignorado pelo Git)
@@ -447,7 +448,7 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, 26 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, 27 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
@@ -459,15 +460,16 @@ Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagp
 | Arquivos | `test_secure_files_store_sign_and_isolation`, `test_upload_returns_signed_url_and_public_folders_are_gone` |
 | Gestão multi-cliente | `test_tenant_change_without_reencryption_is_blocked_by_database`, `test_admin_geral_must_choose_valid_tenant_to_create_event`, `test_admin_geral_global_view_and_managed_client_isolation` |
 | Questões e conteúdos | `test_question_types_create_edit_review_and_professor_contents` |
-| Prova pronta e gabarito | `test_finished_exam_and_answer_key_require_event_password`, `test_generator_refuses_ciphertext`, `test_cors_preflight_allows_app_custom_headers`, `test_exam_seed_is_secret_reproducible_and_legacy_compatible`, `test_export_preferences_and_precheck_endpoints` |
+| Prova pronta e gabarito | `test_finished_exam_and_answer_key_require_event_password`, `test_generator_refuses_ciphertext`, `test_cors_preflight_allows_app_custom_headers`, `test_exam_seed_is_secret_reproducible_and_legacy_compatible`, `test_export_preferences_and_precheck_endpoints`, `test_generator_renders_editor_html_inline_and_answer_lines` |
 | HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
 
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.
 
 ### Verificações executadas (19/11/2026, Windows, `.venv` da raiz)
-- **Suíte:** 26 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
+- **Suíte:** 27 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
 - **Migração `a9d4c2e6f0b1` no banco real**, precedida de backup cifrado: 16 gatilhos e 4 restrições únicas por cliente criados; `UPDATE` direto de `tenant_id` recusado.
 - **Migração `c5e8f1a3b9d2` no banco real**, precedida de backup cifrado verificado: coluna `imagem_path_item` criada e incluída na trava de troca de tenant.
+- **Prova mista no banco de teste** (múltipla escolha + Certo/Errado com imagem + Subjetiva de 7 linhas): numeração 1..7 sem saltos, comando sem número, itens em sequência, 7 linhas, gabarito C/E nos números certos, versão marcada com (C)/(E), sem tags HTML, exportações idênticas.
 - **Diagramação ponta a ponta no banco de teste** (dados sintéticos): 33 verificações (checagem e bloqueio, 3 exportações idênticas, gabarito igual à ordem impressa, montagens diferentes com gabaritos diferentes, prova antiga inalterada, nomes, gabarito marcado com aviso e cores, relatório, padrão do evento, auditoria) e 10 verificações de "Atualizar questões" (só a questão editada muda; ordem e gabarito mantidos).
 - **Migração `d8b2f4a6c1e3` no banco real**, após backup cifrado verificado. Checagem nas provas reais: cargo 203 bloqueado — questão 15 (Q-0005) com as 5 alternativas de imagem sem o caminho na cópia da montagem (corrigível com "Atualizar questões").
 - **Reparo de Fernet legado embutido no banco real** (`repair_nested_legacy_fernet.py`), após simulação e backup cifrado verificado: 433 valores recuperados em 2 provas montadas e 2 questões discursivas, nenhuma falha; varredura posterior sem tokens antigos e colunas ainda cifradas (`e1.`).
@@ -506,7 +508,7 @@ Verificações de 18/11/2026:
 - **Histórico do Git:** o banco SQLite antigo (com dados pessoais) e as imagens de prova que estavam em `static/` continuam no histórico de commits anteriores. Removê-los exige reescrever o histórico (autorização do responsável).
 - **Frontend:** a tela de cadastro de disciplinas chama `POST /disciplinas/`, que não existe no backend (rota não registrada); `EditarProvaPage` é um esqueleto vazio. Vários arquivos de `frontend/src/` têm finais de linha `\r\r\n`; edite preservando o formato ou normalize num commit próprio.
 - **Bugs conhecidos:** frase duplicada devolve 500 em vez de 400; Chat IA inoperante (SDK `openai` v1).
-- **Diagramação:** questões Certo/Errado e Subjetiva não são impressas (a checagem avisa); a geração roda dentro da requisição (lotes grandes podem demorar; a API fica ocupada durante a conversão para PDF).
+- **Diagramação:** itens de Certo/Errado saem na ordem cadastrada (não são embaralhados entre variações); Discursiva só é impressa em bloco cujo nome contém "Discursiva" (a checagem avisa); a geração roda dentro da requisição (lotes grandes podem demorar; a API fica ocupada durante a conversão para PDF).
 - **Chamadas legadas sem efeito:** `encrypt_text`/`decrypt_text`/`encrypt_pii` ainda aparecem nas rotas, mas não fazem nada (a cifra é feita no ORM).
 - **Rotação de chave:** o formato dos valores cifrados guarda a versão da chave, mas não há script de rotação.
 - **Busca da biblioteca:** decifra as questões do cliente na memória; mais lenta em volumes grandes.

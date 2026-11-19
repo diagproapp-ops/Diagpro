@@ -649,3 +649,25 @@ async def test_export_preferences_and_precheck_endpoints(async_client):
     assert (await async_client.post(f"/api/export/eventos/{ev}/verificar", headers=h, json={"cargos_id": []})).status_code == 400
     r = await async_client.post(f"/api/export/eventos/{ev}/verificar", headers=h, json={"cargos_id": ["inexistente"]})
     assert r.status_code == 200 and r.json()[0]["bloqueios"]
+
+
+def test_generator_renders_editor_html_inline_and_answer_lines():
+    """Alternativas/itens do editor (HTML) saem sem tags e com formatação; Subjetiva tem N linhas."""
+    import logging as _lg
+    from docx import Document as _Doc
+    from docx.oxml.ns import qn as _qn
+    from core.document_generator import DocxProofGenerator
+
+    g = DocxProofGenerator.__new__(DocxProofGenerator)
+    g.format_options, g.logger, g.prova_montada = {}, _lg.getLogger("t"), {}
+    doc = _Doc()
+    p = doc.add_paragraph("A)\t")
+    g._add_html_inline(p, "<p>Texto <strong>forte</strong> e H<sub>2</sub>O</p><p>segunda</p>")
+    assert "<" not in p.text and "Texto forte e H2O" in p.text and "segunda" in p.text
+    assert any(r.bold and r.text == "forte" for r in p.runs)
+    assert any(r.font.subscript and r.text == "2" for r in p.runs)
+    assert g._texto_simples("<p></p>") == ""            # alternativa só com imagem = sem texto
+    antes = len(doc.paragraphs)
+    g._add_linhas_resposta(doc, 7)
+    novas = doc.paragraphs[antes:]
+    assert sum(1 for q in novas if q._p.pPr is not None and q._p.pPr.find(_qn("w:pBdr")) is not None) == 7

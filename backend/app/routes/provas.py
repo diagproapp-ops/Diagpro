@@ -210,7 +210,7 @@ async def salvar_prova_montada(
                     opcoes.append(op_dict)
 
                 detalhes_discursiva = None
-                if q.tipo and q.tipo.strip().upper() == "DISCURSIVA":
+                if q.tipo and q.tipo.strip().upper() in ("DISCURSIVA", "SUBJETIVA"):
                     detalhes_result = await db.execute(
                         select(DBDetalhesDiscursiva).where(DBDetalhesDiscursiva.id_questao_fk == q.id_questao)
                     )
@@ -224,6 +224,7 @@ async def salvar_prova_montada(
 
                 questao_dict = {
                     "id_questao": q.id_questao,
+                    "tipo": (q.tipo or "MULTIPLA_ESCOLHA").upper(),
                     "enunciado": q.enunciado,
                     "resposta_correta": q.resposta_correta,
                     "id_texto_ref_vinculado": getattr(q, "id_texto_ref_vinculado", None),
@@ -235,6 +236,8 @@ async def salvar_prova_montada(
 
                 if detalhes_discursiva:
                     questao_dict["detalhes_discursiva"] = detalhes_discursiva
+                if (q.tipo or "").upper() == "CERTO_ERRADO":
+                    questao_dict["itens_vf"] = await _itens_vf(db, q.id_questao)
 
                 bloco_dict["questoes"].append(questao_dict)
             blocos_dict.append(bloco_dict)
@@ -342,6 +345,15 @@ async def salvar_prova_montada(
     await db.commit()
     return {"ok": True}
 
+async def _itens_vf(db: AsyncSession, id_questao: str) -> list:
+    """Itens de Certo/Errado na ordem cadastrada, como entram na cópia da montagem."""
+    from backend.app.db_models import ItensVerdadeiroFalso
+    itens = (await db.execute(select(ItensVerdadeiroFalso).where(ItensVerdadeiroFalso.id_questao_fk == id_questao)
+                              .order_by(ItensVerdadeiroFalso.ordem))).scalars().all()
+    return [{"afirmacao": i.afirmacao, "valor_correto": bool(i.valor_correto),
+             **({"imagem_path_item": i.imagem_path_item} if i.imagem_path_item else {})} for i in itens]
+
+
 # 3b. Atualizar as questões da montagem SEM sortear de novo
 def _assinatura(questao: dict) -> str:
     """O que vai impresso de cada questão: se não mudou, a cópia fica intocada (prova idêntica)."""
@@ -349,7 +361,9 @@ def _assinatura(questao: dict) -> str:
            for o in (questao.get("opcoes") or [])]
     return json.dumps([questao.get("enunciado") or "", questao.get("resposta_correta") or "",
                        questao.get("caminho_imagem_relativo") or "", sorted(ops),
-                       (questao.get("detalhes_discursiva") or {}).get("numero_linhas_resposta")], ensure_ascii=False)
+                       (questao.get("detalhes_discursiva") or {}).get("numero_linhas_resposta"),
+                       [(str(i.get("afirmacao") or ""), i.get("valor_correto"), str(i.get("imagem_path_item") or ""))
+                        for i in (questao.get("itens_vf") or [])]], ensure_ascii=False)
 
 
 @router.post("/eventos/{id_evento}/provas-montadas/{id_cargo}/atualizar-questoes")
@@ -400,7 +414,10 @@ async def atualizar_questoes_da_montagem(
                 nova["caminho_imagem_relativo"] = q.caminho_imagem_relativo
             else:
                 nova.pop("caminho_imagem_relativo", None)
-            if q.tipo and q.tipo.upper() == "DISCURSIVA":
+            nova["tipo"] = (q.tipo or "MULTIPLA_ESCOLHA").upper()
+            if nova["tipo"] == "CERTO_ERRADO":
+                nova["itens_vf"] = await _itens_vf(db, q.id_questao)
+            if nova["tipo"] in ("DISCURSIVA", "SUBJETIVA"):
                 det = (await db.execute(select(DBDetalhesDiscursiva).where(DBDetalhesDiscursiva.id_questao_fk == q.id_questao))).scalar_one_or_none()
                 if det:
                     nova["detalhes_discursiva"] = {"numero_linhas_resposta": det.numero_linhas_resposta}

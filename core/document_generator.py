@@ -32,6 +32,7 @@ from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL, WD_ROW_HEIGHT
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 import json
 import threading
 from pathlib import Path
@@ -151,6 +152,7 @@ except ImportError as e_dg_core_types_local:
     # from .stubs import KStub as K # Se K for usado
 
 _FILA_LIBREOFFICE = threading.Lock()
+LINHAS_PADRAO_SUBJETIVA = 10  # igual a backend/app/dados_prova.py
 
 
 def rotulo_variacao(variacao_num: int, num_variacoes: int) -> str:
@@ -1037,6 +1039,142 @@ class DocxProofGenerator:
                 border.getparent().remove(border)
     
     # Adicione este novo método à classe DocxProofGenerator
+    def _add_html_inline(self, paragraph, html, color=None, fonte=None, tamanho=None):
+        """
+        Escreve HTML do editor DENTRO do parágrafo (ao lado da letra/número), mantendo negrito, itálico,
+        sublinhado, sobrescrito e subscrito. Antes as tags saíam impressas na prova ("A) <p>texto</p>").
+        """
+        from bs4 import BeautifulSoup, NavigableString
+        soup = BeautifulSoup(str(html or ""), "html.parser")
+        blocos = {"p", "div", "li"}
+        primeiro_bloco = [True]
+
+        def escrever(texto, fmt):
+            if not texto:
+                return
+            run = paragraph.add_run(texto)
+            run.bold = fmt.get("b") or None
+            run.italic = fmt.get("i") or None
+            run.underline = fmt.get("u") or None
+            if fmt.get("sup"):
+                run.font.superscript = True
+            if fmt.get("sub"):
+                run.font.subscript = True
+            if fonte:
+                run.font.name = fonte
+            if tamanho:
+                run.font.size = tamanho
+            if color is not None:
+                run.font.color.rgb = color
+
+        def andar(no, fmt):
+            if isinstance(no, NavigableString):
+                escrever(re.sub(r"\s+", " ", str(no)), fmt)
+                return
+            nome = (no.name or "").lower()
+            if nome == "br":
+                paragraph.add_run().add_break()
+                return
+            if nome in blocos:
+                if not primeiro_bloco[0] and paragraph.runs:
+                    paragraph.add_run().add_break()
+                primeiro_bloco[0] = False
+            novo = dict(fmt)
+            if nome in ("b", "strong"):
+                novo["b"] = True
+            elif nome in ("i", "em"):
+                novo["i"] = True
+            elif nome == "u":
+                novo["u"] = True
+            elif nome == "sup":
+                novo["sup"] = True
+            elif nome == "sub":
+                novo["sub"] = True
+            for filho in no.children:
+                andar(filho, novo)
+
+        for filho in soup.children:
+            andar(filho, {})
+
+    def _texto_simples(self, html) -> str:
+        """HTML do editor -> texto corrido (itens de Certo/Errado são impressos numa linha numerada)."""
+        from bs4 import BeautifulSoup
+        texto = BeautifulSoup(str(html or ""), "html.parser").get_text(" ")
+        return re.sub(r"\s+", " ", texto).strip()
+
+    def _fonte_principal(self):
+        fonte = self.format_options.get("fonte_principal") or "Arial"
+        try:
+            tamanho = Pt(float(self.format_options.get("tamanho_fonte_principal") or 12))
+        except (TypeError, ValueError):
+            tamanho = Pt(12)
+        return fonte, tamanho
+
+    def _add_linhas_resposta(self, document, total_linhas: int):
+        """Linhas simples para a resposta (Subjetiva), uma abaixo da outra, na largura da coluna."""
+        from docx.enum.text import WD_LINE_SPACING
+        for _ in range(max(1, int(total_linhas))):
+            p = document.add_paragraph()
+            fmt = p.paragraph_format
+            fmt.space_before = Pt(0)
+            fmt.space_after = Pt(0)
+            fmt.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+            fmt.line_spacing = Pt(22)
+            fmt.keep_together = True
+            pPr = p._p.get_or_add_pPr()
+            borda = OxmlElement("w:pBdr")
+            baixo = OxmlElement("w:bottom")
+            baixo.set(qn("w:val"), "single")
+            baixo.set(qn("w:sz"), "6")
+            baixo.set(qn("w:space"), "1")
+            baixo.set(qn("w:color"), "000000")
+            borda.append(baixo)
+            pPr.append(borda)
+        document.add_paragraph()
+
+    def _add_itens_certo_errado(self, document, questao, primeiro_numero: int, disciplina: str, answer_key_data: list) -> int:
+        """
+        Comando (enunciado) sem número e itens numerados na sequência da prova toda.
+        Devolve o último número usado. Gabarito: C/E por item.
+        """
+        self._add_question_to_doc(document, {**questao, "opcoes": []}, None, [])
+        fonte, tamanho = self._fonte_principal()
+        marcar = self.format_options.get("exibir_gabarito_marcado") in (True, 1, "true", "1", "on")
+        anulada = bool(self._get_field(questao, "anulada", False))
+        largura = 6.0 if self.format_options.get("duas_colunas") else 12.0
+        itens = list(self._get_field(questao, "itens_vf", []) or [])
+        numero = primeiro_numero
+        for idx, item in enumerate(itens):
+            numero = primeiro_numero + idx
+            certo = bool(self._get_field(item, "valor_correto", False))
+            p = document.add_paragraph()
+            p.paragraph_format.left_indent = Cm(0.9)
+            p.paragraph_format.first_line_indent = Cm(-0.9)
+            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.keep_together = True
+            r_num = p.add_run(f"{numero}\t")
+            r_num.bold = True
+            r_num.font.name, r_num.font.size = fonte, tamanho
+            self._add_html_inline(p, self._get_field(item, "afirmacao", ""), fonte=fonte, tamanho=tamanho)
+            if marcar:
+                r_gab = p.add_run(f"  ({'C' if certo else 'E'})")
+                r_gab.bold = True
+                r_gab.font.color.rgb = RGBColor(255, 0, 0)
+            imagem = self._get_field(item, "imagem_path_item", None)
+            if imagem:
+                p_img = document.add_paragraph()
+                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                self._add_image_to_paragraph(p_img, imagem, doc=document, width_cm=largura)
+            answer_key_data.append({
+                "numero_questao_exibido": numero,
+                "gabarito_letra_exibida": "ANULADA" if anulada else ("C" if certo else "E"),
+                "disciplina_nome": disciplina,
+                "texto_opcao_correta_original": self._texto_simples(self._get_field(item, "afirmacao", ""))[:200],
+                "codigo_curto_questao": self._get_field(questao, "codigo_curto_questao", ""),
+            })
+        document.add_paragraph()
+        return numero
+
     def _add_separator(self, document):
         """Adiciona um parágrafo com uma borda inferior para criar uma linha horizontal."""
         p = document.add_paragraph()
@@ -1642,7 +1780,32 @@ class DocxProofGenerator:
                     current_question_display_number = (ordered_question_ids[-1] + 1) if ordered_question_ids else 1
                     ordered_question_ids.append(current_question_display_number)
                     letra_correta = letras_gabarito_total[idx_global_gabarito]
-                    idx_global_gabarito += 1
+                    idx_global_gabarito += 1  # mesma sequência de antes: provas de múltipla escolha não mudam
+
+                    tipo_q = str(get_field(questao, "tipo", "") or "").upper()
+                    nome_disc = (get_field(bloco, 'nome_disciplina_na_prova', '') or get_field(bloco, 'nome_disciplina_prova', '')
+                                 or get_field(bloco, 'nome_disciplina', '') or 'N/A')
+                    if tipo_q == "CERTO_ERRADO":
+                        # cada item recebe o próximo número da prova
+                        ultimo = self._add_itens_certo_errado(doc, questao, current_question_display_number, nome_disc, answer_key_data)
+                        ordered_question_ids.extend(range(current_question_display_number + 1, ultimo + 1))
+                        continue
+                    if tipo_q == "SUBJETIVA":
+                        self._add_question_to_doc(
+                            doc, {**questao, "opcoes": []}, current_question_display_number, [],
+                            variacao_num=variacao_num, textos_map=textos_referencia_map
+                        )
+                        detalhes = get_field(questao, "detalhes_discursiva", {}) or {}
+                        linhas = get_field(detalhes, "numero_linhas_resposta", None) or LINHAS_PADRAO_SUBJETIVA
+                        self._add_linhas_resposta(doc, linhas)
+                        answer_key_data.append({
+                            "numero_questao_exibido": current_question_display_number,
+                            "gabarito_letra_exibida": "ANULADA" if get_field(questao, "anulada", False) else "",
+                            "disciplina_nome": nome_disc,
+                            "texto_opcao_correta_original": "",
+                            "codigo_curto_questao": get_field(questao, "codigo_curto_questao", ""),
+                        })
+                        continue
 
                     alternativas_orig = list(get_field(questao, "opcoes", []))
                     if not alternativas_orig:
@@ -1698,6 +1861,7 @@ class DocxProofGenerator:
                         except Exception:
                             pass  # já pode estar descriptografado ou não precisar descriptografar
 
+                    texto_opcao_correta = self._texto_simples(texto_opcao_correta) if "<" in str(texto_opcao_correta) else texto_opcao_correta
                     answer_key_data.append({
                         "numero_questao_exibido": current_question_display_number,
                         "gabarito_letra_exibida": gabarito_exibido,
@@ -1979,7 +2143,8 @@ class DocxProofGenerator:
             texto_opcao_val = decrypt_text(texto_opcao_val) if texto_opcao_val else ''
             letra = alternative_labels[i]
 
-            texto_opcao_vazio = not texto_opcao_val.strip()
+            # "<p></p>" (alternativa só com imagem, vinda do editor) também é vazio
+            texto_opcao_vazio = not self._texto_simples(texto_opcao_val)
             imagem_opcao = get_field(opcao_obj, 'imagem_path_opcao', None)
             is_correta = get_field(opcao_obj, 'correta', False)
             cor_gabarito = RGBColor(255, 0, 0) if (is_correta and marcar_gabarito) else None
@@ -2040,10 +2205,13 @@ class DocxProofGenerator:
                         mostrar_gabarito=marcar_gabarito
                     )
                 else:
-                    if texto_opcao_val.strip():
-                        run_txt = p_opcao.add_run(texto_opcao_val)
-                        if cor_gabarito:
-                            run_txt.font.color.rgb = cor_gabarito
+                    if self._texto_simples(texto_opcao_val):
+                        if "<" in texto_opcao_val:
+                            self._add_html_inline(p_opcao, texto_opcao_val, color=cor_gabarito)
+                        else:
+                            run_txt = p_opcao.add_run(texto_opcao_val)
+                            if cor_gabarito:
+                                run_txt.font.color.rgb = cor_gabarito
                     else:
                         texto_opcao_limpo = f"<<ALTERNATIVA SEM TEXTO: {get_field(opcao_obj, 'id_opcao_questao', '')}>>"
                         run_txt = p_opcao.add_run(texto_opcao_limpo)

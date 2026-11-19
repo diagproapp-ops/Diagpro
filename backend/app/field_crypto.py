@@ -199,7 +199,7 @@ ENCRYPTED: dict[str, dict[str, str]] = {
     ], "text"),
     "OpcoesQuestao": {**dict.fromkeys(["texto_opcao", "texto_opcao_formatado", "feedback_opcao",
                                        "imagem_path_opcao"], "text"), "correta": "json"},
-    "ItensVerdadeiroFalso": {**dict.fromkeys(["afirmacao", "feedback_item"], "text"), "valor_correto": "json"},
+    "ItensVerdadeiroFalso": {**dict.fromkeys(["afirmacao", "feedback_item", "imagem_path_item"], "text"), "valor_correto": "json"},
     "DetalhesQuestaoDiscursiva": dict.fromkeys(["resposta_esperada_texto", "palavras_chave_resposta",
                                                 "texto_subjetivo_orientacao", "texto_subjetivo_nota_maxima"], "text"),
     "TextosReferenciaGeral": dict.fromkeys([

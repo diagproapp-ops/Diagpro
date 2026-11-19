@@ -459,9 +459,14 @@ class ItemVerdadeiroFalso(BaseModel):
     valor_correto: bool
     feedback_item: Optional[str] = None
     ordem: Optional[int] = None
+    imagem_path_item: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+    @field_serializer("imagem_path_item")
+    def _serializar_arquivos(self, value):
+        return _arquivo_publico(value)
 
 class DetalhesQuestaoDiscursiva(BaseModel):
     id_detalhe_discursiva: Optional[str]

@@ -488,3 +488,67 @@ async def test_admin_geral_global_view_and_managed_client_isolation(async_client
     # usuário de cliente lê só o próprio cliente (antes quebrava com 500 na camada de cifra)
     assert (await async_client.get("/admin/clients/1", headers=a1)).status_code == 200
     assert (await async_client.get("/admin/clients/2", headers=a1)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_question_types_create_edit_review_and_professor_contents(async_client):
+    """Regressão: Certo/Errado (com imagem no item), Discursiva/Subjetiva e revisão falhavam com 500."""
+    import json as _json, struct, zlib
+
+    def _png():
+        def ch(t, d):
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+        return (b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+                + ch(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + ch(b"IEND", b""))
+
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    ev, ct = "c2438719-23aa-4f7d-8e0f-e6a310c10440", "ci-conteudo-1"
+    base = f"/eventos/{ev}/conteudos/{ct}/questoes"
+    alts = _json.dumps([{"letra": L, "texto": f"<p>{L}</p>", "correta": L == "A"} for L in "ABCDE"])
+    comum = {"indicacao_conteudo": "1", "enunciado": "<p>e</p>", "alternativas": alts, "nivel_dificuldade": "MEDIO",
+             "pontuacao": "1", "tags": "", "justificativa_questao": "", "justificativa_anulacao": "", "resposta_correta": "A",
+             "texto_referencia_vinculo": "", "texto_referencia_direto": "", "tenant_id": "1"}
+
+    # Certo/Errado com imagem no item: cria, devolve itens e imagem (URL assinada)
+    itens = _json.dumps([{"afirmacao": "<p>i1</p>", "valor_correto": True}, {"afirmacao": "<p>i2</p>", "valor_correto": False}])
+    r = await async_client.post(base, headers=h, data={**comum, "tipo": "CERTO_ERRADO", "anulada": "false", "itens_vf": itens},
+                                files={"item_imagem_0": ("i.png", _png(), "image/png")})
+    assert r.status_code == 200, r.text
+    qce = r.json()["id_questao"]
+    d = (await async_client.get(f"{base}/{qce}", headers=h)).json()
+    assert [i["valor_correto"] for i in d["itens_vf"]] == [True, False]
+    assert str(d["itens_vf"][0]["imagem_path_item"]).startswith("api/files/1/")
+
+    # revisão de Certo/Errado mantém itens e imagem
+    dados = {"tipo": "CERTO_ERRADO", "itens_comando": ["<p>i1</p>", "<p>i2</p>"], "respostas_certo_errado": ["CERTO", "ERRADO"],
+             "alternativas": [], "enunciado": "<p>e</p>"}
+    rv = {"status_revisao": "APROVADA", "observacao_revisor": "", "usuario_revisor": "admin1", "tenant_id": "1"}
+    assert (await async_client.patch(f"{base}/{qce}/revisao", headers=h, data={**rv, "dados_revisao": _json.dumps(dados)})).status_code == 200
+    d = (await async_client.get(f"{base}/{qce}", headers=h)).json()
+    assert len(d["itens_vf"]) == 2 and d["itens_vf"][0]["imagem_path_item"]
+
+    # Discursiva e Subjetiva: criar e revisar (num_linhas vazio na subjetiva não pode derrubar)
+    for tipo, det in (("DISCURSIVA", {"palavras_chave_resposta": ["a", "b"], "numero_linhas_resposta": 15}),
+                      ("SUBJETIVA", {"palavras_chave_resposta": [], "texto_subjetivo_orientacao": "o", "texto_subjetivo_nota_maxima": "10"})):
+        r = await async_client.post(base, headers=h, data={**comum, "tipo": tipo, "detalhes_discursiva": _json.dumps(det)})
+        assert r.status_code == 200, r.text
+        q = r.json()["id_questao"]
+        dados = {"tipo": tipo, "itens_comando": [""], "palavras_chave_discursiva": "a, b" if tipo == "DISCURSIVA" else "",
+                 "num_linhas_discursiva": 15 if tipo == "DISCURSIVA" else "", "texto_subjetivo_orientacao": det.get("texto_subjetivo_orientacao", ""),
+                 "texto_subjetivo_nota_maxima": det.get("texto_subjetivo_nota_maxima", ""), "alternativas": []}
+        assert (await async_client.patch(f"{base}/{q}/revisao", headers=h, data={**rv, "dados_revisao": _json.dumps(dados)})).status_code == 200
+        dd = (await async_client.get(f"{base}/{q}", headers=h)).json()["detalhes_discursiva"]
+        if tipo == "DISCURSIVA":
+            assert dd["palavras_chave_resposta"] == ["a", "b"] and dd["numero_linhas_resposta"] == 15
+
+    # revisar uma múltipla escolha (a tela manda itens_comando [""]) não cria itens Certo/Errado
+    r = await async_client.post(base, headers=h, data={**comum, "tipo": "MULTIPLA_ESCOLHA", "anulada": "false"})
+    qme = r.json()["id_questao"]
+    dados = {"tipo": "MULTIPLA_ESCOLHA", "itens_comando": [""], "respostas_certo_errado": [""], "alternativas": [], "enunciado": "<p>e</p>"}
+    assert (await async_client.patch(f"{base}/{qme}/revisao", headers=h, data={**rv, "dados_revisao": _json.dumps(dados)})).status_code == 200
+    assert (await async_client.get(f"{base}/{qme}", headers=h)).json()["itens_vf"] == []
+
+    # professor: "Meus Conteúdos" e conteúdos do evento (professor_id é texto no banco)
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    assert (await async_client.get("/conteudos/meus", headers=hp)).status_code == 200
+    assert (await async_client.get(f"/conteudos/eventos/{ev}/conteudos", headers=hp)).status_code == 200

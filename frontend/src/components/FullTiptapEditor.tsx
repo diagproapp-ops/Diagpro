@@ -2,17 +2,16 @@ import React from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import BubbleMenu from "@tiptap/extension-bubble-menu";
-import FloatingMenu from "@tiptap/extension-floating-menu";
 import Highlight from "@tiptap/extension-highlight";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import FontFamily from "@tiptap/extension-font-family";
 import { Table } from "@tiptap/extension-table";
+import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
-import * as lowlight from "lowlight";
+import { createLowlight, common } from "lowlight";
 import CharacterCount from "@tiptap/extension-character-count";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
@@ -26,6 +25,9 @@ import Underline from "@tiptap/extension-underline";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import "katex/dist/katex.min.css";
+
+// lowlight v3 exige uma instância criada com as linguagens (o módulo em si não serve).
+const lowlight = createLowlight(common);
 
 export default function FullTiptapEditor({
   value,
@@ -48,15 +50,16 @@ export default function FullTiptapEditor({
 }) {
   const editor = useEditor({
     extensions: [
-      StarterKit,
+      // No Tiptap v3 o StarterKit já traz Link, Underline e um bloco de código simples; desligamos
+      // esses para usar as versões configuradas abaixo sem extensões duplicadas.
+      StarterKit.configure({ link: false, underline: false, codeBlock: false }),
       Placeholder.configure({ placeholder }),
-      BubbleMenu,
-      FloatingMenu,
       Highlight,
       TextStyle,
       Color,
       FontFamily,
       Table.configure({ resizable: true }),
+      TableRow,
       TableCell,
       TableHeader,
       CodeBlockLowlight.configure({ lowlight }),

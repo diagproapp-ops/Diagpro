@@ -273,6 +273,7 @@ class ItensVerdadeiroFalso(Base):
     valor_correto = Column(Ciphertext, nullable=False)
     feedback_item = Column(Ciphertext, nullable=True)
     ordem = Column(Integer, nullable=True)
+    imagem_path_item = Column(Ciphertext, nullable=True)  # referência cifrada da imagem do item (sf1:...)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
 
     questao = relationship("QuestoesBanco", backref="itens_vf")

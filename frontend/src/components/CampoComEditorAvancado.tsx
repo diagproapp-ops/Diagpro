@@ -204,7 +204,7 @@ export default function CampoComEditorAvancado({
         <Typography
           variant="subtitle2"
           fontWeight={600}
-          sx={{ color: "#223", letterSpacing: 0.2, flexGrow: 1 }}
+          sx={{ color: "text.primary", letterSpacing: 0.2, flexGrow: 1 }}
           component="label"
         >
           {label} {required ? <span style={{ color: "#d32f2f" }}>*</span> : null}
@@ -227,10 +227,10 @@ export default function CampoComEditorAvancado({
           borderRadius: 2,
           p: 2,
           minHeight: 48,
-          background: "rgba(6, 11, 25, 0.65)",
+          bgcolor: "background.default",
           mb: 1,
           fontSize: 16,
-          color: "#222",
+          color: "text.primary",
           maxHeight: 240,
           overflowY: "auto",
           overflowX: "auto",

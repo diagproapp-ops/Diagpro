@@ -92,6 +92,7 @@ class Evento(Base):
     senha_evento_cripto = Column(Ciphertext, nullable=True)
     local_prova = Column(Ciphertext, nullable=True)
     observacoes = Column(Ciphertext, nullable=True)
+    preferencias_exportacao = Column(Ciphertext, nullable=True)  # padrão sugerido na tela de exportação (JSON)
     qtd_cargos = Column(Integer, nullable=False, default=1) 
     identificador_evento = Column(String, nullable=False)  # único por cliente (ver __table_args__)
     is_deleted = Column(Boolean, default=False, nullable=False)

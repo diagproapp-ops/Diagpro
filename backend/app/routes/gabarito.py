@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Query, HTTPException, status, Depends
+from fastapi import APIRouter, Query, HTTPException, Request, status, Depends
+
+from backend.app.auditoria_exportacao import registrar_exportacao
+from backend.app.verificacao_prova import verificar_prova
 from fastapi.responses import FileResponse, Response
 from backend.app import secure_files
 from backend.app.rate_limit import rate_limit
@@ -77,6 +80,7 @@ async def listar_gabaritos_exportaveis(
 @router.post("/eventos/{evento_id}/exportar-gabaritos-zip", dependencies=[Depends(rate_limit(5, 60, "gabaritos-zip"))])
 async def exportar_gabaritos_zip(
     evento_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
     evento: Evento = Depends(evento_com_senha),  # senha no cabeçalho X-Senha-Evento (antes ia na URL)
@@ -96,6 +100,7 @@ async def exportar_gabaritos_zip(
 
     # Estrutura: { (codigo_cargo, nome_cargo, tipo_prova): [questoes...] }
     all_gabaritos_por_variacao = {}
+    problemas_gabarito = []
 
     for cargo in cargos:
         result_prova = await db.execute(
@@ -116,10 +121,23 @@ async def exportar_gabaritos_zip(
         prova_montada.evento = evento
         prova_montada.cargo = cargo
 
+        # gabarito de prova com problema sairia errado: mesma checagem da exportação das provas
+        checagem = await verificar_prova(db, cargo, prova_montada, blocos)
+        if checagem["bloqueios"]:
+            problemas_gabarito.append(checagem)
+            continue
+
         gabaritos_por_variacao = document_generator.gerar_gabaritos_balanceados_por_variacao(prova_montada)
         for tipo_prova, lista in gabaritos_por_variacao.items():
             key = (getattr(cargo, "codigo_cargo", ""), getattr(cargo, "nome_cargo", ""), tipo_prova)
             all_gabaritos_por_variacao[key] = lista
+
+    if problemas_gabarito:
+        total = sum(len(v["bloqueios"]) for v in problemas_gabarito)
+        raise HTTPException(status_code=409, detail={
+            "mensagem": f"Gabaritos bloqueados: {total} problema(s) em {len(problemas_gabarito)} cargo(s) deixariam o gabarito errado.",
+            "verificacao": problemas_gabarito,
+        })
 
     # GABARITO COMPLETO: uma linha por questão/tipo/cargo
     completo_csv_path = os.path.join(output_dir, f"GABARITO_COMPLETO_EVENTO_{evento.nome_evento.replace(' ', '_')}.csv")
@@ -175,6 +193,12 @@ async def exportar_gabaritos_zip(
         for file in arquivos_csv:
             zipf.write(file, arcname=os.path.basename(file))
 
+    await registrar_exportacao(
+        db, request, current_user, evento, "exportacao_gabaritos",
+        cargos=sorted({f"{k[0]} - {k[1]}" for k in all_gabaritos_por_variacao}),
+        parametros={"variacoes": sorted({k[2] for k in all_gabaritos_por_variacao})},
+        arquivos=[(os.path.basename(zip_path), zip_path)],
+    )
     with open(zip_path, "rb") as fh:
         conteudo = fh.read()
     return Response(content=conteudo, media_type="application/zip", headers={
@@ -216,6 +240,13 @@ async def visualizar_gabarito(
     prova_montada = normalize_prova_montada(prova_montada)
     prova_montada.evento = evento
     prova_montada.cargo = cargo
+
+    checagem = await verificar_prova(db, cargo, prova_montada, prova_montada.blocos_questoes)
+    if checagem["bloqueios"]:
+        raise HTTPException(status_code=409, detail={
+            "mensagem": "Esta prova tem problemas que deixariam o gabarito errado. Corrija antes de consultar.",
+            "verificacao": [checagem],
+        })
 
     # Usa o generator igual no ZIP
     gabaritos_por_variacao = document_generator.gerar_gabaritos_balanceados_por_variacao(prova_montada)

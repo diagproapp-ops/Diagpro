@@ -40,10 +40,17 @@ const GabaritoPage: React.FC = () => {
   const comSenha = { headers: { 'X-Senha-Evento': senhaLiberada } };
   const tratarErroGabarito = (err: any, padrao: string) => {
     const status = err?.response?.status;
+    const det = err?.response?.data?.detail;
     if (status === 403 || status === 429) {
       setSenhaLiberada('');
       setGabarito([]);
-      setSnackbar({ open: true, message: err.response?.data?.detail || "Senha do evento inválida.", severity: "error" });
+      setSnackbar({ open: true, message: det || "Senha do evento inválida.", severity: "error" });
+    } else if (status === 409 && det && typeof det === 'object') {
+      // prova com problema (ex.: questão sem alternativa correta): o gabarito sairia errado
+      const lista = (det.verificacao || []).flatMap((v: any) => v.bloqueios.map((b: any) =>
+        `${v.cargo}: questão ${b.questao ?? '-'} (${b.codigo}) — ${b.problema}`));
+      setGabarito([]);
+      setSnackbar({ open: true, message: [det.mensagem, ...lista.slice(0, 5)].join(' | '), severity: "error" });
     } else {
       setSnackbar({ open: true, message: padrao, severity: "error" });
     }
@@ -191,7 +198,14 @@ const GabaritoPage: React.FC = () => {
       try {
         const corpo = e?.response?.data;
         const info = corpo instanceof Blob ? JSON.parse(await corpo.text()) : corpo;
-        detalhe = info?.detail || detalhe;
+        const det = info?.detail;
+        if (det && typeof det === 'object') {
+          const lista = (det.verificacao || []).flatMap((v: any) => v.bloqueios.map((b: any) =>
+            `${v.cargo}: questão ${b.questao ?? '-'} (${b.codigo}) — ${b.problema}`));
+          detalhe = [det.mensagem, ...lista.slice(0, 5)].join(' | ');
+        } else {
+          detalhe = det || detalhe;
+        }
       } catch { /* mantém a mensagem genérica */ }
       setExportSnackbar({ open: true, message: detalhe, severity: "error" });
     } finally {

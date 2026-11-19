@@ -67,6 +67,13 @@ const ExportacaoProvaPage: React.FC = () => {
 
   // Dialog de confirmação
   const [dialogConfirmar, setDialogConfirmar] = useState(false);
+  // Checagem antes de exportar (bloqueios impedem; avisos permitem "exportar mesmo assim")
+  type ProblemaQuestao = { questao: number | null; codigo: string; disciplina: string; problema: string };
+  type VerificacaoCargo = { id_cargo: string; cargo: string; total_questoes: number; bloqueios: ProblemaQuestao[]; avisos: ProblemaQuestao[]; avisos_gerais: string[] };
+  const [verificacao, setVerificacao] = useState<VerificacaoCargo[] | null>(null);
+  const [verificando, setVerificando] = useState(false);
+  const totalBloqueios = (verificacao || []).reduce((n, v) => n + v.bloqueios.length, 0);
+  const totalAvisos = (verificacao || []).reduce((n, v) => n + v.avisos.length + v.avisos_gerais.length, 0);
 
   // Snackbar feedback
   const [snackbar, setSnackbar] = useState<{ open: boolean, message: string, severity: "success" | "error" | "info" | "warning" }>(
@@ -134,6 +141,34 @@ const ExportacaoProvaPage: React.FC = () => {
     }
     fetchTemplates();
   }, [eventId]);
+
+  // Padrão de exportação do evento: apenas pré-preenche; cada exportação pode mudar tudo
+  useEffect(() => {
+    if (carregandoTemplates) return;
+    api.get(`/api/export/eventos/${eventId}/preferencias`).then(({ data }) => {
+      if (!data || typeof data !== 'object') return;
+      if (typeof data.fonte === 'string') setFonte(data.fonte);
+      if (typeof data.tamanhoFonte === 'number') setTamanhoFonte(data.tamanhoFonte);
+      if (typeof data.duasColunas === 'boolean') setDuasColunas(data.duasColunas);
+      if (typeof data.quebraBloco === 'boolean') setQuebraBloco(data.quebraBloco);
+      if (typeof data.manterDocx === 'boolean') setManterDocx(data.manterDocx);
+      if (typeof data.exibir_codigo_curto_questao === 'boolean') setExibirCodigoCurto(data.exibir_codigo_curto_questao);
+      if (typeof data.template === 'string' && templates.some(t => t.id === data.template)) setTemplateSelecionado(data.template);
+    }).catch(() => { /* sem padrão salvo: mantém os valores da tela */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId, carregandoTemplates]);
+
+  const salvarPadraoEvento = async () => {
+    try {
+      await api.put(`/api/export/eventos/${eventId}/preferencias`, {
+        fonte, tamanhoFonte, duasColunas, quebraBloco, manterDocx,
+        template: templateSelecionado || null, exibir_codigo_curto_questao: exibirCodigoCurto,
+      });
+      setSnackbar({ open: true, message: "Padrão do evento salvo. Ele só pré-preenche a tela; você pode mudar a cada exportação.", severity: "success" });
+    } catch (e: any) {
+      setSnackbar({ open: true, message: e?.response?.data?.detail || "Não foi possível salvar o padrão.", severity: "error" });
+    }
+  };
 
   const handleSelecionarTodos = (evt: React.ChangeEvent<HTMLInputElement>) => {
     const checked = evt.target.checked;
@@ -204,13 +239,22 @@ const ExportacaoProvaPage: React.FC = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Provas_${eventId}.zip`;
+    // a versão com gabarito marcado sai com nome próprio, para nunca ser confundida com a do candidato
+    a.download = exibirGabaritoMarcado ? `Provas_${eventId}_GABARITO_MARCADO.zip` : `Provas_${eventId}.zip`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     window.URL.revokeObjectURL(url);
 
-    setSnackbar({ open: true, message: "Exportação concluída! ZIP baixado.", severity: "success" });
+    const falhas = Number(response.headers['x-exportacao-falhas'] || 0);
+    const avisosLote = Number(response.headers['x-exportacao-avisos'] || 0);
+    if (falhas > 0) {
+      setSnackbar({ open: true, message: `ZIP baixado, mas ${falhas} cargo(s) não saíram completos. Veja RELATORIO_EXPORTACAO.txt dentro do ZIP.`, severity: "warning" });
+    } else if (avisosLote > 0) {
+      setSnackbar({ open: true, message: `Exportação concluída com ${avisosLote} aviso(s) — listados em RELATORIO_EXPORTACAO.txt no ZIP.`, severity: "info" });
+    } else {
+      setSnackbar({ open: true, message: "Exportação concluída! ZIP baixado.", severity: "success" });
+    }
   } catch (e: any) {
     setExportando(false);
     // Com responseType 'blob', a mensagem do servidor (ex.: senha inválida, prova vazia) vem dentro de um Blob
@@ -218,7 +262,13 @@ const ExportacaoProvaPage: React.FC = () => {
     try {
       const corpo = e.response?.data;
       const info = corpo instanceof Blob ? JSON.parse(await corpo.text()) : corpo;
-      detalhe = info?.detail || info?.erro || detalhe;
+      const det = info?.detail ?? info?.erro;
+      if (det && typeof det === 'object') {
+        detalhe = det.mensagem || detalhe;
+        if (Array.isArray(det.verificacao)) { setVerificacao(det.verificacao); setDialogConfirmar(true); }
+      } else {
+        detalhe = det || detalhe;
+      }
     } catch { /* mantém a mensagem genérica */ }
     setSnackbar({
       open: true,
@@ -238,7 +288,11 @@ const ExportacaoProvaPage: React.FC = () => {
       setSnackbar({ open: true, message: "Nenhum cargo selecionado para exportação!", severity: "warning" });
       return;
     }
-    setDialogConfirmar(true);
+    setVerificando(true);
+    api.post(`/api/export/eventos/${eventId}/verificar`, { cargos_id: cargosFiltrados.filter(c => c.selecionado).map(c => c.id_cargo) })
+      .then(({ data }) => { setVerificacao(Array.isArray(data) ? data : []); setDialogConfirmar(true); })
+      .catch((e: any) => setSnackbar({ open: true, message: e?.response?.data?.detail || "Não foi possível verificar as provas.", severity: "error" }))
+      .finally(() => setVerificando(false));
   };
 
   return (
@@ -488,12 +542,19 @@ const ExportacaoProvaPage: React.FC = () => {
                 carregando ||
                 !senhaCorreta || // <-- só libera se senha bater!
                 cargosFiltrados.filter(c => c.selecionado).length === 0 ||
-                exportando
+                exportando || verificando
             }
             sx={{ fontWeight: "bold" }}
             >
-            Exportar Selecionados
+            {verificando ? "Verificando provas..." : "Exportar Selecionados"}
             </Button>
+          <Tooltip title="Guarda fonte, tamanho, colunas e template como sugestão para as próximas exportações deste evento. Tudo continua podendo ser mudado a cada exportação.">
+            <span>
+              <Button variant="outlined" size="large" onClick={salvarPadraoEvento} disabled={carregando || exportando}>
+                Salvar como padrão do evento
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             variant="outlined"
             size="large"
@@ -563,15 +624,56 @@ const ExportacaoProvaPage: React.FC = () => {
             <Typography variant="body2" sx={{ mt: 1 }}>
               <b>Exportação:</b> sempre em ZIP (opção padrão do sistema)
             </Typography>
+            {exibirGabaritoMarcado && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                Versão COM GABARITO MARCADO: uso interno. Os arquivos sairão identificados e com aviso no cabeçalho de todas as páginas.
+              </Alert>
+            )}
+            {verificacao && (
+              <Box sx={{ mt: 2 }}>
+                {totalBloqueios === 0 && totalAvisos === 0 && (
+                  <Alert severity="success">Checagem concluída: nenhum problema encontrado.</Alert>
+                )}
+                {totalBloqueios > 0 && (
+                  <Alert severity="error" sx={{ mb: 1 }}>
+                    {totalBloqueios} problema(s) deixariam a prova errada. Corrija antes de exportar.
+                  </Alert>
+                )}
+                {totalBloqueios === 0 && totalAvisos > 0 && (
+                  <Alert severity="warning" sx={{ mb: 1 }}>
+                    {totalAvisos} aviso(s). A prova pode ser exportada, mas confira.
+                  </Alert>
+                )}
+                {verificacao.filter(v => v.bloqueios.length || v.avisos.length || v.avisos_gerais.length).map(v => (
+                  <Box key={v.id_cargo} sx={{ mb: 1.5 }}>
+                    <Typography variant="subtitle2" fontWeight="bold">{v.cargo} — {v.total_questoes} questão(ões)</Typography>
+                    {v.avisos_gerais.map((a, i) => (
+                      <Typography key={`g${i}`} variant="body2" color="warning.main">• {a}</Typography>
+                    ))}
+                    {v.bloqueios.map((p, i) => (
+                      <Typography key={`b${i}`} variant="body2" color="error.main">
+                        • {p.questao ? `Questão ${p.questao} (${p.codigo})${p.disciplina ? ` — ${p.disciplina}` : ''}: ` : ''}{p.problema}
+                      </Typography>
+                    ))}
+                    {v.avisos.map((p, i) => (
+                      <Typography key={`a${i}`} variant="body2" color="warning.main">
+                        • Questão {p.questao} ({p.codigo}){p.disciplina ? ` — ${p.disciplina}` : ''}: {p.problema}
+                      </Typography>
+                    ))}
+                  </Box>
+                ))}
+              </Box>
+            )}
           </DialogContent>
           <DialogActions>
+            <Button onClick={() => setDialogConfirmar(false)}>Voltar</Button>
             <Button
               onClick={iniciarExportacao}
               variant="contained"
-              color="primary"
-              disabled={exportando}
+              color={totalAvisos > 0 ? "warning" : "primary"}
+              disabled={exportando || totalBloqueios > 0}
             >
-              Confirmar Exportação
+              {totalBloqueios > 0 ? "Corrija os problemas" : totalAvisos > 0 ? "Exportar mesmo assim" : "Confirmar Exportação"}
             </Button>
           </DialogActions>
         </Dialog>

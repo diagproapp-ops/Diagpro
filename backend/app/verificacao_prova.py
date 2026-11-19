@@ -1,0 +1,100 @@
+# backend/app/verificacao_prova.py
+"""
+Checagem da prova montada ANTES de diagramar/exportar.
+
+- bloqueios: a prova sairia errada (ex.: alternativa sem texto vira "<<ALTERNATIVA SEM TEXTO>>" impresso,
+  questão sem alternativa correta, questão repetida). A exportação é recusada até corrigir.
+- avisos: a prova sai, mas alguém precisa saber (questão não aprovada na revisão, editada depois da montagem,
+  tipo que a diagramação ainda não imprime, quantidade diferente da prevista no cargo).
+
+Não devolve conteúdo de prova: só número, código curto, disciplina e o tipo do problema.
+"""
+import re
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.app.db_models import DisciplinaDaProva, QuestoesBanco
+
+_TAGS = re.compile(r"<[^>]+>")
+TIPOS_NAO_DIAGRAMADOS = {"CERTO_ERRADO": "Certo/Errado", "SUBJETIVA": "Subjetiva"}
+
+
+def _texto(html) -> str:
+    return _TAGS.sub("", str(html or "")).replace("&nbsp;", " ").strip()
+
+
+async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) -> dict:
+    bloqueios: list[dict] = []
+    avisos: list[dict] = []
+    itens = [(b, q) for b in (blocos or []) if isinstance(b, dict) for q in (b.get("questoes") or [])]
+    ids = [q.get("id_questao") for _, q in itens if q.get("id_questao")]
+    no_banco = {}
+    if ids:
+        for q in (await db.execute(select(QuestoesBanco).where(QuestoesBanco.id_questao.in_(ids)))).scalars():
+            no_banco[q.id_questao] = q
+
+    montada_em = getattr(prova_montada, "data_modificacao", None) or getattr(prova_montada, "data_criacao", None)
+    vistos = set()
+    for numero, (bloco, q) in enumerate(itens, start=1):
+        id_q = q.get("id_questao")
+        atual = no_banco.get(id_q)
+        codigo = q.get("codigo_curto_questao") or getattr(atual, "codigo_curto_questao", None) or f"nº {numero}"
+        disciplina = bloco.get("nome_disciplina_na_prova") or bloco.get("nome_disciplina") or ""
+
+        def add(lista, problema):
+            lista.append({"questao": numero, "codigo": codigo, "disciplina": disciplina, "problema": problema})
+
+        if id_q in vistos:
+            add(bloqueios, "Questão repetida na prova.")
+        vistos.add(id_q)
+
+        tipo = str(getattr(atual, "tipo", None) or q.get("tipo") or "MULTIPLA_ESCOLHA").upper()
+        if not _texto(q.get("enunciado")) and not q.get("caminho_imagem_relativo"):
+            add(bloqueios, "Enunciado vazio.")
+
+        if tipo in TIPOS_NAO_DIAGRAMADOS:
+            add(avisos, f"Questão {TIPOS_NAO_DIAGRAMADOS[tipo]}: a diagramação ainda não imprime este tipo; a prova sairá sem ela.")
+        elif "DISCURSIVA" not in tipo:
+            opcoes = q.get("opcoes") or []
+            if not opcoes:
+                add(bloqueios, "Questão sem alternativas.")
+            else:
+                corretas = sum(1 for o in opcoes if o.get("correta"))
+                if corretas == 0:
+                    add(bloqueios, "Nenhuma alternativa marcada como correta.")
+                elif corretas > 1:
+                    add(bloqueios, f"{corretas} alternativas marcadas como corretas.")
+                vazias = [chr(ord("A") + i) for i, o in enumerate(opcoes)
+                          if not _texto(o.get("texto_opcao")) and not o.get("imagem_path_opcao")]
+                if vazias:
+                    add(bloqueios, f"Alternativa(s) sem texto nem imagem (posição original {', '.join(vazias)}).")
+
+        if atual is None:
+            add(avisos, "A questão foi excluída do banco; a prova usa a cópia guardada na montagem.")
+        else:
+            status = (atual.status_revisao or "").upper()
+            if status != "APROVADA":
+                add(avisos, f"Não aprovada na revisão ({status.title() if status else 'sem revisão'}).")
+            if getattr(atual, "anulada", False):
+                add(avisos, "Questão marcada como anulada.")
+            alterada = getattr(atual, "data_modificacao", None)
+            if alterada and montada_em and alterada > montada_em:
+                add(avisos, "Editada depois da montagem: a prova usa a versão da montagem (remonte para atualizar).")
+
+    previsto = (await db.execute(
+        select(func.coalesce(func.sum(DisciplinaDaProva.qtd_questoes), 0))
+        .where(DisciplinaDaProva.id_cargo_fk == cargo.id_cargo)
+    )).scalar() or 0
+    gerais = []
+    if previsto and previsto != len(itens):
+        gerais.append(f"A prova tem {len(itens)} questão(ões); o cargo prevê {previsto}.")
+
+    return {
+        "id_cargo": cargo.id_cargo,
+        "cargo": f"{cargo.codigo_cargo or ''} - {cargo.nome_cargo or ''}".strip(" -"),
+        "total_questoes": len(itens),
+        "bloqueios": bloqueios,
+        "avisos": avisos,
+        "avisos_gerais": gerais,
+    }

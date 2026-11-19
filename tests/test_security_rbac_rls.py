@@ -606,3 +606,46 @@ async def test_cors_preflight_allows_app_custom_headers(async_client):
         r = await async_client.options(rota, headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": metodo,
                                                       "Access-Control-Request-Headers": "authorization,x-senha-evento,x-tenant-id"})
         assert r.status_code == 200, (rota, r.status_code, r.text)
+
+
+def test_exam_seed_is_secret_reproducible_and_legacy_compatible():
+    """Semente: com segredo gravado é imprevisível e estável; sem segredo, mantém a fórmula antiga."""
+    import logging as _lg
+    from core.document_generator import DocxProofGenerator, rotulo_variacao
+
+    def gerador(meta):
+        g = DocxProofGenerator.__new__(DocxProofGenerator)
+        g.prova_montada = {"metadados_prova": meta}
+        g.logger = _lg.getLogger("t")
+        return g
+
+    antigo = gerador({})
+    assert antigo._semente("1-TOTAL") == "1-TOTAL"  # prova antiga: idêntica ao que já foi exportado
+    s1, s2 = gerador({"semente_gabarito": "a" * 64}), gerador({"semente_gabarito": "b" * 64})
+    seq = lambda g: g.gerar_gabarito_balanceado(30, seed=g._semente("1-TOTAL"))
+    assert seq(s1) == seq(s1)                      # mesma prova: sempre igual
+    assert seq(s1) != seq(s2)                      # provas diferentes: gabaritos diferentes
+    assert seq(s1) != seq(antigo)                  # não é a sequência previsível antiga
+    assert gerador('{"semente_gabarito": "' + "a" * 64 + '"}')._semente("x") == s1._semente("x")  # JSON em texto
+    assert rotulo_variacao(1, 1) == "PADRÃO" and rotulo_variacao(2, 3) == "Tipo B"
+
+
+@pytest.mark.asyncio
+async def test_export_preferences_and_precheck_endpoints(async_client):
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    r = await async_client.put(f"/api/export/eventos/{ev}/preferencias", headers=h,
+                               json={"fonte": "Arial", "tamanhoFonte": 20, "duasColunas": True, "exibir_gabarito_marcado": True})
+    assert r.status_code == 200 and r.json() == {"fonte": "Arial", "tamanhoFonte": 20, "duasColunas": True}
+    assert (await async_client.get(f"/api/export/eventos/{ev}/preferencias", headers=h)).json()["tamanhoFonte"] == 20
+    for ruim in ({"tamanhoFonte": 500}, {"tamanhoFonte": "12"}, {"duasColunas": "sim"}, {"fonte": ""}):
+        assert (await async_client.put(f"/api/export/eventos/{ev}/preferencias", headers=h, json=ruim)).status_code == 400
+    # professor não mexe no padrão; outro cliente não enxerga o evento
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    assert (await async_client.get(f"/api/export/eventos/{ev}/preferencias", headers=hp)).status_code == 403
+    h2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    assert (await async_client.get(f"/api/export/eventos/{ev}/preferencias", headers=h2)).status_code == 404
+    # checagem: exige cargos; cargo sem prova montada aparece como bloqueio
+    assert (await async_client.post(f"/api/export/eventos/{ev}/verificar", headers=h, json={"cargos_id": []})).status_code == 400
+    r = await async_client.post(f"/api/export/eventos/{ev}/verificar", headers=h, json={"cargos_id": ["inexistente"]})
+    assert r.status_code == 200 and r.json()[0]["bloqueios"]

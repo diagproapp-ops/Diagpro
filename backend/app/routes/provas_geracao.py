@@ -133,9 +133,10 @@ async def definir_geracao_provas(
         todas_frases = [f.texto_frase for f in frases_result.scalars().all()]
 
         # Sorteio determinístico com a semente
-        random.seed(semente_embaralhamento)
+        # sorteador LOCAL (mesmo resultado de antes); random.seed global deixava previsível
+        # qualquer outro sorteio do servidor feito em seguida, como o das questões na montagem
         frases_embaralhadas = todas_frases.copy()
-        random.shuffle(frases_embaralhadas)
+        random.Random(semente_embaralhamento).shuffle(frases_embaralhadas)
 
         frases_por_tipo_prova = {}
         for i in range(num_variacoes):
@@ -185,9 +186,8 @@ async def simular_frases_geracao(
     )
     todas_frases = [f.texto_frase for f in frases_result.scalars().all()]
 
-    random.seed(semente_embaralhamento)
     frases_embaralhadas = todas_frases.copy()
-    random.shuffle(frases_embaralhadas)
+    random.Random(semente_embaralhamento).shuffle(frases_embaralhadas)
 
     frases_por_tipo_prova = {}
     for i in range(num_variacoes):
@@ -264,8 +264,7 @@ async def simular_certo_errado_geracao(
         for bloco in blocos:
             itens = bloco["itens"][:]
             if embaralhar_itens and len(itens) > 1:
-                random.seed(f"{seed}-{bloco['id_questao']}")
-                random.shuffle(itens)
+                random.Random(f"{seed}-{bloco['id_questao']}").shuffle(itens)
             bloco_variacao.append({
                 "comando": bloco["comando"],
                 "itens": itens

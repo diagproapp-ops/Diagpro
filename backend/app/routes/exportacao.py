@@ -31,6 +31,8 @@ from backend.app.auth import get_current_user
 from backend.app.security import (
     caminho_dentro_de, carregar_evento_autorizado, conferir_senha_evento, evento_com_senha, exigir_texto_claro,
 )
+from backend.app.verificacao_prova import verificar_prova
+from backend.app.auditoria_exportacao import registrar_exportacao
 import os
 import hmac
 import json
@@ -767,6 +769,77 @@ async def exportar_gabarito(
     return _resposta_arquivo(gabarito_path, os.path.basename(gabarito_path), "text/csv")
 
 
+# Padrão de exportação do evento: só SUGESTÃO pré-preenchida; cada exportação pode mudar tudo.
+# "exibir_gabarito_marcado" nunca entra no padrão (a tela sempre abre com ele desligado).
+_PREFERENCIAS = {
+    "fonte": str, "tamanhoFonte": (int, float), "duasColunas": bool, "quebraBloco": bool,
+    "manterDocx": bool, "template": (str, type(None)), "exibir_codigo_curto_questao": bool,
+}
+
+
+@router.get("/eventos/{evento_id}/preferencias")
+async def ler_preferencias_exportacao(
+    evento_id: str,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+):
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
+    return evento.preferencias_exportacao or {}
+
+
+@router.put("/eventos/{evento_id}/preferencias")
+async def salvar_preferencias_exportacao(
+    evento_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+):
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
+    body = await request.json()
+    prefs = {}
+    for chave, tipo in _PREFERENCIAS.items():
+        if chave in body:
+            valor = body[chave]
+            if not isinstance(valor, tipo) or (isinstance(valor, bool) and tipo in ((int, float),)):
+                raise HTTPException(status_code=400, detail=f"Valor inválido para {chave}.")
+            if chave == "tamanhoFonte" and not (6 <= float(valor) <= 72):
+                raise HTTPException(status_code=400, detail="Tamanho de fonte deve ficar entre 6 e 72.")
+            if chave == "fonte" and (not valor.strip() or len(valor) > 60):
+                raise HTTPException(status_code=400, detail="Fonte inválida.")
+            prefs[chave] = valor
+    evento.preferencias_exportacao = prefs
+    await db.commit()
+    return prefs
+
+
+@router.post("/eventos/{evento_id}/verificar")
+async def verificar_antes_de_exportar(
+    evento_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+):
+    """
+    Checagem das provas montadas dos cargos escolhidos, ANTES de exportar. Não exige a senha do evento
+    porque não devolve conteúdo de prova nem gabarito: só número/código da questão e o tipo do problema.
+    """
+    body = await request.json()
+    cargos_id = body.get("cargos_id") or []
+    if not isinstance(cargos_id, list) or not cargos_id:
+        raise HTTPException(status_code=400, detail="Nenhum cargo selecionado.")
+    await carregar_evento_autorizado(evento_id, db, current_user)
+    resultado = []
+    for cargo_id in cargos_id:
+        try:
+            _ev, cargo, prova, blocos, _meta = await fetch_evento_cargo_prova(evento_id, cargo_id, db, current_user.tenant_id)
+            resultado.append(await verificar_prova(db, cargo, prova, blocos))
+        except HTTPException as exc:
+            resultado.append({"id_cargo": cargo_id, "cargo": str(cargo_id), "total_questoes": 0,
+                              "bloqueios": [{"questao": None, "codigo": "", "disciplina": "", "problema": str(exc.detail)}],
+                              "avisos": [], "avisos_gerais": []})
+    return resultado
+
+
 @router.post("/eventos/{evento_id}/cargos/gerar-arquivos-multiplos", dependencies=[Depends(rate_limit(5, 60, "export-lote"))])
 async def gerar_todos_arquivos_multiplos(
     evento_id: str,
@@ -823,125 +896,167 @@ async def gerar_todos_arquivos_multiplos(
     )
 
     pdfs_finais: dict[str, list[str]] = {}
+    marcar_gabarito = exibir_gabarito_marcado in (True, 1, "true", "1", "on")
+    # --- Checagem antes de gerar (bloqueios impedem a exportação) ---
+    verificacoes = []
     for cargo_id in cargos_id:
-        output_dir = os.path.join(workdir, "saida", re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id)))
-        os.makedirs(output_dir, exist_ok=True)
-        evento, cargo, prova_montada, blocos_questoes, metadados_prova = await fetch_evento_cargo_prova(
-            evento_id, cargo_id, db, current_user.tenant_id
-        )
-        prova_dict = await montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db)
-        prova_dict = secure_files.materialize_into(prova_dict, current_user.tenant_id, workdir)
-        nome_cargo = cargo.nome_cargo
-        codigo_cargo = getattr(cargo, "codigo_cargo", "")
-        num_variacoes = (metadados_prova.get("definicao_geracao") or {}).get("num_variacoes", 1)
-        cover_pdf_paths = getattr(cargo, 'cover_pdf_paths', None)
-        cover_pdf_paths = secure_files.materialize_into({'cover_pdf_paths': cover_pdf_paths}, current_user.tenant_id, workdir)['cover_pdf_paths']
+        try:
+            _ev, _cargo, _prova, _blocos, _meta = await fetch_evento_cargo_prova(evento_id, cargo_id, db, current_user.tenant_id)
+            verificacoes.append(await verificar_prova(db, _cargo, _prova, _blocos))
+        except HTTPException as exc:
+            verificacoes.append({"id_cargo": cargo_id, "cargo": str(cargo_id), "total_questoes": 0,
+                                 "bloqueios": [{"questao": None, "codigo": "", "disciplina": "", "problema": str(exc.detail)}],
+                                 "avisos": [], "avisos_gerais": []})
+    if any(v["bloqueios"] for v in verificacoes):
+        total = sum(len(v["bloqueios"]) for v in verificacoes)
+        raise HTTPException(status_code=409, detail={
+            "mensagem": f"Exportação bloqueada: {total} problema(s) que deixariam a prova errada. Corrija e exporte de novo.",
+            "verificacao": verificacoes,
+        })
 
-        def resolve_capa_template_path(cover_pdf_paths):
-            if isinstance(cover_pdf_paths, str):
-                try:
-                    paths = json.loads(cover_pdf_paths)
-                    if isinstance(paths, str):
-                        paths = [paths]
-                except Exception:
-                    paths = [cover_pdf_paths]
-            elif isinstance(cover_pdf_paths, list):
-                paths = cover_pdf_paths
-            else:
-                paths = []
-            if paths:
-                template_path = os.path.normpath(paths[0])
-                if not os.path.isabs(template_path):
-                    template_path = os.path.abspath(template_path)
-                return template_path
-            return None
-
-        template_folha_rosto_pdf = resolve_capa_template_path(cover_pdf_paths)
-        dir_capas_java = os.path.join(output_dir, "CapasPreenchidas")
-        os.makedirs(dir_capas_java, exist_ok=True)
-        def preencher_capas_java(template_pdf, dados_json, saida_dir):
-            import subprocess
-            comando = [
-                "java", "-cp",
-                "backend/app/pdfbox-app-3.0.5.jar;backend/app/json.jar;backend/app",
-                "PreencheCapaPDF_JSON_PDFBox",
-                template_pdf,
-                dados_json,
-                saida_dir
-            ]
-            subprocess.run(comando, capture_output=True, text=True)
-        for variacao_num in range(1, num_variacoes + 1):
-            tipo_letra = chr(ord('A') + variacao_num - 1) if num_variacoes > 1 else ""
-            sufixo_tipo = f"Tipo {tipo_letra}" if tipo_letra else "PADRÃO"
-            tipo_so_letra = tipo_letra or "PADRÃO"
-            tipo_prova_nome = f"Tipo {tipo_letra}" if tipo_letra else "PADRÃO"
-            if isinstance(prova_dict, dict):
-                prova_dict["identificador_prova"] = tipo_prova_nome
-            else:
-                setattr(prova_dict, "identificador_prova", tipo_prova_nome)
-            frase_para_capa = metadados_prova.get("frases_por_tipo_prova", {}).get(sufixo_tipo, "")
-            dados_para_capa = [montar_dados_capa(
-                candidato={},
-                cargo=cargo,
-                evento=evento,
-                prova=prova_montada,
-                frase=frase_para_capa,
-                tipo=sufixo_tipo,
-                letra_tipo=tipo_letra,
-                tempo_prova="",
-                quantidade_questoes="",
-                empresa="NOME DA BANCA",
-                qrcode="",
-                outros=""
-            )]
-            json_capa_path = os.path.join(dir_capas_java, f"dados_capa_{tipo_so_letra}.json")
-            with open(json_capa_path, "w", encoding="utf-8") as f:
-                json.dump(dados_para_capa, f, ensure_ascii=False, indent=2)
-            if template_folha_rosto_pdf and os.path.exists(template_folha_rosto_pdf):
-                preencher_capas_java(template_folha_rosto_pdf, json_capa_path, dir_capas_java)
-            capa_pdf_antes = set([fn for fn in os.listdir(dir_capas_java) if fn.endswith('.pdf')])
-            timeout, interval = 5, 0.1
-            found = None
-            for _ in range(int(timeout / interval)):
-                time.sleep(interval)
-                arquivos = [fn for fn in os.listdir(dir_capas_java) if fn.endswith('.pdf')]
-                novos = set(arquivos) - capa_pdf_antes
-                if novos:
-                    found = novos.pop()
-                    break
-                for nome in ["PROVA_UNICA_capa.pdf", "_capa.pdf"]:
-                    if nome in arquivos:
-                        found = nome
-                        break
-                if found:
-                    break
-            path_capa_pdf_final = None
-            if found and os.path.exists(os.path.join(dir_capas_java, found)):
-                path_capa_pdf_origem = os.path.join(dir_capas_java, found)
-                nome_capa_pdf_final = f"{codigo_cargo} - {nome_cargo.replace(' ', '_')} - Tipo_{tipo_so_letra}_capa.pdf"
-                path_capa_pdf_final = os.path.join(dir_capas_java, nome_capa_pdf_final)
-                shutil.copy2(path_capa_pdf_origem, path_capa_pdf_final)
-            docx_path = document_generator.gerar_prova_docx(
-                prova_montada=prova_dict,
-                nome_cargo=nome_cargo,
-                variacao_num=variacao_num,
-                output_folder=output_dir,
-                format_options=format_options,
-                textos_map={}
+    relatorio: list[str] = []
+    falhas = 0
+    for cargo_id in cargos_id:
+        # um cargo com erro não derruba o lote: os demais saem e o relatório diz o que faltou
+        try:
+            output_dir = os.path.join(workdir, "saida", re.sub(r"[^A-Za-z0-9_.-]", "_", str(cargo_id)))
+            os.makedirs(output_dir, exist_ok=True)
+            evento, cargo, prova_montada, blocos_questoes, metadados_prova = await fetch_evento_cargo_prova(
+                evento_id, cargo_id, db, current_user.tenant_id
             )
-            pdf_path = document_generator.pdf_converter.convert_to_pdf(docx_path, output_dir) if docx_path else None
-            nome_prova_final = f"{codigo_cargo} - {nome_cargo.replace(' ', '_')} - Tipo_{tipo_so_letra}.pdf"
-            caminho_pdf_final = os.path.join(output_dir, nome_prova_final)
-            if path_capa_pdf_final and os.path.exists(path_capa_pdf_final) and pdf_path and os.path.exists(pdf_path):
-                merger = PdfWriter()
-                merger.append(path_capa_pdf_final)
-                merger.append(pdf_path)
-                with open(caminho_pdf_final, "wb") as f_out:
-                    merger.write(f_out)
-            elif pdf_path and os.path.exists(pdf_path):
-                shutil.copy2(pdf_path, caminho_pdf_final)
-            if os.path.exists(caminho_pdf_final):
-                pdfs_finais.setdefault(str(cargo_id), []).append(caminho_pdf_final)
+            prova_dict = await montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, metadados_prova, db)
+            prova_dict = secure_files.materialize_into(prova_dict, current_user.tenant_id, workdir)
+            nome_cargo = cargo.nome_cargo
+            codigo_cargo = getattr(cargo, "codigo_cargo", "")
+            num_variacoes = (metadados_prova.get("definicao_geracao") or {}).get("num_variacoes", 1)
+            cover_pdf_paths = getattr(cargo, 'cover_pdf_paths', None)
+            cover_pdf_paths = secure_files.materialize_into({'cover_pdf_paths': cover_pdf_paths}, current_user.tenant_id, workdir)['cover_pdf_paths']
+
+            def resolve_capa_template_path(cover_pdf_paths):
+                if isinstance(cover_pdf_paths, str):
+                    try:
+                        paths = json.loads(cover_pdf_paths)
+                        if isinstance(paths, str):
+                            paths = [paths]
+                    except Exception:
+                        paths = [cover_pdf_paths]
+                elif isinstance(cover_pdf_paths, list):
+                    paths = cover_pdf_paths
+                else:
+                    paths = []
+                if paths:
+                    template_path = os.path.normpath(paths[0])
+                    if not os.path.isabs(template_path):
+                        template_path = os.path.abspath(template_path)
+                    return template_path
+                return None
+
+            template_folha_rosto_pdf = resolve_capa_template_path(cover_pdf_paths)
+            dir_capas_java = os.path.join(output_dir, "CapasPreenchidas")
+            os.makedirs(dir_capas_java, exist_ok=True)
+            def preencher_capas_java(template_pdf, dados_json, saida_dir):
+                import subprocess
+                comando = [
+                    "java", "-cp",
+                    "backend/app/pdfbox-app-3.0.5.jar;backend/app/json.jar;backend/app",
+                    "PreencheCapaPDF_JSON_PDFBox",
+                    template_pdf,
+                    dados_json,
+                    saida_dir
+                ]
+                subprocess.run(comando, capture_output=True, text=True)
+            for variacao_num in range(1, num_variacoes + 1):
+                tipo_letra = chr(ord('A') + variacao_num - 1) if num_variacoes > 1 else ""
+                sufixo_tipo = f"Tipo {tipo_letra}" if tipo_letra else "PADRÃO"
+                tipo_so_letra = tipo_letra or "PADRÃO"
+                tipo_prova_nome = f"Tipo {tipo_letra}" if tipo_letra else "PADRÃO"
+                if isinstance(prova_dict, dict):
+                    prova_dict["identificador_prova"] = tipo_prova_nome
+                else:
+                    setattr(prova_dict, "identificador_prova", tipo_prova_nome)
+                frase_para_capa = metadados_prova.get("frases_por_tipo_prova", {}).get(sufixo_tipo, "")
+                dados_para_capa = [montar_dados_capa(
+                    candidato={},
+                    cargo=cargo,
+                    evento=evento,
+                    prova=prova_montada,
+                    frase=frase_para_capa,
+                    tipo=sufixo_tipo,
+                    letra_tipo=tipo_letra,
+                    tempo_prova="",
+                    quantidade_questoes="",
+                    empresa="NOME DA BANCA",
+                    qrcode="",
+                    outros=""
+                )]
+                json_capa_path = os.path.join(dir_capas_java, f"dados_capa_{tipo_so_letra}.json")
+                with open(json_capa_path, "w", encoding="utf-8") as f:
+                    json.dump(dados_para_capa, f, ensure_ascii=False, indent=2)
+                if template_folha_rosto_pdf and os.path.exists(template_folha_rosto_pdf):
+                    preencher_capas_java(template_folha_rosto_pdf, json_capa_path, dir_capas_java)
+                capa_pdf_antes = set([fn for fn in os.listdir(dir_capas_java) if fn.endswith('.pdf')])
+                timeout, interval = 5, 0.1
+                found = None
+                for _ in range(int(timeout / interval)):
+                    time.sleep(interval)
+                    arquivos = [fn for fn in os.listdir(dir_capas_java) if fn.endswith('.pdf')]
+                    novos = set(arquivos) - capa_pdf_antes
+                    if novos:
+                        found = novos.pop()
+                        break
+                    for nome in ["PROVA_UNICA_capa.pdf", "_capa.pdf"]:
+                        if nome in arquivos:
+                            found = nome
+                            break
+                    if found:
+                        break
+                path_capa_pdf_final = None
+                if found and os.path.exists(os.path.join(dir_capas_java, found)):
+                    path_capa_pdf_origem = os.path.join(dir_capas_java, found)
+                    nome_capa_pdf_final = f"{codigo_cargo} - {nome_cargo.replace(' ', '_')} - Tipo_{tipo_so_letra}_capa.pdf"
+                    path_capa_pdf_final = os.path.join(dir_capas_java, nome_capa_pdf_final)
+                    shutil.copy2(path_capa_pdf_origem, path_capa_pdf_final)
+                docx_path = document_generator.gerar_prova_docx(
+                    prova_montada=prova_dict,
+                    nome_cargo=nome_cargo,
+                    variacao_num=variacao_num,
+                    output_folder=output_dir,
+                    format_options=format_options,
+                    textos_map={}
+                )
+                pdf_path = document_generator.pdf_converter.convert_to_pdf(docx_path, output_dir) if docx_path else None
+                # Mesmo nome para PDF, DOCX e gabarito: o rótulo impresso na prova ("PADRÃO" ou "Tipo A"...).
+                # A versão com gabarito marcado leva isso no nome para não ser confundida na gráfica.
+                sufixo_marcado = " - GABARITO_MARCADO" if marcar_gabarito else ""
+                nome_base_final = f"{codigo_cargo} - {nome_cargo.replace(' ', '_')} - {tipo_prova_nome}{sufixo_marcado}"
+                nome_prova_final = f"{nome_base_final}.pdf"
+                caminho_pdf_final = os.path.join(output_dir, nome_prova_final)
+                if docx_path and os.path.exists(docx_path):
+                    docx_final = os.path.join(output_dir, f"{nome_base_final}.docx")
+                    os.replace(docx_path, docx_final)
+                    docx_path = docx_final
+                if path_capa_pdf_final and os.path.exists(path_capa_pdf_final) and pdf_path and os.path.exists(pdf_path):
+                    merger = PdfWriter()
+                    merger.append(path_capa_pdf_final)
+                    merger.append(pdf_path)
+                    with open(caminho_pdf_final, "wb") as f_out:
+                        merger.write(f_out)
+                elif pdf_path and os.path.exists(pdf_path):
+                    shutil.copy2(pdf_path, caminho_pdf_final)
+                if os.path.exists(caminho_pdf_final):
+                    pdfs_finais.setdefault(str(cargo_id), []).append(caminho_pdf_final)
+        except Exception as exc:  # noqa: BLE001
+            falhas += 1
+            motivo = exc.detail if isinstance(exc, HTTPException) else "erro interno na diagramação"
+            logger.error("Falha ao gerar o cargo %s: %s", cargo_id, type(exc).__name__)
+            relatorio.append(f"[FALHOU] cargo {cargo_id}: {motivo}")
+            continue
+        gerados = len(pdfs_finais.get(str(cargo_id), []))
+        if gerados < num_variacoes:
+            falhas += 1
+            relatorio.append(f"[INCOMPLETO] {codigo_cargo} - {nome_cargo}: {gerados} de {num_variacoes} PDF(s) gerado(s); confira os DOCX.")
+        else:
+            relatorio.append(f"[OK] {codigo_cargo} - {nome_cargo}: {gerados} PDF(s).")
 
     # --- Monta lista de arquivos para o ZIP ---
     base_dir = os.path.join(workdir, "saida")
@@ -982,7 +1097,20 @@ async def gerar_todos_arquivos_multiplos(
                         arquivos_para_zip.append((file_path, arcname))
 
     if not arquivos_para_zip:
-        return {"erro": "Nenhum arquivo encontrado para os cargos selecionados."}
+        raise HTTPException(status_code=500, detail={"mensagem": "Nenhum arquivo foi gerado.", "relatorio": relatorio})
+
+    avisos_txt = []
+    for v in verificacoes:
+        for a in v["avisos_gerais"]:
+            avisos_txt.append(f"  {v['cargo']}: {a}")
+        for a in v["avisos"]:
+            avisos_txt.append(f"  {v['cargo']} | questão {a['questao']} ({a['codigo']}): {a['problema']}")
+    partes = ["RELATÓRIO DA EXPORTAÇÃO", ""] + relatorio
+    if avisos_txt:
+        partes += ["", "AVISOS DA CHECAGEM"] + avisos_txt
+    if marcar_gabarito:
+        partes += ["", "ATENÇÃO: VERSÃO COM GABARITO MARCADO — USO INTERNO"]
+    texto_relatorio = "\r\n".join(partes) + "\r\n"
 
     # --- ZIP protegido pela senha do evento, montado na pasta da requisição e entregue em memória ---
     zip_path = os.path.join(workdir, "pacote.zip")
@@ -990,7 +1118,22 @@ async def gerar_todos_arquivos_multiplos(
         zipf.setpassword(senha_evento.encode('utf-8'))
         for file_path, arcname in arquivos_para_zip:
             zipf.write(file_path, arcname=arcname)
-    return _resposta_arquivo(zip_path, f"Provas_{nome_evento}.zip", "application/zip")
+        zipf.writestr("RELATORIO_EXPORTACAO.txt", texto_relatorio.encode("utf-8"))
+    nome_zip = f"Provas_{nome_evento}{'_GABARITO_MARCADO' if marcar_gabarito else ''}.zip"
+
+    await registrar_exportacao(
+        db, request, current_user, evento, "exportacao_provas",
+        cargos=[v["cargo"] for v in verificacoes],
+        parametros={**{k: format_options.get(k) for k in ("fonte_principal", "tamanho_fonte_principal", "duas_colunas",
+                                                          "quebra_de_pagina_por_bloco", "exibir_codigo_curto_questao",
+                                                          "exibir_gabarito_marcado")},
+                    "template": bool(template), "falhas": falhas},
+        arquivos=[(arc, path) for path, arc in arquivos_para_zip],
+    )
+    resposta = _resposta_arquivo(zip_path, nome_zip, "application/zip")
+    resposta.headers["X-Exportacao-Falhas"] = str(falhas)
+    resposta.headers["X-Exportacao-Avisos"] = str(len(avisos_txt))
+    return resposta
 
 
 @router.get("/jobs/{job_id}")

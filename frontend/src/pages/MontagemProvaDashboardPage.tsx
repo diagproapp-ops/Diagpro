@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import SyncIcon from '@mui/icons-material/Sync';
 import api from '../api';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
@@ -36,6 +37,26 @@ const MontagemProvaDashboardPage: React.FC = () => {
   function handleMontagem() {
     navigate(`/eventos/${eventId}/provas/montagem`);
   }
+  // Relê do banco as questões já escolhidas (mesmas questões, mesma ordem, mesma semente).
+  // Só as que mudaram desde a montagem são trocadas; o resto da prova fica idêntico.
+  async function handleAtualizarQuestoes(cargoId: string) {
+    if (!window.confirm("Atualizar as questões desta montagem com a versão atual do banco?\n\nNão sorteia de novo: as questões e a ordem continuam as mesmas; só o texto/imagens das questões editadas depois da montagem é atualizado.")) return;
+    try {
+      const { data } = await api.post(`/provas/eventos/${eventId}/provas-montadas/${cargoId}/atualizar-questoes`);
+      const n = (data.atualizadas || []).length;
+      const exc = (data.excluidas_do_banco || []).length;
+      setSnackbar({
+        open: true,
+        severity: exc ? "error" : "success",
+        message: n
+          ? `${n} questão(ões) atualizada(s): ${(data.atualizadas || []).join(', ')}.${exc ? ` ${exc} questão(ões) não existem mais no banco.` : ''}`
+          : `Nenhuma questão mudou desde a montagem.${exc ? ` ${exc} questão(ões) não existem mais no banco.` : ''}`,
+      });
+    } catch (e: any) {
+      setSnackbar({ open: true, message: e?.response?.data?.detail || "Erro ao atualizar as questões.", severity: "error" });
+    }
+  }
+
   async function handleExcluir(cargoId: string) {
     try {
       await api.delete(`/provas/eventos/${eventId}/provas-montadas/${cargoId}`);
@@ -125,6 +146,14 @@ const MontagemProvaDashboardPage: React.FC = () => {
                       <span>
                         <IconButton color="secondary" onClick={() => handleVisualizar(cargo.id_cargo)}>
                           <VisibilityIcon/>
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="Atualizar questões editadas depois da montagem (sem sortear de novo)">
+                      <span>
+                        <IconButton color="primary" onClick={() => handleAtualizarQuestoes(cargo.id_cargo)}
+                          disabled={cargo.status_montagem === "Não Iniciada"}>
+                          <SyncIcon/>
                         </IconButton>
                       </span>
                     </Tooltip>

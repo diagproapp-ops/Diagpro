@@ -94,9 +94,10 @@ export default function FullTiptapEditor({
       )}
       <div
         style={{
-          border: error ? "2px solid #d32f2f" : "1px solid #ccc",
-          borderRadius: 8,
-          background: "#fafafa",
+          border: error ? "2px solid #EF4444" : "1px solid rgba(56, 189, 248, 0.22)",
+          borderRadius: 10,
+          background: "rgba(6, 11, 25, 0.65)",
+          color: "#F1F5F9",
           minHeight: height,
           padding: 12,
         }}

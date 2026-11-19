@@ -479,7 +479,7 @@ export default function SuperToolbarTiptap({ editor }: { editor: Editor | null }
               maxHeight: "80vh",
               border: "1px solid #ccc",
               borderRadius: 8,
-              background: "#fafafa",
+              background: "rgba(6, 11, 25, 0.65)",
               padding: 12,
               overflowY: "auto",
               marginBottom: 16,

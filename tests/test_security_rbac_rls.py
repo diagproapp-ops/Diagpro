@@ -398,3 +398,93 @@ async def test_debug_and_disk_persisting_export_routes_were_removed(async_client
     assert (await async_client.get("/api/export/debug_export_ping", headers=h)).status_code == 404
     assert (await async_client.get(f"/api/export/download-zip?evento_id={ev}", headers=h)).status_code == 404
     assert (await async_client.post(f"/api/export/eventos/{ev}/cargos/x/gerar-arquivos-async", headers=h)).status_code in (404, 405)
+
+
+# --------------------------------------------------------------------------- integridade de tenant e admin geral
+@pytest.mark.asyncio
+async def test_tenant_change_without_reencryption_is_blocked_by_database():
+    import uuid
+    from sqlalchemy.exc import DBAPIError
+    from backend.app.db_models import Disciplina
+    did = "ci-disc-" + uuid.uuid4().hex[:8]
+    async with PlatformSessionLocal() as p:
+        p.add(Disciplina(id_disciplina=did, nome_disciplina="Física", descricao="x", tenant_id=1))
+        await p.commit()
+        # SQL direto mantendo a cifra antiga: o banco recusa
+        with pytest.raises(DBAPIError) as exc:
+            await p.execute(text('UPDATE "Disciplinas" SET tenant_id = 2 WHERE id_disciplina = :i'), {"i": did})
+        assert "sem recifrar" in str(exc.value)
+        await p.rollback()
+        # pelo ORM a troca recifra tudo e é aceita; o valor continua legível no novo cliente
+        d = (await p.execute(select(Disciplina).where(Disciplina.id_disciplina == did))).scalars().first()
+        d.tenant_id = 2
+        await p.commit()
+    async with SessionLocal() as s:
+        async with s.begin():
+            await set_tenant_context(s, 2)
+            d2 = (await s.execute(select(Disciplina).where(Disciplina.id_disciplina == did))).scalars().first()
+            assert d2 is not None and d2.nome_disciplina == "Física"
+            await s.delete(d2)
+
+
+@pytest.mark.asyncio
+async def test_admin_geral_must_choose_valid_tenant_to_create_event(async_client):
+    h = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    base = {"nome_evento": "Evento AG", "data_prova": "2027-03-01", "status": "Aberto",
+            "senha_evento": "x1", "qtd_cargos": 1}
+    assert (await async_client.post("/eventos/", headers=h, json={**base, "tenant_id": 999})).status_code == 400
+    ok = await async_client.post("/eventos/", headers=h, json={**base, "tenant_id": 2})
+    assert ok.status_code == 200 and ok.json()["tenant_id"] == 2
+    me = await async_client.get("/users/me", headers=h)
+    assert me.status_code == 200 and me.json()["tenant_id"] is None   # admin geral não vira cliente 1
+    # admin de cliente continua preso ao próprio cliente, mesmo pedindo outro
+    h1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    r = await async_client.post("/eventos/", headers=h1, json={**base, "nome_evento": "Evento T1", "tenant_id": 2})
+    assert r.status_code == 200 and r.json()["tenant_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_geral_global_view_and_managed_client_isolation(async_client):
+    """Admin geral: visão global enxerga tudo; com um cliente em gestão, vê e grava só nele (sob RLS)."""
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+
+    # visão global: usuários de todos os clientes
+    todos = await async_client.get("/users/", headers=ag)
+    assert todos.status_code == 200
+    assert {1, 2} <= {u["tenant_id"] for u in todos.json()}
+
+    # cliente em gestão = 2: só dados do cliente 2, e /users/me reflete o cliente escolhido
+    ag2 = {**ag, "X-Tenant-Id": "2"}
+    me = await async_client.get("/users/me", headers=ag2)
+    assert me.status_code == 200 and me.json()["tenant_id"] == 2
+    usuarios = await async_client.get("/users/", headers=ag2)
+    assert usuarios.status_code == 200 and {u["tenant_id"] for u in usuarios.json()} == {2}
+    eventos = await async_client.get("/eventos/", headers=ag2)
+    assert eventos.status_code == 200 and all(e["tenant_id"] == 2 for e in eventos.json())
+    # o evento do cliente 1 não existe para quem está gerenciando o cliente 2
+    ev1 = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+    assert (await async_client.get(f"/eventos/{ev1}", headers=ag2)).status_code == 404
+
+    # criar com cliente em gestão vai sempre para ele, mesmo que o corpo peça outro
+    base = {"nome_evento": "Evento Gestao", "data_prova": "2027-04-01", "status": "Aberto",
+            "senha_evento": "x1", "qtd_cargos": 1}
+    r = await async_client.post("/eventos/", headers=ag2, json={**base, "tenant_id": 1})
+    assert r.status_code == 200 and r.json()["tenant_id"] == 2
+
+    # cliente inexistente ou inválido no cabeçalho: recusado, nunca cai num cliente padrão
+    for ruim in ("999", "abc", "0", "-1"):
+        assert (await async_client.get("/users/me", headers={**ag, "X-Tenant-Id": ruim})).status_code == 400
+
+    # o cabeçalho não dá nada a quem não é admin geral: admin do cliente 1 continua no cliente 1
+    a1 = {**auth_headers("admin1", UserRole.ADMIN, tenant_id=1), "X-Tenant-Id": "2"}
+    me1 = await async_client.get("/users/me", headers=a1)
+    assert me1.status_code == 200 and me1.json()["tenant_id"] == 1
+    assert {u["tenant_id"] for u in (await async_client.get("/users/", headers=a1)).json()} == {1}
+    assert (await async_client.get("/admin/clients", headers=a1)).status_code == 403
+
+    # gestão de clientes é sempre global, mesmo com um cliente escolhido
+    clientes = await async_client.get("/admin/clients", headers=ag2)
+    assert clientes.status_code == 200 and {1, 2} <= {c["id"] for c in clientes.json()}
+    # usuário de cliente lê só o próprio cliente (antes quebrava com 500 na camada de cifra)
+    assert (await async_client.get("/admin/clients/1", headers=a1)).status_code == 200
+    assert (await async_client.get("/admin/clients/2", headers=a1)).status_code == 403

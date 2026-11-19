@@ -7,9 +7,9 @@ from typing import List
 import uuid
 from datetime import datetime
 
-from backend.app.security import get_tenant_db, require_roles
+from backend.app.security import get_tenant_db, is_admin_geral, require_roles
 from backend.app.roles import UserRole
-from backend.app.db_models import Evento as DBEvento
+from backend.app.db_models import Evento as DBEvento, Tenant as DBTenant
 from backend.app.models import (
     EventoCreate as PydanticEventoCreate,
     EventoUpdate as PydanticEventoUpdate,
@@ -31,11 +31,19 @@ async def gerar_identificador_evento(nome_evento: str, db: AsyncSession):
     prefix = f"{letras}"
 
     result = await db.execute(
-        select(func.count(DBEvento.identificador_evento))
+        select(DBEvento.identificador_evento)
         .filter(DBEvento.identificador_evento.like(f"{prefix}%"))
     )
-    count = result.scalar_one() or 0
-    numero = str(count + 1).zfill(3)
+    max_num = 0
+    for ident in result.scalars().all():
+        if ident and ident.startswith(prefix):
+            try:
+                num = int(ident[len(prefix):])
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                continue
+    numero = str(max_num + 1).zfill(3)
     return f"{letras}{numero}"
 
 @router.get("/", response_model=List[PydanticEventoOut])
@@ -43,14 +51,14 @@ async def list_eventos(
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
-    result = await db.execute(
+    stmt = (
         select(DBEvento)
         .options(selectinload(DBEvento.cargos))
-        .filter(
-            DBEvento.tenant_id == current_user.tenant_id,
-            DBEvento.is_deleted == False  # Só eventos não deletados
-        )
+        .filter(DBEvento.is_deleted == False)
     )
+    if not is_admin_geral(current_user):
+        stmt = stmt.filter(DBEvento.tenant_id == current_user.tenant_id)
+    result = await db.execute(stmt)
     eventos = result.scalars().all()
 
     eventos_out = []
@@ -81,15 +89,17 @@ async def get_evento_details(
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
-    result = await db.execute(
+    stmt = (
         select(DBEvento)
         .options(selectinload(DBEvento.cargos))
         .filter(
             DBEvento.id_evento == event_id,
-            DBEvento.tenant_id == current_user.tenant_id,
-            DBEvento.is_deleted == False  # Só eventos não deletados
+            DBEvento.is_deleted == False
         )
     )
+    if not is_admin_geral(current_user):
+        stmt = stmt.filter(DBEvento.tenant_id == current_user.tenant_id)
+    result = await db.execute(stmt)
     evento = result.scalars().first()
     if not evento:
         raise HTTPException(status_code=404, detail="Evento não encontrado")
@@ -117,15 +127,17 @@ async def get_evento_for_edit(
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(get_current_user)
 ):
-    result = await db.execute(
+    stmt = (
         select(DBEvento)
         .options(selectinload(DBEvento.cargos))
         .filter(
             DBEvento.id_evento == event_id,
-            DBEvento.tenant_id == current_user.tenant_id,
-            DBEvento.is_deleted == False  # Só eventos não deletados
+            DBEvento.is_deleted == False
         )
     )
+    if not is_admin_geral(current_user):
+        stmt = stmt.filter(DBEvento.tenant_id == current_user.tenant_id)
+    result = await db.execute(stmt)
     evento = result.scalars().first()
     if not evento:
         raise HTTPException(status_code=404, detail="Evento não encontrado")
@@ -154,7 +166,17 @@ async def create_evento(
     senha_pura = evento_dict["senha_evento"]
     evento_dict["senha_evento"] = get_password_hash(senha_pura)
     evento_dict["senha_evento_cripto"] = encrypt_text(senha_pura)  # <-- NOVO CAMPO CRIPTOGRAFADO REVERSÍVEL
-    evento_dict["tenant_id"] = current_user.tenant_id
+    if is_admin_geral(current_user) and current_user.tenant_id is None:
+        # Admin geral na visão global: precisa dizer para qual cliente cria o evento, e o cliente tem de
+        # existir. Nunca há cliente "padrão". (Com um cliente em gestão, cai no ramo de baixo.)
+        alvo = evento_dict.get("tenant_id")
+        existe = alvo is not None and (await db.execute(select(DBTenant.id).where(DBTenant.id == alvo))).first()
+        if not existe:
+            raise HTTPException(status_code=400, detail="Informe um cliente (tenant_id) válido para criar o evento.")
+        evento_dict["tenant_id"] = int(alvo)
+    else:
+        # usuário de cliente (ou admin geral gerenciando um cliente): sempre esse cliente, ignorando o corpo
+        evento_dict["tenant_id"] = current_user.tenant_id
     evento_dict["id_evento"] = str(uuid.uuid4())
     evento_dict["qtd_cargos"] = int(evento_dict.get("qtd_cargos", 1))
     evento_dict["identificador_evento"] = await gerar_identificador_evento(evento_dict["nome_evento"], db)
@@ -185,15 +207,17 @@ async def update_evento(
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
-    result = await db.execute(
+    stmt = (
         select(DBEvento)
         .options(selectinload(DBEvento.cargos))
         .filter(
             DBEvento.id_evento == event_id,
-            DBEvento.tenant_id == current_user.tenant_id,
-            DBEvento.is_deleted == False  # Só eventos não deletados
+            DBEvento.is_deleted == False
         )
     )
+    if not is_admin_geral(current_user):
+        stmt = stmt.filter(DBEvento.tenant_id == current_user.tenant_id)
+    result = await db.execute(stmt)
     evento = result.scalars().first()
     if not evento:
         raise HTTPException(status_code=404, detail="Evento não encontrado")
@@ -228,13 +252,13 @@ async def delete_evento(
     db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
-    result = await db.execute(
-        select(DBEvento).filter(
-            DBEvento.id_evento == event_id,
-            DBEvento.tenant_id == current_user.tenant_id,
-            DBEvento.is_deleted == False  # Só eventos não deletados
-        )
+    stmt = select(DBEvento).filter(
+        DBEvento.id_evento == event_id,
+        DBEvento.is_deleted == False
     )
+    if not is_admin_geral(current_user):
+        stmt = stmt.filter(DBEvento.tenant_id == current_user.tenant_id)
+    result = await db.execute(stmt)
     evento = result.scalars().first()
     if not evento:
         raise HTTPException(status_code=404, detail="Evento não encontrado")

@@ -3,12 +3,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 from backend.app.field_crypto import blind_eq
-from backend.app.security import get_tenant_db
+from backend.app.database import get_platform_db
 from backend.app.db_models import Tenant, User, ProvaMontada, BancoFrases, Evento, Cargo
 from backend.app.models import Tenant as PydanticTenant, TenantCreate, TenantDashboard
 from backend.app.auth import get_password_hash, get_current_user
 from backend.app.roles import UserRole
 from datetime import datetime
+import secrets
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ def get_admin_geral_user(current_user: User = Depends(get_current_user)):
 
 @router.get("/admin/clients", response_model=list[PydanticTenant])
 async def list_admin_clients(
-    db: AsyncSession = Depends(get_tenant_db),
+    db: AsyncSession = Depends(get_platform_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     result = await db.execute(select(Tenant))
@@ -32,7 +33,7 @@ async def list_admin_clients(
 @router.post("/admin/clients", response_model=PydanticTenant)
 async def create_admin_client(
     tenant: TenantCreate,
-    db: AsyncSession = Depends(get_tenant_db),
+    db: AsyncSession = Depends(get_platform_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     # Normaliza domínio para evitar duplicidade por maiúsculas/espacos
@@ -77,7 +78,7 @@ async def create_admin_client(
 
 @router.get("/admin/clients/dashboard", response_model=list[TenantDashboard])
 async def list_admin_clients_dashboard(
-    db: AsyncSession = Depends(get_tenant_db),
+    db: AsyncSession = Depends(get_platform_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     tenants = (await db.execute(select(Tenant))).scalars().all()
@@ -175,7 +176,7 @@ async def list_admin_clients_dashboard(
 @router.post("/admin/clients/{client_id}/create-admin")
 async def create_admin_for_client(
     client_id: int,
-    db: AsyncSession = Depends(get_tenant_db),
+    db: AsyncSession = Depends(get_platform_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
     # Busca o cliente
@@ -186,7 +187,8 @@ async def create_admin_for_client(
     # Crie dados do admin (customize conforme desejar)
     username = f"admin{client_id}"
     email = f"admin{client_id}@{tenant.domain}.com"
-    password = "senha123"  # Pode gerar aleatória ou receber do frontend!
+    # senha forte e aleatória, exibida uma única vez ao administrador geral (nunca uma senha fixa)
+    password = secrets.token_urlsafe(12)
     password_hash = get_password_hash(password)
 
     # Verifica se já existe admin para esse cliente
@@ -227,13 +229,14 @@ async def create_admin_for_client(
 @router.get("/admin/clients/{client_id}", response_model=PydanticTenant)
 async def get_client(
     client_id: int,
-    db: AsyncSession = Depends(get_tenant_db),
+    db: AsyncSession = Depends(get_platform_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Só o administrador geral consulta qualquer cliente; os demais, apenas o próprio (o id vem do token,
+    # então a sessão de plataforma aqui nunca lê outro cliente). A checagem vem ANTES da leitura.
+    if current_user.role != UserRole.ADMIN_GERAL and current_user.tenant_id != client_id:
+        raise HTTPException(status_code=403, detail="Acesso negado")
     tenant = await db.get(Tenant, client_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
-    # Só permite se é ADMIN_GERAL ou é do próprio tenant
-    if current_user.role != UserRole.ADMIN_GERAL and current_user.tenant_id != client_id:
-        raise HTTPException(status_code=403, detail="Acesso negado")
     return tenant

@@ -108,10 +108,18 @@ export default function AdminClientsTab() {
   }
 
   async function handleCreateAdmin() {
+    const criados: string[] = [];
     for (const clientId of selected) {
-      await api.post(`/admin/clients/${clientId}/create-admin`);
+      try {
+        const { data } = await api.post(`/admin/clients/${clientId}/create-admin`);
+        const adm = data?.admin;
+        if (adm) criados.push(`Cliente ${clientId}: usuário ${adm.username} / senha ${adm.password}`);
+      } catch (err: any) {
+        criados.push(`Cliente ${clientId}: ${err?.response?.data?.detail || 'falha ao criar admin'}`);
+      }
     }
-    alert('Admin(s) criado(s)!');
+    // A senha é aleatória e só aparece aqui, uma única vez: anote e entregue ao cliente por canal seguro.
+    alert(`Admin(s) criado(s). Anote agora — a senha não será exibida de novo:\n\n${criados.join('\n')}`);
     setSelected([]);
   }
 
@@ -137,14 +145,14 @@ export default function AdminClientsTab() {
   }
 
   return (
-    <Box sx={{ color: '#222', background: '#fff', minHeight: '100vh' }}>
-      <Typography variant="h6" gutterBottom sx={{ color: '#222' }}>Painel de Clientes</Typography>
+    <Box sx={{ color: 'text.primary', background: 'transparent', minHeight: '100vh' }}>
+      <Typography variant="h6" gutterBottom sx={{ color: 'text.primary' }}>Painel de Clientes</Typography>
 
       <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
         <Button
           variant="contained"
           color="primary"
-          sx={{ color: '#222' }}
+          sx={{ color: 'text.primary' }}
           disabled={selected.length === 0}
           onClick={handleEdit}
         >
@@ -216,22 +224,22 @@ export default function AdminClientsTab() {
                 }}
               />
             </TableCell>
-            <TableCell sx={{ color: "#222" }}>Nome</TableCell>
-            <TableCell sx={{ color: "#222" }}>Domínio</TableCell>
-            <TableCell sx={{ color: "#222" }}>Status</TableCell>
-            <TableCell sx={{ color: "#222" }}>Tipo</TableCell>
-            <TableCell sx={{ color: "#222" }}>Responsável</TableCell>
-            <TableCell sx={{ color: "#222" }}>Plano</TableCell>
-            <TableCell sx={{ color: "#222" }}>Usuários</TableCell>
-            <TableCell sx={{ color: "#222" }}>Admins</TableCell>
-            <TableCell sx={{ color: "#222" }}>Bloqueados</TableCell>
-            <TableCell sx={{ color: "#222" }}>Ativos (%)</TableCell>
-            <TableCell sx={{ color: "#222" }}>Questões</TableCell>
-            <TableCell sx={{ color: "#222" }}>Provas</TableCell>
-            <TableCell sx={{ color: "#222" }}>Eventos</TableCell>
-            <TableCell sx={{ color: "#222" }}>Acessos (mês)</TableCell>
-            <TableCell sx={{ color: "#222" }}>Último acesso</TableCell>
-            <TableCell sx={{ color: "#222" }}>Recentes</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Nome</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Domínio</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Status</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Tipo</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Responsável</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Plano</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Usuários</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Admins</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Bloqueados</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Ativos (%)</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Questões</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Provas</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Eventos</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Acessos (mês)</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Último acesso</TableCell>
+            <TableCell sx={{ color: 'text.primary' }}>Recentes</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -255,26 +263,26 @@ export default function AdminClientsTab() {
                   }}
                 />
               </TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.name}</TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.domain}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.name}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.domain}</TableCell>
               <TableCell>
                 <Chip
                   label={client.status}
                   color={client.status === 'ativo' ? 'success' : client.status === 'bloqueado' ? 'error' : 'default'}
                 />
               </TableCell>
-              <TableCell sx={{ color: "#222" }}>
+              <TableCell sx={{ color: 'text.primary' }}>
                 {client.tenant_type === 'escola' ? 'Escola' : 'Empresa/Banca'}
               </TableCell>
               <TableCell>
                 <Tooltip title={client.responsible_email || ''}>
-                  <span style={{ color: '#222' }}>{client.responsible_name}</span>
+                  <span style={{ color: 'inherit' }}>{client.responsible_name}</span>
                 </Tooltip>
               </TableCell>
-              <TableCell sx={{ color: '#222' }}>
+              <TableCell sx={{ color: 'text.primary' }}>
                 {client.plan_type} {client.plan_expires_at && (<span>até {new Date(client.plan_expires_at).toLocaleDateString()}</span>)}
               </TableCell>
-              <TableCell sx={{ color: '#222' }}>
+              <TableCell sx={{ color: 'text.primary' }}>
                 {client.users_total}
                 <br />
                 <small>
@@ -283,20 +291,20 @@ export default function AdminClientsTab() {
                   ))}
                 </small>
               </TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.admins_total}</TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.blocked_users_total}</TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.percent_users_active.toFixed(1)}%</TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.questions_total}</TableCell>
-              <TableCell sx={{ color: '#222' }}>
+              <TableCell sx={{ color: 'text.primary' }}>{client.admins_total}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.blocked_users_total}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.percent_users_active.toFixed(1)}%</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.questions_total}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>
                 {client.exams_total}
                 <br />
                 <small>Q/Prova: {client.avg_questions_per_exam.toFixed(1)}</small>
               </TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.events_total}</TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.accesses_total_month}</TableCell>
-              <TableCell sx={{ color: '#222' }}>{client.last_access && new Date(client.last_access).toLocaleString()}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.events_total}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.accesses_total_month}</TableCell>
+              <TableCell sx={{ color: 'text.primary' }}>{client.last_access && new Date(client.last_access).toLocaleString()}</TableCell>
               <TableCell>
-                <ul style={{ paddingLeft: 12, color: '#222', margin: 0 }}>
+                <ul style={{ paddingLeft: 12, color: 'inherit', margin: 0 }}>
                   {client.recent_activities.slice(0, 3).map((act, idx) => (
                     <li key={idx}>
                       {act.type} - {act.user} - {new Date(act.timestamp).toLocaleString()}
@@ -322,7 +330,7 @@ export default function AdminClientsTab() {
       {/* Modal: Novo/Editar Cliente */}
       <Dialog open={open} onClose={() => setOpen(false)}>
         <Box sx={{ p: 2 }}>
-          <Typography variant="h6" gutterBottom sx={{ color: '#222' }}>
+          <Typography variant="h6" gutterBottom sx={{ color: 'text.primary' }}>
             {selected.length === 1 ? 'Editar Cliente' : 'Novo Cliente'}
           </Typography>
           <Stack spacing={2}>
@@ -382,7 +390,7 @@ export default function AdminClientsTab() {
             Logs detalhados {logsClientName ? `de ${logsClientName}` : ''}
           </Typography>
           {selectedLogs && selectedLogs.length > 0 ? (
-            <ul style={{ color: "#333", paddingLeft: 20 }}>
+            <ul style={{ color: "inherit", paddingLeft: 20 }}>
               {selectedLogs.map((log, idx) => (
                 <li key={idx}>
                   <b>{log.type}</b> - {log.user} - {new Date(log.timestamp).toLocaleString()}

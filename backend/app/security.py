@@ -37,10 +37,12 @@ async def get_tenant_db(current_user=Depends(get_current_user)):
     """
     Sessão de banco para a requisição:
     - usuário de tenant: role de runtime (sem BYPASSRLS) com o tenant do usuário autenticado (SET LOCAL);
-    - administrador geral: role de plataforma (BYPASSRLS), única credencial com visão multi-tenant.
+    - administrador geral com cliente escolhido (X-Tenant-Id): a MESMA role de runtime, sob o RLS
+      daquele cliente — enxerga e grava só nele, exatamente como um usuário do cliente;
+    - administrador geral na visão global: role de plataforma (BYPASSRLS), única credencial multi-tenant.
     Falha fechada se um usuário comum não tiver tenant_id.
     """
-    if is_admin_geral(current_user):
+    if is_admin_geral(current_user) and current_user.tenant_id is None:
         async with PlatformSessionLocal() as db:
             yield db
         return

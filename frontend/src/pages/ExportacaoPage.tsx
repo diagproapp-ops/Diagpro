@@ -243,7 +243,7 @@ const ExportacaoProvaPage: React.FC = () => {
         <Divider sx={{ mb: 3 }} />
 
         {/* Campo para senha do evento */}
-        <Box sx={{ background: "#fafbfc", p: 2, borderRadius: 1, mb: 3 }}>
+        <Box sx={{ bgcolor: "background.default", border: "1px solid", borderColor: "divider", p: 2, borderRadius: 2, mb: 3 }}>
           <TextField
             label="Senha do Evento"
                 type={mostrarSenha ? "text" : "password"}
@@ -271,7 +271,7 @@ const ExportacaoProvaPage: React.FC = () => {
         </Box>
 
         {/* 1. Seleção de Cargos */}
-        <Box sx={{ background: "#fafbfc", p: 2, borderRadius: 1, mb: 3 }}>
+        <Box sx={{ bgcolor: "background.default", border: "1px solid", borderColor: "divider", p: 2, borderRadius: 2, mb: 3 }}>
           <Box display="flex" alignItems="center" gap={1} mb={1}>
             <AssignmentIndIcon color="action" />
             <Typography variant="h6">1. Seleção de Cargos</Typography>
@@ -306,7 +306,7 @@ const ExportacaoProvaPage: React.FC = () => {
               Nenhum cargo com prova montada disponível para exportação encontrado.
             </Typography>
           ) : (
-            <List dense sx={{ maxHeight: 250, overflow: 'auto', background: "#fff", borderRadius: 1 }}>
+            <List dense sx={{ maxHeight: 250, overflow: 'auto', background: "rgba(6, 11, 25, 0.65)", borderRadius: 1 }}>
               {cargosFiltrados.map((cargo, idx) => (
                 <ListItem key={cargo.id_cargo} disablePadding>
                   <ListItemIcon>
@@ -326,7 +326,7 @@ const ExportacaoProvaPage: React.FC = () => {
         </Box>
 
         {/* 2. Escolha de Template */}
-        <Box sx={{ background: "#fafbfc", p: 2, borderRadius: 1, mb: 3 }}>
+        <Box sx={{ bgcolor: "background.default", border: "1px solid", borderColor: "divider", p: 2, borderRadius: 2, mb: 3 }}>
           <Box display="flex" alignItems="center" gap={1} mb={1}>
             <DescriptionIcon color="secondary" />
             <Typography variant="h6">2. Template</Typography>
@@ -374,7 +374,7 @@ const ExportacaoProvaPage: React.FC = () => {
         </Box>
 
         {/* 3. Opções de Formatação e Saída */}
-        <Box sx={{ background: "#fafbfc", p: 2, borderRadius: 1, mb: 3 }}>
+        <Box sx={{ bgcolor: "background.default", border: "1px solid", borderColor: "divider", p: 2, borderRadius: 2, mb: 3 }}>
           <Box display="flex" alignItems="center" gap={1} mb={1}>
             <SettingsIcon color="action" />
             <Typography variant="h6">3. Opções de Formatação e Saída</Typography>

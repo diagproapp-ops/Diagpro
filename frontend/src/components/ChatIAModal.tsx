@@ -42,11 +42,11 @@ export default function ChatIAModal({
       <Box
         sx={{
           position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-          bgcolor: "#f4f7fb", borderRadius: 3, boxShadow: 8, width: { xs: "98vw", sm: 500 }, minHeight: 540,
+          bgcolor: "background.paper", borderRadius: 3, boxShadow: 8, width: { xs: "98vw", sm: 500 }, minHeight: 540,
           display: "block", zIndex: 1601
         }}>
         {/* Header */}
-        <Box sx={{ bgcolor: "#1976d2", color: "#fff", p: 2, borderRadius: "12px 12px 0 0", display: "flex", alignItems: "center" }}>
+        <Box sx={{ background: "linear-gradient(90deg, #0284C7 0%, #2563EB 100%)", color: "#fff", p: 2, borderRadius: "12px 12px 0 0", display: "flex", alignItems: "center" }}>
           <ChatIcon sx={{ mr: 1 }} /> <Typography fontWeight={700}>Chat IA - Auxílio ao Revisor</Typography>
           <Box sx={{ flexGrow: 1 }} />
           <Button color="inherit" onClick={onClose} sx={{ ml: 2 }}>Fechar</Button>
@@ -56,10 +56,10 @@ export default function ChatIAModal({
           {chatHistory.length === 0 && <Typography color="text.secondary" textAlign="center" mt={4}>Nenhuma mensagem ainda.</Typography>}
           {chatHistory.map((msg, i) => (
             <Stack key={i} direction="row" justifyContent={msg.ia ? "flex-start" : "flex-end"} alignItems="end" spacing={1} mb={2}>
-              {msg.ia && <Avatar sx={{ bgcolor: "#1976d2", width: 32, height: 32 }}>IA</Avatar>}
+              {msg.ia && <Avatar sx={{ background: "linear-gradient(90deg, #0284C7 0%, #2563EB 100%)", width: 32, height: 32 }}>IA</Avatar>}
               <Box sx={{
-                bgcolor: msg.ia ? "#e3f2fd" : "#1976d2",
-                color: msg.ia ? "#222" : "#fff",
+                bgcolor: msg.ia ? "rgba(15, 23, 42, 0.85)" : "#0284C7",
+                color: "#F8FAFC",
                 px: 2, py: 1, borderRadius: 2, maxWidth: 340, wordBreak: "break-word"
               }}>
                 <ReactMarkdown>{String(msg.ia || msg.user || "")}</ReactMarkdown>

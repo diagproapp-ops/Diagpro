@@ -78,7 +78,7 @@ export default function CompanyDataTab() {
             <Avatar
               variant="square"
               src={logoPreview || undefined}
-              sx={{ width: 80, height: 80, bgcolor: '#eee', border: '1px solid #ccc' }}
+              sx={{ width: 80, height: 80, bgcolor: 'action.hover', border: '1px solid', borderColor: 'divider' }}
             >
               {/* Se não tiver logo, mostra um ícone genérico */}
               {(!logoPreview) && <span style={{ fontSize: 18, color: '#aaa' }}>Logo</span>}

@@ -268,12 +268,12 @@ export default function RevisarQuestaoPage() {
             </Typography>
             <Typography variant="subtitle1" fontWeight="bold" sx={{ mt: 1, mb: 1, display: "flex", alignItems: "center" }}>
               Código da Questão: {form.codigo_curto_questao || ""}
-              <span style={{ marginLeft: 24, color: "#1976d2", fontWeight: 400, fontSize: 18 }}>
+              <span style={{ marginLeft: 24, color: "#38BDF8", fontWeight: 400, fontSize: 18 }}>
                 Revisão {totalRevisoes}
               </span>
             </Typography>
             {form.autor_elaborador && (
-            <Typography variant="subtitle2" sx={{ color: "#888", mb: 1 }}>
+            <Typography variant="subtitle2" sx={{ color: "text.secondary", mb: 1 }}>
               Autor: {form.autor_elaborador}
             </Typography>
       )}
@@ -431,8 +431,8 @@ export default function RevisarQuestaoPage() {
                   mb: 2,
                   p: 0,
                   borderRadius: 1,
-                  background: idx === 0 ? "#fffbe6" : "#fff",
-                  border: idx === 0 ? "2px solid #ff9800" : "1px solid #eee",
+                  background: idx === 0 ? "rgba(245, 158, 11, 0.12)" : "rgba(11, 19, 37, 0.8)",
+                  border: idx === 0 ? "2px solid #ff9800" : "1px solid rgba(148, 163, 184, 0.25)",
                   boxShadow: 0,
                   width: "100%",
                 }}

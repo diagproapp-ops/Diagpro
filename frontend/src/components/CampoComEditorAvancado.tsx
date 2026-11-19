@@ -223,11 +223,11 @@ export default function CampoComEditorAvancado({
       {/* Visualização do texto com KaTeX */}
       <Box
         sx={{
-          border: error ? "2px solid #d32f2f" : "1px solid #eee",
+          border: error ? "2px solid #d32f2f" : "1px solid rgba(148, 163, 184, 0.25)",
           borderRadius: 2,
           p: 2,
           minHeight: 48,
-          background: "#fafafa",
+          background: "rgba(6, 11, 25, 0.65)",
           mb: 1,
           fontSize: 16,
           color: "#222",

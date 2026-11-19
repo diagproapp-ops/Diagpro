@@ -29,7 +29,7 @@ export default function DicionarioModal({
           top: { xs: 0, sm: 80 },
           right: 0,
           zIndex: 1601,
-          bgcolor: "#fff",
+          bgcolor: "#0B1325",
           borderRadius: { xs: 0, sm: "18px 0 0 18px" },
           boxShadow: 8,
           width: { xs: "100vw", sm: 400, md: 420 },
@@ -41,7 +41,7 @@ export default function DicionarioModal({
           overflowY: "auto",
         }}
       >
-        <Box sx={{ bgcolor: "#1976d2", color: "#fff", p: 2, borderRadius: { xs: 0, sm: "18px 0 0 0" }, display: "flex", alignItems: "center" }}>
+        <Box sx={{ background: "linear-gradient(90deg, #0284C7 0%, #2563EB 100%)", color: "#fff", p: 2, borderRadius: { xs: 0, sm: "18px 0 0 0" }, display: "flex", alignItems: "center" }}>
           <MenuBookIcon sx={{ mr: 1 }} /> <Typography fontWeight={700} flex={1}>Dicionário</Typography>
           <Button color="inherit" onClick={onClose}>FECHAR</Button>
         </Box>
@@ -62,7 +62,7 @@ export default function DicionarioModal({
           <Typography
             variant="body1"
             sx={{
-              bgcolor: "#e3f2fd",
+              bgcolor: "rgba(14, 165, 233, 0.12)",
               borderRadius: 2,
               p: 2,
               m: 2,

@@ -3,6 +3,7 @@ from fastapi import (
     UploadFile, File, Form
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from typing import List, Optional
 
@@ -232,8 +233,12 @@ async def list_users(
     db: AsyncSession = Depends(get_tenant_db),
     admin_user: DBUser = Depends(get_admin_user)
 ):
-    result = await db.execute(select(DBUser).where(DBUser.tenant_id == admin_user.tenant_id))
-    users = result.scalars().all()
+    query = select(DBUser).order_by(DBUser.tenant_id.nulls_first(), DBUser.id)
+    # Admin geral na visão global vê os usuários de todos os clientes; com um cliente escolhido (ou sendo
+    # usuário de cliente), só os daquele cliente — o RLS da sessão também garante isso.
+    if not (_is_admin_geral(admin_user) and admin_user.tenant_id is None):
+        query = query.where(DBUser.tenant_id == admin_user.tenant_id)
+    users = (await db.execute(query)).scalars().all()
     return [_serialize_user(u) for u in users]
 
 @router.post("/", response_model=PydanticUser, status_code=status.HTTP_201_CREATED)
@@ -254,7 +259,13 @@ async def create_user(
     role_value = _normalizar_role(user_data.role)
 
     # Admin de cliente só cria usuários no próprio cliente, independente do que vier no corpo
-    tenant_id = user_data.tenant_id if _is_admin_geral(admin_user) else admin_user.tenant_id
+    # Admin geral: na visão global escolhe o cliente no corpo; com um cliente em gestão, é sempre esse.
+    if _is_admin_geral(admin_user) and admin_user.tenant_id is None:
+        tenant_id = user_data.tenant_id
+    else:
+        tenant_id = admin_user.tenant_id
+    if tenant_id is None and role_value != UserRole.ADMIN_GERAL.value:
+        raise HTTPException(status_code=400, detail="Informe o cliente do usuário.")
 
     hashed_password = get_password_hash(user_data.password)
 
@@ -280,7 +291,12 @@ async def create_user(
         conta_corrente=encrypt_pii(user_data.conta_corrente),
     )
     db.add(new_user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # login e e-mail são únicos no sistema inteiro (índices cegos globais), mesmo entre clientes
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Username ou e-mail já registado.")
     await db.refresh(new_user)
     return _serialize_user(new_user)
 
@@ -302,7 +318,10 @@ async def update_user(
     if novo_tenant is not None:
         if not _is_admin_geral(admin_user):
             raise HTTPException(status_code=403, detail="Apenas o administrador geral pode mover usuários entre clientes.")
-        user.tenant_id = novo_tenant
+        if admin_user.tenant_id is not None and int(novo_tenant) != admin_user.tenant_id:
+            raise HTTPException(status_code=400, detail="Para mover usuários entre clientes, use a visão global.")
+        # ao trocar o tenant o ORM recifra todos os campos com a chave do novo cliente
+        user.tenant_id = int(novo_tenant)
 
     for key, value in update_data.items():
         if key == "password":

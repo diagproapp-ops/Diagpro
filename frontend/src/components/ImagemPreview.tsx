@@ -13,7 +13,7 @@ export default function ImagemPreview({ src, alt, ...rest }: { src: string; alt?
         width: "auto",
         objectFit: "contain",
         borderRadius: 4,
-        border: "1px solid #eee",
+        border: "1px solid rgba(148, 163, 184, 0.25)",
         display: "block",
         margin: "0 auto"
       }}

@@ -222,7 +222,7 @@ const ProvaGeracaoPage: React.FC = () => {
   // Destacar linha selecionada
   const getRowStyle = (id: string) => (
     !!selecionados[id]
-      ? { backgroundColor: '#f5f5f5' }
+      ? { backgroundColor: 'rgba(14, 165, 233, 0.08)' }
       : {}
   );
 
@@ -377,7 +377,7 @@ const ProvaGeracaoPage: React.FC = () => {
                           </span>
                         </Tooltip>
                       )
-                      : <span style={{ color: '#aaa', fontStyle: 'italic' }}>Nunca gerado</span>
+                      : <span style={{ opacity: 0.6, fontStyle: 'italic' }}>Nunca gerado</span>
                     }
                   </TableCell>
                   <TableCell align="center">

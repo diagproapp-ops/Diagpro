@@ -16,6 +16,18 @@ import ConteudoFormPage from './pages/ConteudoFormPage';
 import ConteudoEditPage from './pages/ConteudoEditPage';
 import ConteudoIniciarPage from './pages/ConteudoIniciarPage';
 import AdicionarTextoReferenciaPage from './pages/AdicionarTextoReferenciaPage'; // <-- Adicione este import
+import CriarQuestaoPage from './pages/CriarQuestaoPage';
+import EditarQuestaoPage from './pages/EditarQuestaoPage';
+import RevisarQuestaoPage from './pages/RevisarQuestaoPage';
+import EditarTextoReferenciaPage from './pages/EditarTextoReferenciaPage';
+import RevisaoTextoReferenciaPage from './pages/RevisaoTextoReferenciaPage';
+import MontagemProvaDashboardPage from './pages/MontagemProvaDashboardPage';
+import MontagemProvaPage from './pages/MontagemProvaPage';
+import ProvaGeracaoPage from './pages/ProvaGeracaoPage';
+import ExportacaoPage from './pages/ExportacaoPage';
+import GabaritoPage from './pages/GabaritoPage';
+import TemplatesPage from './pages/TemplatesPage';
+import PublicRegisterPage from './pages/PublicRegisterPage';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
@@ -32,6 +44,7 @@ function App() {
             {!isAuthenticated ? (
               <>
                 <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<PublicRegisterPage />} />
                 <Route path="*" element={<Navigate to="/login" replace />} />
               </>
             ) : (
@@ -44,8 +57,12 @@ function App() {
                     <Route path="/eventos/:eventId/conteudo/editar/:conteudoId" element={<ConteudoEditPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<ConteudoIniciarPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<AdicionarTextoReferenciaPage />} /> {/* <-- NOVA ROTA */}
-                    {/* Redireciona qualquer outro caminho para a página de conteúdos */}
-                    <Route path="*" element={<Navigate to="/eventos/1/conteudo" replace />} />
+                    <Route path="/conteudos" element={<ConteudoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/criar" element={<CriarQuestaoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/editar" element={<EditarQuestaoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/editar" element={<EditarTextoReferenciaPage />} />
+                    {/* Redireciona qualquer outro caminho para "Meus Conteúdos" */}
+                    <Route path="*" element={<Navigate to="/conteudos" replace />} />
                   </>
                 ) : (
                   <>
@@ -60,6 +77,17 @@ function App() {
                     <Route path="/eventos/:eventId/conteudo/editar/:conteudoId" element={<ConteudoEditPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<ConteudoIniciarPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<AdicionarTextoReferenciaPage />} /> {/* <-- NOVA ROTA */}
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/criar" element={<CriarQuestaoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/editar" element={<EditarQuestaoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/editar" element={<EditarTextoReferenciaPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/revisar" element={<RevisarQuestaoPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/revisar" element={<RevisaoTextoReferenciaPage />} />
+                    <Route path="/eventos/:eventId/provas" element={<MontagemProvaDashboardPage />} />
+                    <Route path="/eventos/:eventId/provas/montagem" element={<MontagemProvaPage />} />
+                    <Route path="/eventos/:eventId/geracao" element={<ProvaGeracaoPage />} />
+                    <Route path="/eventos/:eventId/exportacao" element={<ExportacaoPage />} />
+                    <Route path="/eventos/:eventId/recursos" element={<GabaritoPage />} />
+                    <Route path="/eventos/:eventId/templates" element={<TemplatesPage />} />
                     <Route
                       path="/admin/clients"
                       element={

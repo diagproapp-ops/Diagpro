@@ -149,7 +149,7 @@ const PreviewProvaDialog: React.FC<PreviewProvaDialogProps> = ({
           {prova.blocos_questoes
             .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
             .map((bloco, idx) => (
-              <Box key={idx} sx={{ mb: 2, borderRadius: 2, bgcolor: "#f5f5f5", px: 1 }}>
+              <Box key={idx} sx={{ mb: 2, borderRadius: 2, bgcolor: "rgba(15, 23, 42, 0.7)", px: 1 }}>
                 <ListItem alignItems="flex-start" disableGutters>
                   <ListItemText
                     primary={
@@ -198,7 +198,7 @@ const PreviewProvaDialog: React.FC<PreviewProvaDialogProps> = ({
                 </ListItem>
                 {/* Questões sorteadas */}
                 {bloco.questoes && bloco.questoes.length > 0 && (
-                  <Table size="small" sx={{ mb: 1, bgcolor: "#f7fafc" }}>
+                  <Table size="small" sx={{ mb: 1, bgcolor: "background.default" }}>
                     <TableHead>
                       <TableRow>
                         <TableCell>Código</TableCell>

@@ -287,23 +287,23 @@ const GabaritoPage: React.FC = () => {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Tipo Prova</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Questão</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Disciplina</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Letra</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc'}}>Alternativa Correta</th>
-                  <th style={{padding: 8, borderBottom:'1px solid #ccc', textAlign: 'center'}}>Código Curto</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Tipo Prova</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Questão</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Disciplina</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Letra</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)'}}>Alternativa Correta</th>
+                  <th style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.45)', textAlign: 'center'}}>Código Curto</th>
                 </tr>
               </thead>
               <tbody>
                 {gabaritoFiltrado.map((q, idx) => (
                   <tr key={idx}>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.tipo_prova}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.numero_questao}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.disciplina}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.letra_correta}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', maxWidth: 300, wordBreak: 'break-word'}}>{q.texto_correto}</td>
-                    <td style={{padding: 8, borderBottom:'1px solid #eee', textAlign: 'center'}}>{q.codigo_curto}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.tipo_prova}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.numero_questao}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.disciplina}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.letra_correta}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', maxWidth: 300, wordBreak: 'break-word'}}>{q.texto_correto}</td>
+                    <td style={{padding: 8, borderBottom:'1px solid rgba(148, 163, 184, 0.25)', textAlign: 'center'}}>{q.codigo_curto}</td>
                   </tr>
                 ))}
               </tbody>

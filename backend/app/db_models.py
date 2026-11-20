@@ -177,6 +177,43 @@ class AnaliseProva(Base):
     resultado = Column(Ciphertext, nullable=False)
 
 
+class Recurso(Base):
+    """Recurso de candidato sobre uma questão de um caderno (só protocolo e argumentação, cifrados)."""
+    __tablename__ = "recursos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False)
+    cargo_id = Column(String, nullable=False)
+    tipo_prova = Column(String(30), nullable=False)
+    numero_questao = Column(Integer, nullable=False)
+    id_questao = Column(String, nullable=False)
+    item = Column(Integer, nullable=True)
+    pedido = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+    protocolo = Column(Ciphertext, nullable=True)
+    argumentacao = Column(Ciphertext, nullable=True)
+    parecer = Column(Ciphertext, nullable=True)
+    parecer_por = Column(Integer, nullable=True)
+
+
+class DecisaoRecurso(Base):
+    """Decisão da banca sobre uma questão (ou item de Certo/Errado) após os recursos."""
+    __tablename__ = "decisoes_recurso"
+    __table_args__ = (UniqueConstraint("evento_id", "id_questao", "item", name="uq_decisao_recurso"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False)
+    id_questao = Column(String, nullable=False)
+    item = Column(Integer, nullable=True)
+    decisao = Column(String(20), nullable=False)
+    nova_correta = Column(String(5), nullable=True)
+    decidido_em = Column(DateTime, nullable=False)
+    decidido_por = Column(Integer, nullable=True)
+    justificativa = Column(Ciphertext, nullable=True)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

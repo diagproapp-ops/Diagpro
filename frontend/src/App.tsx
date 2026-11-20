@@ -32,6 +32,7 @@ import MinhaContaPage from './pages/MinhaContaPage';
 import FilaRevisaoPage from './pages/FilaRevisaoPage';
 import PainelBancaPage from './pages/PainelBancaPage';
 import EstatisticasProvaPage from './pages/EstatisticasProvaPage';
+import RecursosCandidatosPage from './pages/RecursosCandidatosPage';
 import AvisoManutencao from './components/AvisoManutencao';
 import AceiteTermos from './components/AceiteTermos';
 import DocumentoLegalPage from './pages/DocumentoLegalPage';
@@ -90,6 +91,7 @@ function App() {
                     <Route path="/revisao" element={<FilaRevisaoPage />} />
                     <Route path="/painel" element={<PainelBancaPage />} />
                     <Route path="/eventos/:eventId/estatisticas" element={<EstatisticasProvaPage />} />
+                    <Route path="/eventos/:eventId/candidatos/recursos" element={<RecursosCandidatosPage />} />
                     <Route path="/eventos/:eventId/cargo" element={<CargoManagerPage />} />
                     <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
                     <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />

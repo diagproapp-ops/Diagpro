@@ -1172,6 +1172,9 @@ class DocxProofGenerator:
                 "disciplina_nome": disciplina,
                 "texto_opcao_correta_original": self._texto_simples(self._get_field(item, "afirmacao", ""))[:200],
                 "codigo_curto_questao": self._get_field(questao, "codigo_curto_questao", ""),
+                "id_questao": self._get_field(questao, "id_questao", ""),
+                "tipo": "CERTO_ERRADO",
+                "item": idx + 1,  # item dentro da questão (recursos decidem por item)
             })
         document.add_paragraph()
         return numero
@@ -1865,8 +1868,18 @@ class DocxProofGenerator:
                             pass  # já pode estar descriptografado ou não precisar descriptografar
 
                     texto_opcao_correta = self._texto_simples(texto_opcao_correta) if "<" in str(texto_opcao_correta) else texto_opcao_correta
+                    # mapa "letra da alternativa no banco -> letra impressa neste caderno" (só dado do gabarito;
+                    # não muda o documento). Recursos usam para levar uma alteração de gabarito a cada variação.
+                    pos_orig = {id(alt): i for i, alt in enumerate(alternativas_orig)}
+                    mapa_letras = {
+                        str(get_field(alt, "letra", "") or chr(ord('A') + pos_orig[id(alt)])).upper(): chr(ord('A') + i_fin)
+                        for i_fin, alt in enumerate(alternativas_final)
+                    }
                     answer_key_data.append({
                         "numero_questao_exibido": current_question_display_number,
+                        "id_questao": get_field(questao, "id_questao", ""),
+                        "tipo": "MULTIPLA_ESCOLHA",
+                        "mapa_letras": mapa_letras,
                         "gabarito_letra_exibida": gabarito_exibido,
                         "disciplina_nome": (
                             get_field(bloco, 'nome_disciplina_na_prova', '') or

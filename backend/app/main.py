@@ -24,6 +24,7 @@ from backend.app.routes.sistema import router as sistema_router
 from backend.app.routes.lgpd import router as lgpd_router
 from backend.app.routes.entregas import router as entregas_router
 from backend.app.routes.estatisticas import router as estatisticas_router
+from backend.app.routes.recursos import router as recursos_router
 from backend.app import entregas as _entregas
 from backend.app import lgpd as _lgpd
 from backend.app import backups as _backups
@@ -127,6 +128,7 @@ app.include_router(sistema_router)
 app.include_router(lgpd_router)
 app.include_router(entregas_router)
 app.include_router(estatisticas_router)
+app.include_router(recursos_router)
 
 
 @app.on_event("startup")

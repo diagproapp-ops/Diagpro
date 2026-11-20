@@ -36,6 +36,7 @@ import SinoNotificacoes from './SinoNotificacoes';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import QueryStatsOutlinedIcon from '@mui/icons-material/QueryStatsOutlined';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
 import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
 import { useAuth } from '../contexts/AuthContext';
@@ -562,6 +563,17 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     >
                       <ListItemIcon><QueryStatsOutlinedIcon fontSize="small" /></ListItemIcon>
                       <ListItemText primary="Estatísticas pós-prova" />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+                {isAdmin && (
+                  <ListItem disablePadding>
+                    <ListItemButton
+                      onClick={() => navigate(`/eventos/${eventId}/candidatos/recursos`)}
+                      sx={navItemSx(isActiveSubroute(`/eventos/${eventId}/candidatos/recursos`))}
+                    >
+                      <ListItemIcon><GavelOutlinedIcon fontSize="small" /></ListItemIcon>
+                      <ListItemText primary="Recursos dos candidatos" />
                     </ListItemButton>
                   </ListItem>
                 )}

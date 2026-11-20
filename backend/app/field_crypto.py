@@ -185,6 +185,8 @@ ENCRYPTED: dict[str, dict[str, str]] = {
     "registros_lgpd": {"detalhes": "json"},
     "entregas": {"arquivo": "text", "detalhes": "json"},
     "analises_prova": {"resultado": "json"},
+    "recursos": dict.fromkeys(["protocolo", "argumentacao", "parecer"], "text"),
+    "decisoes_recurso": {"justificativa": "text"},
     "company_data": dict.fromkeys(["company_name", "company_cnpj", "company_address", "company_phone",
                                    "company_email", "company_website", "company_logo_path"], "text"),
     "audit_log_geracao": dict.fromkeys(["usuario", "evento", "cargo", "parametros", "frases", "seed", "ip",

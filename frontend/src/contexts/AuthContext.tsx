@@ -121,6 +121,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [user, inatividadeMin]);
 
   const logout = () => {
+    // encerra o acesso no servidor também (o token deixa de valer mesmo que tenha sido copiado)
+    // (o token vai explícito: o interceptor roda depois que o localStorage já foi limpo)
+    const tokenAtual = localStorage.getItem('authToken');
+    if (tokenAtual) api.post('/auth/sair', {}, { headers: { Authorization: `Bearer ${tokenAtual}` } }).catch(() => {});
     setUser(null);
     localStorage.removeItem('authToken');
     localStorage.removeItem('userRole');

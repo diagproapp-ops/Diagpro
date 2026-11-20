@@ -4,6 +4,7 @@ import {
 } from '@mui/material';
 import Layout from '../components/Layout';
 import PreferenciasAvisos from '../components/PreferenciasAvisos';
+import SessoesAtivas from '../components/SessoesAtivas';
 import api from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { mensagemErro } from './SettingsTabs/configComum';
@@ -137,6 +138,8 @@ const MinhaContaPage: React.FC = () => {
         )}
         {msgRec && <Alert severity="error" sx={{ mt: 2 }}>{msgRec}</Alert>}
       </Paper>
+
+      <SessoesAtivas sx={card} />
 
       <PreferenciasAvisos sx={card} />
     </Layout>

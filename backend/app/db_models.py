@@ -106,6 +106,19 @@ class Notificacao(Base):
     email_proxima_tentativa = Column(DateTime, nullable=True)
 
 
+class Sessao(Base):
+    """Um acesso (login concluído). O token carrega o id; encerrada_em preenchido derruba o token na hora."""
+    __tablename__ = "sessoes"
+    id = Column(String(32), primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    criada_em = Column(DateTime, nullable=False)
+    ultimo_uso_em = Column(DateTime, nullable=False)
+    encerrada_em = Column(DateTime, nullable=True)
+    motivo_encerramento = Column(String(30), nullable=True)
+    detalhes = Column(Ciphertext, nullable=False)  # {ip, navegador, sistema}
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

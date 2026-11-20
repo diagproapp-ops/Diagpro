@@ -56,7 +56,7 @@ Classificação adotada:
 
 | Funcionalidade | Classificação | Evidência / Observação |
 | :--- | :--- | :--- |
-| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 19 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
+| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 20 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
 | Cifra de campos (AES-256-GCM, chave por tenant) | **Implementada e verificada** | `backend/app/field_crypto.py`: 122 colunas sensíveis cifradas, incluindo enunciados, alternativas, gabarito (`correta`, `valor_correto`) e dados pessoais. Varredura no banco real: 4.034 valores, nenhum em texto claro. |
 | Arquivos cifrados e URLs assinadas | **Implementada e verificada** | `backend/app/secure_files.py`: imagens, avatares, logos, capas, templates e CSV de candidatos cifrados por tenant; entrega por URL assinada de 5 min. Pastas públicas `/static` e `/avatars` removidas. |
 | Provas geradas sem armazenamento | **Implementada e verificada** | Saídas criadas em pasta temporária privada por requisição e apagadas ao final; ZIP do lote protegido pela senha do evento. Testado ponta a ponta numa cópia do banco. |
@@ -180,7 +180,7 @@ DiagPro/
 │   │   ├── admin_clients.py      # Gestão de clientes (administrador geral)
 │   │   ├── auth.py               # JWT, bcrypt, get_current_user (runtime por tenant; plataforma só p/ admin geral; X-Tenant-Id)
 │   │   ├── database.py           # Engines runtime/plataforma, TLS obrigatório, set_tenant_context
-│   │   ├── db_models.py          # 20 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
+│   │   ├── db_models.py          # 21 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
 │   │   ├── field_crypto.py       # Cifra de campos AES-256-GCM por tenant, índices cegos, eventos do ORM
 │   │   ├── secure_files.py       # Arquivos cifrados por tenant, URLs assinadas, templates, pasta por requisição
 │   │   ├── log_redaction.py      # Filtro que mascara senhas, assinaturas, tokens e caminhos nos logs
@@ -190,9 +190,10 @@ DiagPro/
 │   │   ├── configuracoes.py      # Configurações da plataforma e da banca (padrões, limites, cache)
 │   │   ├── assistente_ia.py      # IA: provedores (Anthropic/OpenAI), pedidos, formatos de resposta, limites e registro de uso
 │   │   ├── notificacoes.py       # Avisos (sino + e-mail): preferências, fila SMTP com novas tentativas
+│   │   ├── sessoes.py            # Acessos: abrir/validar/encerrar, alerta de aparelho novo
 │   │   ├── politica_senha.py     # Política de senha (valores vindos das configurações)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
-│   │   ├── rls_policies.sql      # Políticas RLS (19 tabelas, sem bypass)
+│   │   ├── rls_policies.sql      # Políticas RLS (20 tabelas, sem bypass)
 │   │   ├── rate_limit.py, jobs.py, storage.py, models.py, roles.py, ...
 │   │   ├── utils_crypto.py       # Camada Fernet LEGADA, desativada (funções sem efeito; mask_pii)
 │   │   └── PreencheCapaPDF_JSON_PDFBox.java
@@ -236,9 +237,9 @@ Definido em `backend/app/db_models.py` (**17 tabelas** registradas em `Base.meta
 - **Ficam em claro** apenas: chaves (PK/FK), `tenant_id`, códigos técnicos gerados (`identificador_*`, `codigo_*`), papéis/estados/tipos usados em autorização e fluxo, datas, números, `password_hash` (bcrypt) e `senha_evento` (bcrypt).
 - **Índices cegos** (HMAC-SHA256, colunas `*_bidx`) permitem busca exata e unicidade sem expor o valor: `users.username/email` (escopo global, usado no login), `tenants.name/domain` (global), `users.full_name`, `banco_frases.categoria` e `frase_bidx`, `Disciplinas.nome_disciplina` e `audit_log_geracao.usuario/evento/cargo` (escopo por cliente: o mesmo valor em clientes diferentes gera índices diferentes).
 
-### 20 modelos ORM × 19 tabelas com RLS
+### 21 modelos ORM × 20 tabelas com RLS
 
-`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **19** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
+`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **20** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
 
 - O acesso a `tenants` só ocorre pela role `diagpro_platform`, em rotas exclusivas do `administrador geral`. A camada de cifra também bloqueia sessões de runtime que tentem carregar linhas de `tenants`.
 - Em `users`, linhas com `tenant_id` nulo (administrador geral) só são visíveis pela role `diagpro_platform`, que tem `BYPASSRLS`. Não existe bypass por variável de sessão.
@@ -371,6 +372,12 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 - Servidor SMTP em Configurações > Plataforma > E-mail de avisos; a senha fica cifrada e nunca volta para a tela. TLS obrigatório (STARTTLS ou SSL); sem criptografia só com servidor local. Nome do remetente com quebra de linha é recusado (injeção de cabeçalho).
 - Fila em segundo plano junto com a API (`DIAGPRO_FILA_EMAIL=0` desliga): 5 tentativas com espera crescente; `SKIP LOCKED` evita envio duplicado.
 
+**Acessos (sessões)** (`sessoes.py`, tabela `sessoes` com IP/navegador cifrados e RLS)
+- Cada login concluído (depois do 2FA) cria um acesso; o token leva o id (`sid`) e toda requisição confere se ele não foi encerrado. Sair encerra no servidor: um token copiado deixa de valer na hora.
+- Minha conta lista os acessos ativos (navegador, sistema, IP, último uso) e encerra um ou todos os outros. O administrador desconecta alguém da banca de todos os aparelhos.
+- Trocar a senha encerra os outros acessos; reset do 2FA encerra todos.
+- Login de navegador/sistema/rede (/24) não usados nos últimos 90 dias gera aviso de segurança (sino + e-mail obrigatório).
+
 **Autenticação e HTTP**
 - Política de senha (`politica_senha.py`): mínimo de 12 caracteres e 3 de 4 tipos, sem usuário/e-mail, sem senha comum ou sequência, sem repetir as 5 últimas (histórico bcrypt cifrado), validade de 180 dias. Senha definida por administrador é provisória. Troca obrigatória (provisória, vencida ou fora da política) acontece depois do 2FA e antes do acesso. Trocar a própria senha exige a senha atual e um código do autenticador.
 - Sessão: token de 30 min renovado pela tela só enquanto há uso (`/auth/renovar`); 30 min sem uso encerram; limite absoluto de 12 h desde o login (`auth_time`). 401 em qualquer tela leva ao login com aviso.
@@ -477,7 +484,7 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` e `tests/test_notificacoes.py`, 34 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` , `tests/test_notificacoes.py` e `tests/test_sessoes.py`, 36 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
@@ -492,6 +499,7 @@ Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagp
 | Prova pronta e gabarito | `test_finished_exam_and_answer_key_require_event_password`, `test_generator_refuses_ciphertext`, `test_cors_preflight_allows_app_custom_headers`, `test_exam_seed_is_secret_reproducible_and_legacy_compatible`, `test_export_preferences_and_precheck_endpoints`, `test_generator_renders_editor_html_inline_and_answer_lines` |
 | Assistente de IA | `test_ai_assistant_rules_secrecy_and_limits`, `test_ai_text_is_stripped_of_html_and_images` (provedor falso; nunca chama IA real) |
 | Avisos e e-mail | `test_notifications_queue_preferences_and_isolation` (SMTP falso; nunca envia e-mail real) |
+| Acessos | `test_sessions_logout_remote_signout_and_new_device_alert`, `test_browser_summary` |
 | HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
 
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.

@@ -70,6 +70,8 @@ const ExportacaoProvaPage: React.FC = () => {
   });
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewErro, setPreviewErro] = useState<string | null>(null);
+  // Imagem real da página do template (mesmo gerador da exportação). Sem ela, cai na leitura em HTML.
+  const [previewImagem, setPreviewImagem] = useState<string | null>(null);
 
   // Preview da prova real antes da exportação
   const [previewProvaOpen, setPreviewProvaOpen] = useState(false);
@@ -147,6 +149,7 @@ const ExportacaoProvaPage: React.FC = () => {
 
   const abrirPreviewTemplate = async () => {
     setPreviewTemplateOpen(true);
+    setPreviewImagem(null);
     setPreviewPartes({ headerHtml: '', bodyHtml: '', footerHtml: '' });
     setPreviewErro(null);
     if (!templateSelecionado) return;
@@ -155,6 +158,15 @@ const ExportacaoProvaPage: React.FC = () => {
       return;
     }
     setPreviewLoading(true);
+    try {
+      const { data } = await api.get(`/api/eventos/${eventId}/templates/${encodeURIComponent(templateSelecionado)}/miniatura`,
+        { responseType: 'blob', timeout: 180000 });
+      setPreviewImagem(URL.createObjectURL(data as Blob));
+      setPreviewLoading(false);
+      return;
+    } catch {
+      // segue para a leitura em HTML
+    }
     try {
       const res = await api.get<{ header_html?: string; body_html?: string; footer_html?: string }>(
         `/api/eventos/${eventId}/templates/${encodeURIComponent(templateSelecionado)}/preview`
@@ -169,6 +181,12 @@ const ExportacaoProvaPage: React.FC = () => {
     } finally {
       setPreviewLoading(false);
     }
+  };
+
+  const fecharPreviewTemplate = () => {
+    setPreviewTemplateOpen(false);
+    if (previewImagem) URL.revokeObjectURL(previewImagem);
+    setPreviewImagem(null);
   };
 
   // Pré-visualização = a prova gerada pelo MESMO código da exportação, com as MESMAS opções desta tela.
@@ -741,7 +759,7 @@ const ExportacaoProvaPage: React.FC = () => {
         </Snackbar>
 
         {/* Dialog de preview do template */}
-        <Dialog open={previewTemplateOpen} onClose={() => setPreviewTemplateOpen(false)} maxWidth="md" fullWidth>
+        <Dialog open={previewTemplateOpen} onClose={fecharPreviewTemplate} maxWidth="md" fullWidth>
           <DialogTitle>
             Preview do Template — {templateSelecionado === "" ? "Padrão do Sistema" : (templateAtual?.nome || templateSelecionado)}
           </DialogTitle>
@@ -750,7 +768,17 @@ const ExportacaoProvaPage: React.FC = () => {
               previewLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 260, gap: 1.5 }}>
                   <CircularProgress size={22} />
-                  <Typography variant="body2" color="text.secondary">Carregando visualização do documento...</Typography>
+                  <Typography variant="body2" color="text.secondary">Montando a página como sai na prova...</Typography>
+                </Box>
+              ) : previewImagem ? (
+                <Box>
+                  <Box component="img" src={previewImagem} alt={`Página do template ${templateAtual?.nome || templateSelecionado} como sai na prova`}
+                    draggable={false} onContextMenu={(e: React.MouseEvent) => e.preventDefault()}
+                    sx={{ display: 'block', width: '100%', maxWidth: 640, mx: 'auto', bgcolor: '#fff', boxShadow: 3, borderRadius: 1 }} />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: 1.5 }}>
+                    Cabeçalho e rodapé como na exportação, com valores de exemplo (nome do concurso, cargo e página).
+                    Para ver com as questões, use "Pré-visualizar Prova Real".
+                  </Typography>
                 </Box>
               ) : previewErro ? (
                 <Alert severity="warning">{previewErro}</Alert>
@@ -885,7 +913,7 @@ const ExportacaoProvaPage: React.FC = () => {
             )}
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setPreviewTemplateOpen(false)} variant="contained">
+            <Button onClick={fecharPreviewTemplate} variant="contained">
               Fechar
             </Button>
           </DialogActions>

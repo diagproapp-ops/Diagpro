@@ -68,8 +68,10 @@ class MelhorarTextoIn(BaseModel):
 
 
 class EquacaoIn(BaseModel):
-    descricao: str = Field(..., min_length=1, max_length=1000)
+    descricao: str = Field("", max_length=1000)
     latex_atual: str = Field("", max_length=4000)
+    # foto/print da equação (data:image/...;base64); 5 MB de imagem ≈ 7 MB em base64
+    imagem: str = Field("", max_length=7_200_000)
 
 
 class ChatIn(BaseModel):
@@ -126,8 +128,17 @@ async def melhorar_texto(dados: MelhorarTextoIn, db: AsyncSession = Depends(get_
 
 @router.post("/equacao", dependencies=[_LIMITE_MINUTO])
 async def criar_equacao(dados: EquacaoIn, db: AsyncSession = Depends(get_tenant_db), current_user=Depends(_QUEM_USA)):
-    """Equação a partir de uma descrição. O LaTeX devolvido já vem conferido pela mesma conversão da prova."""
-    resposta = await assistente_ia.executar(db, current_user, "equacao", dados.model_dump())
+    """
+    Equação a partir de uma descrição ou de uma imagem (inclusive escrita à mão). O LaTeX devolvido já vem conferido
+    pela mesma conversão da prova. A imagem é recurso separado (a banca liga/desliga) e nunca é gravada.
+    """
+    if not dados.descricao.strip() and not dados.imagem:
+        raise HTTPException(status_code=400, detail="Descreva a equação ou envie uma imagem dela.")
+    if dados.imagem:
+        entrada = {"descricao": dados.descricao}
+        resposta = await assistente_ia.executar(db, current_user, "equacao_imagem", entrada, imagem=dados.imagem)
+    else:
+        resposta = await assistente_ia.executar(db, current_user, "equacao", dados.model_dump(exclude={"imagem"}))
     latex = str(resposta.get("latex") or "").strip()
     return {"latex": latex, "explicacao": str(resposta.get("explicacao") or ""), "erro": equacoes.validar(latex)}
 

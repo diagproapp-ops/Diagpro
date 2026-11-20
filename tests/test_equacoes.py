@@ -205,3 +205,97 @@ async def test_ai_equation_from_description_is_checked_before_returning(async_cl
             await s.execute(sql("DELETE FROM uso_ia"))
             await s.commit()
         reset_rate_limits()
+
+
+def _imagem_data_url(fmt="JPEG", tamanho=(2400, 1200), exif=True):
+    import base64
+    import io
+    from PIL import Image
+    img = Image.new("RGB", tamanho, "white")
+    buf = io.BytesIO()
+    if exif and fmt == "JPEG":
+        dados = Image.Exif()
+        dados[0x010F] = "FABRICANTE-CELULAR"  # Make
+        dados[0x8825] = {2: (23.0, 33.0, 1.0)}  # GPSInfo (latitude)
+        img.save(buf, format=fmt, exif=dados.tobytes())
+    else:
+        img.save(buf, format=fmt)
+    tipo = {"JPEG": "jpeg", "PNG": "png", "GIF": "gif", "WEBP": "webp"}[fmt]
+    return f"data:image/{tipo};base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def test_image_is_rewritten_without_metadata_and_reduced():
+    import base64
+    import io
+    from fastapi import HTTPException
+    from PIL import Image
+    from backend.app import assistente_ia
+
+    tipo, b64 = assistente_ia.preparar_imagem(_imagem_data_url())
+    bruto = base64.b64decode(b64)
+    assert tipo == "image/jpeg" and b"FABRICANTE-CELULAR" not in bruto
+    with Image.open(io.BytesIO(bruto)) as img:
+        assert max(img.size) <= 1600 and not img.getexif()
+    assert assistente_ia.preparar_imagem(_imagem_data_url("PNG", (300, 200)))[0] == "image/jpeg"
+    for ruim in (_imagem_data_url("GIF", (10, 10)), "data:image/png;base64,bmFvLWUtaW1hZ2Vt", "data:text/plain;base64,QUJD", "qualquer coisa"):
+        with pytest.raises(HTTPException) as exc:
+            assistente_ia.preparar_imagem(ruim)
+        assert exc.value.status_code == 400
+    # PNG declarado mas conteúdo JPEG: o formato é conferido pelo conteúdo, não pelo nome
+    jpeg_como_png = _imagem_data_url().replace("image/jpeg", "image/png")
+    assert assistente_ia.preparar_imagem(jpeg_como_png)[0] == "image/jpeg"
+
+
+async def test_ai_equation_from_photo_sends_only_the_prepared_image(async_client, monkeypatch):
+    import base64
+    from backend.app import assistente_ia
+    from backend.app.rate_limit import reset_rate_limits
+    from sqlalchemy import text as sql
+    from backend.app.database import PlatformSessionLocal
+
+    chamadas = []
+
+    async def falso(provedor, modelo, chave, sistema, mensagem, schema, max_tokens=8000, imagem=None):
+        chamadas.append({"mensagem": mensagem, "imagem": imagem})
+        return assistente_ia.RespostaIA({"latex": "a^{2}+b^{2}=c^{2}", "explicacao": "Teorema de Pitágoras; confira o expoente."}, 900, 30)
+
+    monkeypatch.setattr(assistente_ia, "chamar_provedor", falso)
+    reset_rate_limits()
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    foto = _imagem_data_url()
+    try:
+        # IA desligada: a imagem nem é lida
+        assert (await async_client.post("/ia/equacao", headers=hp, json={"imagem": foto})).status_code == 403
+        assert (await async_client.put("/config/plataforma", headers=ag, json={"ia": {"habilitada": True, "provedor": "openai",
+                "chaves": {"openai": "sk-teste-" + "z" * 30}}})).status_code == 200
+        assert (await async_client.put("/config/banca", headers=a1, json={"ia": {"habilitada": True}})).status_code == 200
+        assert (await async_client.post("/ia/equacao", headers=hp, json={})).status_code == 400
+
+        r = await async_client.post("/ia/equacao", headers=hp, json={"imagem": foto, "descricao": "é da página 3"})
+        assert r.status_code == 200, r.text
+        assert r.json()["erro"] is None and r.json()["latex"] == "a^{2}+b^{2}=c^{2}" and "confira" in r.json()["explicacao"]
+        enviada = chamadas[-1]["imagem"]
+        assert enviada[0] == "image/jpeg" and b"FABRICANTE-CELULAR" not in base64.b64decode(enviada[1])
+        assert "é da página 3" in chamadas[-1]["mensagem"] and "base64" not in chamadas[-1]["mensagem"]
+        # formato que não é imagem aceita
+        assert (await async_client.post("/ia/equacao", headers=hp, json={"imagem": "data:image/gif;base64,R0lGOD"})).status_code == 400
+
+        # só metadados no registro de uso (nada da imagem)
+        async with PlatformSessionLocal() as s:
+            crus = (await s.execute(sql("SELECT detalhes FROM uso_ia"))).scalars().all()
+        assert crus and all(len(c) < 2000 for c in crus)
+
+        # a banca desliga só a foto; a descrição em texto continua
+        assert (await async_client.put("/config/banca", headers=a1, json={"ia": {"recursos": {"equacao_imagem": False}}})).status_code == 200
+        assert (await async_client.post("/ia/equacao", headers=hp, json={"imagem": foto})).status_code == 403
+        assert (await async_client.post("/ia/equacao", headers=hp, json={"descricao": "pitagoras"})).status_code == 200
+        assert chamadas[-1]["imagem"] is None
+    finally:
+        await async_client.put("/config/plataforma", headers=ag, json={"ia": {"habilitada": False, "provedor": "anthropic", "chaves": {"openai": None}}})
+        await async_client.put("/config/banca", headers=a1, json={"ia": {"habilitada": False, "recursos": {"equacao_imagem": True}}})
+        async with PlatformSessionLocal() as s:
+            await s.execute(sql("DELETE FROM uso_ia"))
+            await s.commit()
+        reset_rate_limits()

@@ -9,6 +9,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
 import api from '../../api';
 import { erroIA, podeUsar, useStatusIA } from '../ia/iaComum';
 import { CATEGORIAS_EQUACAO, paraVisualizar } from './modelosEquacao';
@@ -47,18 +48,68 @@ export default function EditorEquacao({ aberta, onFechar, onConfirmar, onRemover
   const statusIA = useStatusIA();
   const [descricao, setDescricao] = useState('');
   const [ia, setIa] = useState<{ carregando: boolean; explicacao?: string; erro?: string }>({ carregando: false });
+  const [imagem, setImagem] = useState<string | null>(null);
+  const [arrastando, setArrastando] = useState(false);
+  const arquivoRef = useRef<HTMLInputElement>(null);
 
   // IA: vai só a descrição digitada (e a equação atual, se houver); a resposta passa pela mesma conferência da prova
   const criarComIA = async () => {
-    if (!descricao.trim()) return;
+    if (!descricao.trim() && !imagem) return;
     setIa({ carregando: true });
     try {
-      const { data } = await api.post('/ia/equacao', { descricao: descricao.trim(), latex_atual: latex.trim() });
-      setLatex(data.latex || '');
-      campoRef.current?.setValue(data.latex || '', { silenceNotifications: true });
+      const corpo = imagem
+        ? { imagem, descricao: descricao.trim() }
+        : { descricao: descricao.trim(), latex_atual: latex.trim() };
+      const { data } = await api.post('/ia/equacao', corpo);
+      if (!data.latex) {
+        setIa({ carregando: false, erro: data.explicacao || 'A IA não encontrou uma equação na imagem.' });
+        return;
+      }
+      setLatex(data.latex);
+      campoRef.current?.setValue(data.latex, { silenceNotifications: true });
       setIa({ carregando: false, explicacao: data.explicacao });
     } catch (err) {
       setIa({ carregando: false, erro: erroIA(err) });
+    }
+  };
+
+  // Foto/print da equação: reduzida no navegador (máx. 1600 px, JPEG) antes de sair do computador;
+  // redesenhar no canvas também descarta os metadados da foto (ex.: localização do celular).
+  const receberImagem = async (arquivo: File | null | undefined) => {
+    if (!arquivo) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(arquivo.type)) {
+      setIa({ carregando: false, erro: 'Use uma imagem PNG, JPG ou WEBP.' });
+      return;
+    }
+    if (arquivo.size > 25 * 1024 * 1024) {
+      setIa({ carregando: false, erro: 'Imagem grande demais (máximo 25 MB).' });
+      return;
+    }
+    try {
+      // 'from-image' endireita foto de celular (a definição de tipos do TS ainda não conhece o valor)
+      const bitmap = await createImageBitmap(arquivo, { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions);
+      const escala = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bitmap.width * escala);
+      canvas.height = Math.round(bitmap.height * escala);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('canvas');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      setImagem(canvas.toDataURL('image/jpeg', 0.9));
+      setIa({ carregando: false });
+    } catch {
+      setIa({ carregando: false, erro: 'Não foi possível abrir a imagem.' });
+    }
+  };
+
+  const colarImagem = (ev: React.ClipboardEvent) => {
+    const item = Array.from(ev.clipboardData?.items || []).find((i) => i.type.startsWith('image/'));
+    if (item && podeUsar(statusIA, 'equacao_imagem')) {
+      ev.preventDefault();
+      receberImagem(item.getAsFile());
     }
   };
 
@@ -71,6 +122,7 @@ export default function EditorEquacao({ aberta, onFechar, onConfirmar, onRemover
     setValidacao({ estado: aberta.latex ? 'conferindo' : 'vazia' });
     setDescricao('');
     setIa({ carregando: false });
+    setImagem(null);
   }, [aberta]);
 
   // campo visual (MathLive), carregado só quando o criador abre
@@ -198,22 +250,53 @@ export default function EditorEquacao({ aberta, onFechar, onConfirmar, onRemover
         </List>
 
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', p: 2, gap: 1.5, overflowY: 'auto' }}>
-          {podeUsar(statusIA, 'equacao') && (
-            <Box sx={{ p: 1.5, borderRadius: 2, border: '1px dashed', borderColor: 'secondary.main' }}>
+          {(podeUsar(statusIA, 'equacao') || podeUsar(statusIA, 'equacao_imagem')) && (
+            <Box
+              sx={{ p: 1.5, borderRadius: 2, border: '1px dashed', borderColor: arrastando ? 'primary.main' : 'secondary.main',
+                bgcolor: arrastando ? 'rgba(56, 189, 248, 0.08)' : 'transparent' }}
+              onDragOver={(e) => { if (podeUsar(statusIA, 'equacao_imagem')) { e.preventDefault(); setArrastando(true); } }}
+              onDragLeave={() => setArrastando(false)}
+              onDrop={(e) => { e.preventDefault(); setArrastando(false); if (podeUsar(statusIA, 'equacao_imagem')) receberImagem(e.dataTransfer.files?.[0]); }}
+            >
+              {imagem && (
+                <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1 }}>
+                  <Box component="img" src={imagem} alt="Imagem da equação enviada"
+                    sx={{ maxHeight: 110, maxWidth: 260, borderRadius: 1, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }} />
+                  <Box>
+                    <Typography variant="body2">A IA vai transcrever a equação desta imagem.</Typography>
+                    <Button size="small" color="inherit" onClick={() => setImagem(null)}>Remover imagem</Button>
+                  </Box>
+                </Stack>
+              )}
               <Stack direction="row" spacing={1} alignItems="center">
+                {podeUsar(statusIA, 'equacao_imagem') && !imagem && (
+                  <Tooltip title="Foto ou print da equação (vale escrita à mão). Também dá para colar (Ctrl+V) ou arrastar a imagem aqui." arrow>
+                    <Button variant="outlined" color="secondary" startIcon={<AddPhotoAlternateIcon />} onClick={() => arquivoRef.current?.click()}
+                      sx={{ whiteSpace: 'nowrap' }}>
+                      Enviar imagem
+                    </Button>
+                  </Tooltip>
+                )}
+                <input ref={arquivoRef} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-label="Imagem da equação"
+                  onChange={(e) => { receberImagem(e.target.files?.[0]); e.target.value = ''; }} />
                 <TextField
                   size="small" fullWidth value={descricao} onChange={(e) => setDescricao(e.target.value)}
-                  placeholder={latex ? 'Diga o que mudar (ex.: troque o expoente por 3)' : 'Descreva a equação (ex.: fórmula de Bhaskara, integral de 0 a 1 de x²)'}
+                  onPaste={colarImagem}
+                  placeholder={imagem ? 'Observação opcional (ex.: é a equação de baixo)' : latex ? 'Diga o que mudar (ex.: troque o expoente por 3)'
+                    : podeUsar(statusIA, 'equacao') ? 'Descreva a equação (ex.: fórmula de Bhaskara) ou cole uma imagem' : 'Envie ou cole a imagem da equação'}
                   inputProps={{ 'aria-label': 'Descrição da equação para a IA', maxLength: 1000 }}
+                  disabled={!imagem && !podeUsar(statusIA, 'equacao')}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); criarComIA(); } }}
                 />
                 <Button variant="contained" color="secondary" startIcon={ia.carregando ? <CircularProgress size={16} color="inherit" /> : <AutoAwesomeIcon />}
-                  disabled={ia.carregando || !descricao.trim()} onClick={criarComIA} sx={{ whiteSpace: 'nowrap' }}>
-                  {latex ? 'Ajustar com IA' : 'Criar com IA'}
+                  disabled={ia.carregando || (!descricao.trim() && !imagem)} onClick={criarComIA} sx={{ whiteSpace: 'nowrap' }}>
+                  {imagem ? 'Ler imagem com IA' : latex ? 'Ajustar com IA' : 'Criar com IA'}
                 </Button>
               </Stack>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                Vai para a IA só o que você escrever aqui{latex ? ' e a equação atual' : ''}. Confira o resultado antes de inserir.
+                {imagem
+                  ? 'Vai para a IA só esta imagem (reduzida e sem os dados da foto) e a observação. Escrita à mão pode ser ambígua: confira antes de inserir.'
+                  : `Vai para a IA só o que você escrever aqui${latex ? ' e a equação atual' : ''}. Confira o resultado antes de inserir.`}
               </Typography>
               {ia.explicacao && <Typography variant="body2" sx={{ mt: 0.5 }}>{ia.explicacao}</Typography>}
               {ia.erro && <Alert severity="error" sx={{ mt: 1 }}>{ia.erro}</Alert>}

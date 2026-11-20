@@ -21,6 +21,7 @@ export const NOMES_RECURSOS: Record<string, string> = {
   melhorar_texto: 'Melhorar texto (português, clareza, linguagem formal)',
   chat: 'Chat de apoio no editor',
   equacao: 'Criar equação a partir de uma descrição',
+  equacao_imagem: 'Criar equação a partir de foto ou imagem (inclusive escrita à mão)',
 };
 
 // IA da BANCA: liga/desliga, recursos, orientações de estilo e uso dos últimos 30 dias.

@@ -22,13 +22,13 @@ export default function DicionarioModal({
   loadingDicio,
 }: DicionarioModalProps) {
   return (
-    <Modal open={open} onClose={onClose} sx={{ zIndex: 1601 }}>
+    <Modal open={open} onClose={onClose} sx={{ zIndex: 1700 }}>
       <Box
         sx={{
           position: "fixed",
           top: { xs: 0, sm: 80 },
           right: 0,
-          zIndex: 1601,
+          zIndex: 1700,
           bgcolor: "#0B1325",
           borderRadius: { xs: 0, sm: "18px 0 0 18px" },
           boxShadow: 8,

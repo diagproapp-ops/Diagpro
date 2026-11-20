@@ -330,14 +330,16 @@ export default function CampoComEditorAvancado({
         loadingChat={loadingChat}
       />
 
-      <Dialog open={openMelhorar} onClose={() => setOpenMelhorar(false)} maxWidth="md" fullWidth sx={{ zIndex: 1601 }}>
+      <Dialog open={openMelhorar} onClose={() => setOpenMelhorar(false)} maxWidth="md" fullWidth sx={{ zIndex: 1700 }}>
         <DialogTitle>Melhorar texto com IA</DialogTitle>
         <DialogContent dividers>
           <Alert severity="info" sx={{ mb: 2 }}>
             Vai para a IA só o texto deste campo (sem imagens). Negrito, imagens e fórmulas não são mantidos no texto sugerido.
           </Alert>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
-            <TextField select size="small" label="O que fazer" value={modoMelhorar} onChange={e => setModoMelhorar(e.target.value)} sx={{ minWidth: 260 }}>
+            <TextField select size="small" label="O que fazer" value={modoMelhorar} onChange={e => setModoMelhorar(e.target.value)} sx={{ minWidth: 260 }}
+              // a lista precisa ficar acima desta janela (zIndex 1700); no padrão (1300) ela abria por trás e travava a tela
+              SelectProps={{ MenuProps: { sx: { zIndex: 1800 } } }}>
               <MenuItem value="revisar_portugues">Corrigir português</MenuItem>
               <MenuItem value="clareza">Deixar mais claro</MenuItem>
               <MenuItem value="simplificar">Simplificar</MenuItem>

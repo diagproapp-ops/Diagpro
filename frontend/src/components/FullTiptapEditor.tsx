@@ -24,6 +24,8 @@ import TextAlign from "@tiptap/extension-text-align";
 import Underline from "@tiptap/extension-underline";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
+import { Box } from "@mui/material";
+import BarraFormatacao, { estiloConteudoEditor } from "./BarraFormatacao";
 import "katex/dist/katex.min.css";
 
 // lowlight v3 exige uma instância criada com as linguagens (o módulo em si não serve).
@@ -101,14 +103,20 @@ export default function FullTiptapEditor({
           borderRadius: 10,
           background: "rgba(6, 11, 25, 0.65)",
           color: "#F1F5F9",
-          minHeight: height,
           padding: 12,
         }}
       >
         {renderExtraButtons && (
           <div style={{ marginBottom: 8 }}>{renderExtraButtons()}</div>
         )}
-        <EditorContent editor={editor} />
+        <BarraFormatacao editor={editor} />
+        {/* Área do texto rola sozinha; a barra fica sempre visível acima dela */}
+        <Box
+          onClick={() => editor && !editor.isFocused && editor.commands.focus()}
+          sx={{ ...estiloConteudoEditor, minHeight: Math.min(height, 360), maxHeight: "55vh", overflowY: "auto", cursor: "text", px: 0.5 }}
+        >
+          <EditorContent editor={editor} />
+        </Box>
       </div>
       {error && (
         <div style={{ color: "#d32f2f", fontSize: 13, marginTop: 4 }}>{error}</div>

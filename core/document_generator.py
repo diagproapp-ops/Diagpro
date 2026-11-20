@@ -29,7 +29,7 @@ from pypdf import PdfWriter, PdfReader
 from pypdf.generic import NameObject, BooleanObject
 import re
 from docx.shared import Cm, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL, WD_ROW_HEIGHT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -1043,7 +1043,7 @@ class DocxProofGenerator:
     def _add_html_inline(self, paragraph, html, color=None, fonte=None, tamanho=None):
         """
         Escreve HTML do editor DENTRO do parágrafo (ao lado da letra/número), mantendo negrito, itálico,
-        sublinhado, sobrescrito e subscrito. Antes as tags saíam impressas na prova ("A) <p>texto</p>").
+        sublinhado, tachado, marca-texto, sobrescrito e subscrito. Antes as tags saíam impressas na prova ("A) <p>texto</p>").
         """
         from bs4 import BeautifulSoup, NavigableString
         soup = BeautifulSoup(str(html or ""), "html.parser")
@@ -1061,6 +1061,10 @@ class DocxProofGenerator:
                 run.font.superscript = True
             if fmt.get("sub"):
                 run.font.subscript = True
+            if fmt.get("s"):
+                run.font.strike = True
+            if fmt.get("mark"):
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW
             if fonte:
                 run.font.name = fonte
             if tamanho:
@@ -1091,6 +1095,10 @@ class DocxProofGenerator:
                 novo["sup"] = True
             elif nome == "sub":
                 novo["sub"] = True
+            elif nome in ("s", "strike", "del"):
+                novo["s"] = True
+            elif nome == "mark":
+                novo["mark"] = True
             for filho in no.children:
                 andar(filho, novo)
 

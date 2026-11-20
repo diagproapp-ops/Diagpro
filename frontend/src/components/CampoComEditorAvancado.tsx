@@ -9,6 +9,7 @@ import BugReportIcon from "@mui/icons-material/BugReport";
 import LibraryBooksIcon from "@mui/icons-material/LibraryBooks";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import FullTiptapEditor from "./FullTiptapEditor";
+import { estiloConteudoEditor } from "./BarraFormatacao";
 import ChatIAModal, { ChatMessage } from "./ChatIAModal";
 import PlagioModal, { PlagioResult } from "./PlagioModal";
 import BibliotecaModal, { BibliotecaQuestao } from "./BibliotecaModal";
@@ -245,6 +246,7 @@ export default function CampoComEditorAvancado({
           maxHeight: 240,
           overflowY: "auto",
           overflowX: "auto",
+          ...estiloConteudoEditor,
           "& img": {
             maxWidth: "100%",
             maxHeight: "180px",

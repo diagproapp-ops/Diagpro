@@ -34,6 +34,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import SinoNotificacoes from './SinoNotificacoes';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import QueryStatsOutlinedIcon from '@mui/icons-material/QueryStatsOutlined';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
 import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
 import { useAuth } from '../contexts/AuthContext';
@@ -207,6 +209,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       : []),
     ...(podeVerFilaRevisao
       ? [{ label: 'Fila de revisão', sub: 'Questões aguardando revisão', path: '/revisao' }]
+      : []),
+    ...(isAdmin
+      ? [{ label: 'Painel da banca', sub: 'Andamento de eventos, elaboração e revisão', path: '/painel' }]
       : []),
     ...(isAdmin
       ? [{ label: 'Configurações & Governança', sub: 'Usuários, banca, frases, clientes e temas', path: '/settings' }]
@@ -465,6 +470,17 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 </ListItemButton>
               </ListItem>
             )}
+            {isAdmin && (
+              <ListItem disablePadding>
+                <ListItemButton
+                  onClick={() => navigate('/painel')}
+                  sx={navItemSx(location.pathname.startsWith('/painel'))}
+                >
+                  <ListItemIcon><InsightsOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Painel da banca" />
+                </ListItemButton>
+              </ListItem>
+            )}
             {podeVerFilaRevisao && (
               <ListItem disablePadding>
                 <ListItemButton
@@ -538,6 +554,17 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     <ListItemText primary="Gabaritos & Recursos" />
                   </ListItemButton>
                 </ListItem>
+                {isAdmin && (
+                  <ListItem disablePadding>
+                    <ListItemButton
+                      onClick={() => navigate(`/eventos/${eventId}/estatisticas`)}
+                      sx={navItemSx(isActiveSubroute(`/eventos/${eventId}/estatisticas`))}
+                    >
+                      <ListItemIcon><QueryStatsOutlinedIcon fontSize="small" /></ListItemIcon>
+                      <ListItemText primary="Estatísticas pós-prova" />
+                    </ListItemButton>
+                  </ListItem>
+                )}
                 <ListItem disablePadding>
                   <ListItemButton
                     onClick={() => navigate(`/eventos/${eventId}/templates`)}

@@ -164,6 +164,19 @@ class Entrega(Base):
     detalhes = Column(Ciphertext, nullable=False)
 
 
+class AnaliseProva(Base):
+    """Estatísticas pós-prova de um cargo: só agregados por questão (nenhum dado de candidato)."""
+    __tablename__ = "analises_prova"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False)
+    cargo_id = Column(String, nullable=False)
+    criada_em = Column(DateTime, nullable=False)
+    criada_por = Column(Integer, nullable=True)
+    n_candidatos = Column(Integer, nullable=False)
+    resultado = Column(Ciphertext, nullable=False)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

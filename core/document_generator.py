@@ -1976,7 +1976,6 @@ class DocxProofGenerator:
         output_path = os.path.join(output_dir, f"{base_filename}.docx")
         try:
             doc.save(output_path)
-            print("VOU SALVAR O DOCX AGORA EM:", output_path)
             return output_path, answer_key_data, ordered_question_ids
         except Exception as e:
             self.logger.error(f"Erro ao salvar arquivo DOCX '{output_path}': {e}", exc_info=True)
@@ -3422,13 +3421,15 @@ class DocumentGenerator:
                 logger=self.logger,
                 core_elements_module=self.core_elements
             )
-            # Gera apenas os dados do gabarito sem salvar arquivos reais
-            _, gabarito_data_variacao, _ = docx_gen.generate_docx_and_answer_key_data(
-                output_dir=tempfile.gettempdir(),
-                base_filename="dummy",
-                variacao_num=variacao_num,
-                num_linhas_rascunho=num_linhas_rascunho
-            )
+            # Só os dados do gabarito: o DOCX intermediário vai para uma pasta privada apagada logo em seguida
+            # (antes ia para %TEMP%\dummy.docx e ficava lá: a prova em claro no disco).
+            with tempfile.TemporaryDirectory(prefix="diagpro_gab_") as pasta_privada:
+                _, gabarito_data_variacao, _ = docx_gen.generate_docx_and_answer_key_data(
+                    output_dir=pasta_privada,
+                    base_filename="rascunho_gabarito",
+                    variacao_num=variacao_num,
+                    num_linhas_rascunho=num_linhas_rascunho
+                )
             gabaritos_por_variacao[nome_variacao] = gabarito_data_variacao
 
         return gabaritos_por_variacao

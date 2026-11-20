@@ -25,6 +25,7 @@ import Layout from "../components/Layout";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
 import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
+import { confirmarSeHouverParecida } from "../components/HistoricoVersoesDialog";
 import CampoComEditorAvancado from "../components/CampoComEditorAvancado";
 import { useAuth } from "../contexts/AuthContext";
 import FileInputMui from "./FileInputMui";
@@ -222,6 +223,10 @@ export default function CriarQuestaoPage() {
     }
 
     if (!validate()) {
+      setSending(false);
+      return;
+    }
+    if (!(await confirmarSeHouverParecida(form.enunciado))) {
       setSending(false);
       return;
     }

@@ -119,6 +119,20 @@ class Sessao(Base):
     detalhes = Column(Ciphertext, nullable=False)  # {ip, navegador, sistema}
 
 
+class VersaoQuestao(Base):
+    """Cópia completa (cifrada) de uma questão a cada salvamento: histórico e restauração."""
+    __tablename__ = "versoes_questao"
+    __table_args__ = (UniqueConstraint("id_questao_fk", "versao", name="uq_versoes_questao_versao"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    id_questao_fk = Column(String, ForeignKey("QuestoesBanco.id_questao", ondelete="CASCADE"), nullable=False, index=True)
+    versao = Column(Integer, nullable=False)
+    criada_em = Column(DateTime, nullable=False)
+    motivo = Column(String(30), nullable=False)
+    autor = Column(Ciphertext, nullable=True)
+    snapshot = Column(Ciphertext, nullable=False)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

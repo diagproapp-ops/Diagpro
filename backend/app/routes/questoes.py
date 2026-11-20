@@ -14,6 +14,8 @@ from backend.app.db_models import QuestoesBanco, OpcoesQuestao, ItensVerdadeiroF
 from backend.app.models import QuestaoOut, OpcaoQuestao, ItemVerdadeiroFalso, DetalhesQuestaoDiscursiva as DetalhesQuestaoDiscursivaModel
 from backend.app import configuracoes
 from backend.app import fluxo_revisao
+from backend.app import versoes_questao
+from backend.app.db_models import VersaoQuestao
 from backend.app.auth import get_current_user
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
@@ -279,7 +281,7 @@ async def criar_questao(
         detalhes_dict['texto_subjetivo_nota_maxima'] = safe_decrypt(detalhes_dict.get('texto_subjetivo_nota_maxima'))
         detalhes_out = DetalhesQuestaoDiscursiva(**detalhes_dict)
 
-    return QuestaoOut(
+    saida = QuestaoOut(
         id_questao=nova_questao.id_questao,
         codigo_curto_questao=nova_questao.codigo_curto_questao,
         enunciado=safe_decrypt(nova_questao.enunciado),
@@ -307,6 +309,8 @@ async def criar_questao(
         observacao_revisor=getattr(nova_questao, "observacao_revisor", None),
         autor_elaborador=nova_questao.autor_elaborador,
     )
+    await versoes_questao.salvar(db, saida, tenant_id, "criada", current_user.username)
+    return saida
 
 @router.get(
     "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes",
@@ -437,7 +441,8 @@ async def excluir_questao(
     if not questao:
         raise HTTPException(status_code=404, detail="Questão não encontrada.")
 
-    # Excluir históricos de revisão relacionados
+    # Excluir históricos de revisão e versões relacionados
+    await db.execute(VersaoQuestao.__table__.delete().where(VersaoQuestao.id_questao_fk == id_questao))
     await db.execute(
         HistoricoRevisaoQuestao.__table__.delete().where(HistoricoRevisaoQuestao.id_questao_fk == id_questao)
     )
@@ -630,6 +635,7 @@ async def editar_questao(
     questao = result.scalar_one_or_none()
     if not questao:
         raise HTTPException(status_code=404, detail="Questão não encontrada.")
+    await versoes_questao.guardar_estado_anterior(db, await buscar_questao(evento_id, conteudo_id, id_questao, db), tenant_id)
 
     tags_list = tags.split(",") if tags else []
     metadados_dict = None
@@ -780,7 +786,9 @@ async def editar_questao(
 
     await db.commit()
     await db.refresh(questao)
-    return await buscar_questao(evento_id, conteudo_id, id_questao, db)
+    saida = await buscar_questao(evento_id, conteudo_id, id_questao, db)
+    await versoes_questao.salvar(db, saida, tenant_id, "editada", current_user.username)
+    return saida
 
 @router.patch(
     "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/revisao",
@@ -845,6 +853,7 @@ async def revisar_questao(
     questao = result.scalar_one_or_none()
     if not questao:
         raise HTTPException(status_code=404, detail="Questão não encontrada.")
+    await versoes_questao.guardar_estado_anterior(db, await buscar_questao(evento_id, conteudo_id, id_questao, db), tenant_id)
 
     form = json.loads(dados_revisao)
     caminho_imagem_relativo = questao.caminho_imagem_relativo
@@ -996,6 +1005,8 @@ async def revisar_questao(
 
     await db.commit()
     await fluxo_revisao.decisao_do_revisor(db, questao, status_revisao, current_user.username)
+    await versoes_questao.salvar(db, await buscar_questao(evento_id, conteudo_id, id_questao, db), tenant_id,
+                                 f"revisada: {status_revisao.lower()}", current_user.username)
     return {"ok": True}
 
 

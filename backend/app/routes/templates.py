@@ -5,7 +5,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from typing import List
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -190,6 +190,94 @@ def _extrair_preview_docx(data: bytes) -> dict:
     }
 
 
+class _SemMiniatura(RuntimeError):
+    pass
+
+
+def _gerar_miniatura(dados_docx: bytes, nome_evento: str, logo_ref: str | None, tenant_id: int) -> bytes:
+    """
+    Imagem da 1ª página do template COMO SAI NA PROVA: cabeçalho e rodapé preenchidos pelo mesmo código da exportação
+    (nome do evento, logotipo da banca, cargo de exemplo, página), desenhada pelo LibreOffice (tema claro).
+    Tudo numa pasta temporária privada, apagada no fim.
+    """
+    import os
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt, RGBColor
+    from PIL import Image
+
+    from core.document_generator import _FILA_LIBREOFFICE, DocxProofGenerator, PdfConverter, _forcar_tema_claro
+
+    soffice = PdfConverter().soffice_path
+    if not soffice:
+        raise _SemMiniatura("LibreOffice não encontrado.")
+    with tempfile.TemporaryDirectory(prefix="diagpro_miniatura_") as tmp:
+        logo = None
+        if logo_ref:
+            logo = secure_files.materialize_into({"company_logo_path": logo_ref}, tenant_id, tmp).get("company_logo_path")
+        doc = Document(io.BytesIO(dados_docx))
+        gerador = DocxProofGenerator(
+            prova_montada_obj={"identificador_prova": "PADRÃO", "nome_prova_montada": "Miniatura do template"},
+            evento_obj={"nome_evento": nome_evento or "NOME DO EVENTO"},
+            cargo_obj={"codigo_cargo": "CÓD", "nome_cargo": "Nome do cargo"},
+            format_options={}, image_storage_base_dir=tmp, logo_path_override=logo,
+        )
+        gerador._add_header_footer(doc)
+        aviso = doc.add_paragraph()
+        aviso.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = aviso.add_run("As questões da prova entram nesta área.")
+        run.italic = True
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(0x94, 0xA3, 0xB8)
+        caminho = os.path.join(tmp, "miniatura.docx")
+        doc.save(caminho)
+        perfil = os.path.join(tmp, "perfil")
+        _forcar_tema_claro(perfil)
+        cmd = [soffice, f"-env:UserInstallation={Path(perfil).as_uri()}", "--headless", "--norestore",
+               "--convert-to", "png", "--outdir", tmp, caminho]
+        with _FILA_LIBREOFFICE:
+            subprocess.run(cmd, timeout=120, capture_output=True, check=False)
+        png = os.path.join(tmp, "miniatura.png")
+        if not os.path.exists(png):
+            raise _SemMiniatura("O LibreOffice não gerou a imagem.")
+        with Image.open(png) as img:
+            img = img.convert("RGB")
+            img.thumbnail((900, 1300))
+            saida = io.BytesIO()
+            img.save(saida, format="PNG", optimize=True)
+        return saida.getvalue()
+
+
+@router.get("/eventos/{evento_id}/templates/{nome_arquivo}/miniatura")
+async def miniatura_template(nome_arquivo: str, evento=Depends(evento_autorizado), db: AsyncSession = Depends(get_tenant_db)):
+    """PNG da 1ª página como sai na prova. Gerada uma vez e guardada cifrada; refeita quando o template muda."""
+    import asyncio
+
+    from backend.app.db_models import Company
+
+    if not nome_arquivo.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Miniatura disponível apenas para arquivos .docx.")
+    png = secure_files.read_template_thumb(evento.id_evento, nome_arquivo, evento.tenant_id)
+    if png is None:
+        try:
+            dados = secure_files.read_template(evento.id_evento, nome_arquivo, evento.tenant_id)
+        except secure_files.SecureFileError:
+            raise HTTPException(status_code=404, detail="Template não encontrado.")
+        empresa = (await db.execute(select(Company).where(Company.tenant_id == evento.tenant_id))).scalars().first()
+        logo_ref = (empresa.company_logo_path or None) if empresa else None
+        try:
+            png = await asyncio.to_thread(_gerar_miniatura, dados, getattr(evento, "nome_evento", "") or "", logo_ref, evento.tenant_id)
+        except (_SemMiniatura, OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+            raise HTTPException(status_code=503, detail=f"Miniatura indisponível: {exc}")
+        secure_files.write_template_thumb(evento.id_evento, nome_arquivo, png, evento.tenant_id)
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/eventos/{evento_id}/templates", response_model=List[dict])
 async def listar_templates(evento=Depends(evento_autorizado), db: AsyncSession = Depends(get_tenant_db)):
     """Templates do evento com quando foi enviado, por quem (nome lido do cadastro) e tamanho."""
@@ -248,10 +336,22 @@ def baixar_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
     )
 
 
+def _miniatura_em_segundo_plano(evento_id: str, nome: str, tenant_id: int, nome_evento: str, logo_ref: str | None) -> None:
+    """Gera a miniatura logo após o envio, para a tela não esperar o LibreOffice na primeira visita."""
+    import logging
+    try:
+        dados = secure_files.read_template(evento_id, nome, tenant_id)
+        secure_files.write_template_thumb(evento_id, nome, _gerar_miniatura(dados, nome_evento, logo_ref, tenant_id), tenant_id)
+    except Exception as exc:  # a miniatura é gerada de novo quando a tela pedir
+        logging.getLogger(__name__).warning("Miniatura do template não gerada agora: %s", type(exc).__name__)
+
+
 @router.post("/eventos/{evento_id}/templates/upload")
 async def upload_template(
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     evento=Depends(evento_autorizado),
+    db: AsyncSession = Depends(get_tenant_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
 ):
     conteudo = await file.read(TAMANHO_MAX_TEMPLATE + 1)
@@ -260,9 +360,16 @@ async def upload_template(
     try:
         secure_files.write_template(evento.id_evento, file.filename or "", conteudo, evento.tenant_id,
                                     enviado_por_id=getattr(current_user, "id", None))
+        nome_salvo = secure_files._template_path(evento.id_evento, file.filename or "").name[:-len(".enc")]
     except secure_files.SecureFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "nome_arquivo": file.filename}
+    import os
+    if nome_salvo.lower().endswith(".docx") and os.getenv("DIAGPRO_MINIATURA_AO_ENVIAR", "1") != "0":
+        from backend.app.db_models import Company
+        empresa = (await db.execute(select(Company).where(Company.tenant_id == evento.tenant_id))).scalars().first()
+        background.add_task(_miniatura_em_segundo_plano, evento.id_evento, nome_salvo, evento.tenant_id,
+                            getattr(evento, "nome_evento", "") or "", (empresa.company_logo_path or None) if empresa else None)
+    return {"ok": True, "nome_arquivo": nome_salvo}
 
 
 @router.delete("/eventos/{evento_id}/templates/{nome_arquivo}")

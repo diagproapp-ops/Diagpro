@@ -86,3 +86,33 @@ async def test_template_preview_refuses_entity_expansion(async_client):
         assert prev.status_code == 400 and "entidades" in prev.json()["detail"]
     finally:
         await async_client.delete(f"{BASE}/ZZTesteMalicioso.docx", headers=a1)
+
+
+async def test_template_thumbnail_is_rendered_cached_encrypted_and_invalidated(async_client):
+    from core.document_generator import PdfConverter
+
+    reset_rate_limits()
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    nome = "ZZTesteMiniatura.docx"
+    try:
+        r = await async_client.post(f"{BASE}/upload", headers=a1, files={"file": (nome, _docx(), "application/octet-stream")})
+        assert r.status_code == 200 and r.json()["nome_arquivo"] == nome
+        r = await async_client.get(f"{BASE}/{nome}/miniatura", headers=a1)
+        if not PdfConverter().soffice_path:  # CI sem LibreOffice: resposta clara, e a tela usa a pré-visualização em HTML
+            assert r.status_code == 503
+            return
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:8] == b"\x89PNG\r\n\x1a\n"
+        assert "no-store" in r.headers["cache-control"]
+        pasta = secure_files.TEMPLATES_ROOT / EV
+        thumb = pasta / f"{nome}.thumb.enc"
+        assert thumb.is_file() and b"\x89PNG" not in thumb.read_bytes()  # guardada cifrada
+        assert nome + ".thumb" not in [t["nome_arquivo"] for t in (await async_client.get(BASE, headers=a1)).json()]
+        # reenviar o template invalida a miniatura antiga
+        assert (await async_client.post(f"{BASE}/upload", headers=a1, files={"file": (nome, _docx("OUTRO"), "application/octet-stream")})).status_code == 200
+        assert not thumb.exists()
+        # excluir apaga tudo
+        assert (await async_client.get(f"{BASE}/{nome}/miniatura", headers=a1)).status_code == 200 and thumb.exists()
+        assert (await async_client.delete(f"{BASE}/{nome}", headers=a1)).status_code == 200
+        assert not [a for a in pasta.iterdir() if a.name.startswith("ZZTesteMiniatura")]
+    finally:
+        await async_client.delete(f"{BASE}/{nome}", headers=a1)

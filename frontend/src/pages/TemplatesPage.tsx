@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, ChangeEvent } from 'react';
+import React, { useCallback, useEffect, useRef, useState, ChangeEvent } from 'react';
 import {
   Box, Typography, Paper, Divider, Button, Stack, CircularProgress, Snackbar, Alert, IconButton, Tooltip,
   Dialog, DialogContent, DialogTitle, Chip, Skeleton,
@@ -23,6 +23,8 @@ type TemplateArquivo = {
 };
 
 type Previa = { header_html?: string; body_html?: string; footer_html?: string };
+// Miniatura = imagem da 1ª página como sai na prova (gerada no servidor pelo mesmo código da exportação)
+type EstadoMiniatura = { estado: 'carregando' | 'ok' | 'erro'; url?: string };
 type EstadoPrevia = { carregando: boolean; erro?: string; html?: string; cabecalho?: boolean; rodape?: boolean; imagens?: boolean };
 
 // HTML montado no servidor a partir do DOCX (texto já escapado lá); aqui ainda removemos qualquer coisa ativa.
@@ -71,7 +73,7 @@ const formatarTamanho = (bytes?: number | null) => {
 const LARGURA_A4 = 794;
 const ESCALA_MINIATURA = 0.3;
 
-function Miniatura({ previa, onAbrir }: { previa?: EstadoPrevia; onAbrir: () => void }) {
+function Miniatura({ previa, imagem, onAbrir }: { previa?: EstadoPrevia; imagem?: EstadoMiniatura; onAbrir: () => void }) {
   return (
     <Box
       role="button"
@@ -85,7 +87,16 @@ function Miniatura({ previa, onAbrir }: { previa?: EstadoPrevia; onAbrir: () => 
         '&:hover .lupa, &:focus-visible .lupa': { opacity: 1 },
       }}
     >
-      {!previa || previa.carregando ? (
+      {imagem?.estado === 'ok' ? (
+        <Box component="img" src={imagem.url} alt="Primeira página do template como sai na prova"
+          sx={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top', display: 'block' }} />
+      ) : !imagem || imagem.estado === 'carregando' ? (
+        <Box sx={{ p: 2 }}>
+          <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 1 }}>Montando a página como sai na prova…</Typography>
+          <Skeleton variant="rectangular" height={34} sx={{ bgcolor: '#e2e8f0', mb: 1.5 }} />
+          {[90, 75, 82, 60].map((w) => <Skeleton key={w} width={`${w}%`} sx={{ bgcolor: '#e2e8f0' }} />)}
+        </Box>
+      ) : !previa || previa.carregando ? (
         <Box sx={{ p: 2 }}>
           <Skeleton variant="rectangular" height={34} sx={{ bgcolor: '#e2e8f0', mb: 1.5 }} />
           {[90, 75, 82, 60].map((w) => <Skeleton key={w} width={`${w}%`} sx={{ bgcolor: '#e2e8f0' }} />)}
@@ -117,6 +128,8 @@ const TemplatesPage: React.FC = () => {
 
   const [templates, setTemplates] = useState<TemplateArquivo[]>([]);
   const [previas, setPrevias] = useState<Record<string, EstadoPrevia>>({});
+  const [miniaturas, setMiniaturas] = useState<Record<string, EstadoMiniatura>>({});
+  const urlsCriadas = useRef<string[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [snackbar, setSnackbar] = useState<{ open: boolean, message: string, severity: "success" | "error" | "info" }>({ open: false, message: '', severity: "success" });
@@ -138,17 +151,39 @@ const TemplatesPage: React.FC = () => {
     }
   }, [urlTemplate]);
 
+  // Imagem real (servidor + LibreOffice). Sem ela, cai na pré-visualização em HTML.
+  const carregarMiniatura = useCallback(async (nome: string) => {
+    if (!nome.toLowerCase().endsWith('.docx')) {
+      carregarPrevia(nome);
+      setMiniaturas((m) => ({ ...m, [nome]: { estado: 'erro' } }));
+      return;
+    }
+    setMiniaturas((m) => ({ ...m, [nome]: { estado: 'carregando' } }));
+    try {
+      const { data } = await api.get(`${urlTemplate(nome)}/miniatura`, { responseType: 'blob', timeout: 180000 });
+      const url = URL.createObjectURL(data as Blob);
+      urlsCriadas.current.push(url);
+      setMiniaturas((m) => ({ ...m, [nome]: { estado: 'ok', url } }));
+    } catch {
+      setMiniaturas((m) => ({ ...m, [nome]: { estado: 'erro' } }));
+      carregarPrevia(nome);
+    }
+  }, [urlTemplate, carregarPrevia]);
+
+  // libera as imagens da memória ao sair da tela
+  useEffect(() => () => { urlsCriadas.current.forEach((u) => URL.revokeObjectURL(u)); }, []);
+
   const fetchTemplates = useCallback(() => {
     setCarregando(true);
     api
       .get<TemplateArquivo[]>(`/api/eventos/${eventId}/templates`)
       .then((res) => {
         setTemplates(res.data);
-        res.data.forEach((t) => carregarPrevia(t.nome_arquivo));
+        res.data.forEach((t) => carregarMiniatura(t.nome_arquivo));
       })
       .catch(() => setSnackbar({ open: true, message: "Erro ao buscar templates.", severity: "error" }))
       .finally(() => setCarregando(false));
-  }, [eventId, carregarPrevia]);
+  }, [eventId, carregarMiniatura]);
 
   useEffect(() => { fetchTemplates(); }, [fetchTemplates]);
 
@@ -237,7 +272,7 @@ const TemplatesPage: React.FC = () => {
                 <Paper key={t.nome_arquivo} variant="outlined" sx={{ p: 1.5, borderRadius: 3, display: 'flex', flexDirection: 'column', gap: 1.25,
                   bgcolor: 'rgba(15, 23, 42, 0.5)', borderColor: 'rgba(148, 163, 184, 0.2)', transition: 'border-color .15s',
                   '&:hover': { borderColor: 'primary.main' } }}>
-                  <Miniatura previa={previa} onAbrir={() => setAberto(t)} />
+                  <Miniatura previa={previa} imagem={miniaturas[t.nome_arquivo]} onAbrir={() => setAberto(t)} />
                   <Box sx={{ minWidth: 0 }}>
                     <Tooltip title={t.nome_arquivo} placement="top-start">
                       <Typography fontWeight={700} noWrap>{t.nome_arquivo}</Typography>
@@ -250,13 +285,8 @@ const TemplatesPage: React.FC = () => {
                       <Typography variant="caption" color="text.secondary">{formatarTamanho(t.tamanho)}</Typography>
                     )}
                   </Box>
-                  {previa && !previa.carregando && !previa.erro && (
-                    <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                      {previa.cabecalho && <Chip size="small" label="Cabeçalho" variant="outlined" />}
-                      {previa.rodape && <Chip size="small" label="Rodapé" variant="outlined" />}
-                      {previa.imagens && <Chip size="small" label="Imagens" variant="outlined" />}
-                      {!previa.cabecalho && !previa.rodape && <Chip size="small" label="Sem cabeçalho/rodapé" variant="outlined" color="warning" />}
-                    </Stack>
+                  {miniaturas[t.nome_arquivo]?.estado === 'ok' && (
+                    <Chip size="small" variant="outlined" label="Como sai na prova" sx={{ alignSelf: 'flex-start' }} />
                   )}
                   <Stack direction="row" spacing={0.5} sx={{ mt: 'auto', pt: 0.5 }}>
                     <Button size="small" startIcon={<VisibilityIcon />} onClick={() => setAberto(t)}>Visualizar</Button>
@@ -282,7 +312,15 @@ const TemplatesPage: React.FC = () => {
         <Dialog open={!!aberto} maxWidth="md" fullWidth onClose={() => setAberto(null)}>
           <DialogTitle>Visualização: {aberto?.nome_arquivo}</DialogTitle>
           <DialogContent sx={{ minHeight: 500, bgcolor: '#e2e8f0', p: { xs: 1, md: 3 } }}>
-            {!previaAberta || previaAberta.carregando ? (
+            {aberto && miniaturas[aberto.nome_arquivo]?.estado === 'ok' ? (
+              <Box sx={{ maxWidth: LARGURA_A4, mx: 'auto' }}>
+                <Box component="img" src={miniaturas[aberto.nome_arquivo].url} alt={`Página do template ${aberto.nome_arquivo} como sai na prova`}
+                  sx={{ width: '100%', display: 'block', boxShadow: 3 }} />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'center' }}>
+                  Cabeçalho e rodapé preenchidos como na exportação: nome do evento, logotipo da banca, cargo e página (cargo de exemplo).
+                </Typography>
+              </Box>
+            ) : !previaAberta || previaAberta.carregando ? (
               <Box sx={{ display: 'grid', placeItems: 'center', py: 8 }}><CircularProgress /></Box>
             ) : previaAberta.erro ? (
               <Alert severity="warning">{previaAberta.erro}</Alert>

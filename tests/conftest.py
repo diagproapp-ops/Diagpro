@@ -10,11 +10,26 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+# Trava: os testes mexem em configurações, usuários e dados. Rodar o pytest direto carregava o .env e usava o
+# banco REAL. Só seguem se TODAS as URLs de banco apontarem para um banco de teste (nome terminando em "_test").
+from dotenv import load_dotenv as _load_dotenv  # noqa: E402
+
+_load_dotenv()  # não sobrescreve o que o scripts/run_tests.py (ou o CI) já definiu
+for _var in ("DATABASE_URL", "PLATFORM_DATABASE_URL"):
+    _url = os.environ.get(_var, "")
+    _nome_banco = _url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if not _nome_banco.endswith("_test"):
+        import pytest as _pytest
+        _pytest.exit(f"{_var} aponta para o banco '{_nome_banco}', que não é de teste. Rode: python scripts/run_tests.py",
+                     returncode=4)
+
 # Os testes NUNCA gravam/apagam templates na pasta real do sistema (o evento de teste tem o mesmo id de um evento
 # real): usam uma pasta temporária, definida antes de importar o app.
 if not os.environ.get("DIAGPRO_TEMPLATES_DIR"):
     import tempfile as _tempfile
     os.environ["DIAGPRO_TEMPLATES_DIR"] = _tempfile.mkdtemp(prefix="diagpro_templates_teste_")
+# a miniatura do template (LibreOffice) não é gerada a cada envio durante os testes
+os.environ.setdefault("DIAGPRO_MINIATURA_AO_ENVIAR", "0")
 
 from backend.app.auth import create_access_token, get_password_hash  # noqa: E402
 from backend.app.database import PlatformSessionLocal  # noqa: E402

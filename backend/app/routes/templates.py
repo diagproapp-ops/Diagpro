@@ -252,43 +252,37 @@ def _gerar_miniatura(dados_docx: bytes, nome_evento: str, logo_ref: str | None, 
         return saida.getvalue()
 
 
-@router.get("/eventos/{evento_id}/templates/{nome_arquivo}/miniatura")
-async def miniatura_template(nome_arquivo: str, evento=Depends(evento_autorizado), db: AsyncSession = Depends(get_tenant_db)):
-    """PNG da 1ª página como sai na prova. Gerada uma vez e guardada cifrada; refeita quando o template muda."""
-    import asyncio
+# --------------------------------------------------------------------------------------------- biblioteca da banca
+# Os templates (papel timbrado) moram na BIBLIOTECA DA BANCA (Configurações > Templates de prova). As rotas do evento
+# continuam existindo e leem a mesma biblioteca: o evento só escolhe qual é o seu padrão (preferências de exportação).
 
+NOME_EXEMPLO_CONCURSO = "NOME DO CONCURSO"
+_PODE_GERIR = (UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)
+
+
+def _tenant_da_banca(current_user) -> int:
+    tenant_id = getattr(current_user, "tenant_id", None)
+    if tenant_id is None:
+        raise HTTPException(status_code=400, detail="Escolha um cliente no topo da tela para gerenciar os templates.")
+    return int(tenant_id)
+
+
+async def _logo_da_banca(db: AsyncSession, tenant_id: int) -> str | None:
     from backend.app.db_models import Company
-
-    if not nome_arquivo.lower().endswith(".docx"):
-        raise HTTPException(status_code=400, detail="Miniatura disponível apenas para arquivos .docx.")
-    png = secure_files.read_template_thumb(evento.id_evento, nome_arquivo, evento.tenant_id)
-    if png is None:
-        try:
-            dados = secure_files.read_template(evento.id_evento, nome_arquivo, evento.tenant_id)
-        except secure_files.SecureFileError:
-            raise HTTPException(status_code=404, detail="Template não encontrado.")
-        empresa = (await db.execute(select(Company).where(Company.tenant_id == evento.tenant_id))).scalars().first()
-        logo_ref = (empresa.company_logo_path or None) if empresa else None
-        try:
-            png = await asyncio.to_thread(_gerar_miniatura, dados, getattr(evento, "nome_evento", "") or "", logo_ref, evento.tenant_id)
-        except (_SemMiniatura, OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
-            raise HTTPException(status_code=503, detail=f"Miniatura indisponível: {exc}")
-        secure_files.write_template_thumb(evento.id_evento, nome_arquivo, png, evento.tenant_id)
-    return Response(content=png, media_type="image/png",
-                    headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    empresa = (await db.execute(select(Company).where(Company.tenant_id == tenant_id))).scalars().first()
+    return (empresa.company_logo_path or None) if empresa else None
 
 
-@router.get("/eventos/{evento_id}/templates", response_model=List[dict])
-async def listar_templates(evento=Depends(evento_autorizado), db: AsyncSession = Depends(get_tenant_db)):
-    """Templates do evento com quando foi enviado, por quem (nome lido do cadastro) e tamanho."""
-    evento_id = evento.id_evento
+async def _listar(db: AsyncSession, tenant_id: int, url_base: str) -> list[dict]:
+    """Templates da biblioteca com quando foi enviado, por quem (nome lido do cadastro) e tamanho."""
+    dono = secure_files.dono_banca(tenant_id)
     itens = []
-    for nome in secure_files.list_templates(evento_id):
+    for nome in secure_files.list_templates(dono):
         try:
-            info = secure_files.info_template(evento_id, nome, evento.tenant_id)
+            info = secure_files.info_template(dono, nome, tenant_id)
         except secure_files.SecureFileError:
             continue
-        itens.append({"nome_arquivo": nome, "url": f"/api/eventos/{evento_id}/templates/{nome}", "descricao": "",
+        itens.append({"nome_arquivo": nome, "url": f"{url_base}/{nome}", "descricao": "",
                       "enviado_em": info.get("enviado_em"), "tamanho": info.get("tamanho"),
                       "_por": info.get("enviado_por_id")})
     ids = {i["_por"] for i in itens if isinstance(i["_por"], int)}
@@ -298,16 +292,14 @@ async def listar_templates(evento=Depends(evento_autorizado), db: AsyncSession =
             nomes[u.id] = u.full_name or u.username
     for i in itens:
         i["enviado_por"] = nomes.get(i.pop("_por"))
-    # mais recentes primeiro
     return sorted(itens, key=lambda i: i.get("enviado_em") or "", reverse=True)
 
 
-@router.get("/eventos/{evento_id}/templates/{nome_arquivo}/preview")
-def preview_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
+def _previa(tenant_id: int, nome_arquivo: str) -> dict:
     if not nome_arquivo.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="Preview disponível apenas para arquivos .docx.")
     try:
-        data = secure_files.read_template(evento.id_evento, nome_arquivo, evento.tenant_id)
+        data = secure_files.read_template(secure_files.dono_banca(tenant_id), nome_arquivo, tenant_id)
         preview = _extrair_preview_docx(data)
     except secure_files.SecureFileError:
         raise HTTPException(status_code=404, detail="Template não encontrado.")
@@ -318,10 +310,32 @@ def preview_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
     return {"nome_arquivo": nome_arquivo, **preview}
 
 
-@router.get("/eventos/{evento_id}/templates/{nome_arquivo}")
-def baixar_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
+async def _miniatura(db: AsyncSession, tenant_id: int, nome_arquivo: str) -> Response:
+    """PNG da 1ª página como sai na prova (nome do concurso de exemplo). Gerada uma vez e guardada cifrada."""
+    import asyncio
+
+    if not nome_arquivo.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Miniatura disponível apenas para arquivos .docx.")
+    dono = secure_files.dono_banca(tenant_id)
+    png = secure_files.read_template_thumb(dono, nome_arquivo, tenant_id)
+    if png is None:
+        try:
+            dados = secure_files.read_template(dono, nome_arquivo, tenant_id)
+        except secure_files.SecureFileError:
+            raise HTTPException(status_code=404, detail="Template não encontrado.")
+        logo_ref = await _logo_da_banca(db, tenant_id)
+        try:
+            png = await asyncio.to_thread(_gerar_miniatura, dados, NOME_EXEMPLO_CONCURSO, logo_ref, tenant_id)
+        except (_SemMiniatura, OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+            raise HTTPException(status_code=503, detail=f"Miniatura indisponível: {exc}")
+        secure_files.write_template_thumb(dono, nome_arquivo, png, tenant_id)
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+def _baixar(tenant_id: int, nome_arquivo: str) -> Response:
     try:
-        data = secure_files.read_template(evento.id_evento, nome_arquivo, evento.tenant_id)
+        data = secure_files.read_template(secure_files.dono_banca(tenant_id), nome_arquivo, tenant_id)
     except secure_files.SecureFileError:
         raise HTTPException(status_code=404, detail="Template não encontrado.")
     ext = nome_arquivo.rsplit(".", 1)[-1].lower()
@@ -336,14 +350,91 @@ def baixar_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
     )
 
 
-def _miniatura_em_segundo_plano(evento_id: str, nome: str, tenant_id: int, nome_evento: str, logo_ref: str | None) -> None:
+def _miniatura_em_segundo_plano(dono: str, nome: str, tenant_id: int, logo_ref: str | None) -> None:
     """Gera a miniatura logo após o envio, para a tela não esperar o LibreOffice na primeira visita."""
     import logging
     try:
-        dados = secure_files.read_template(evento_id, nome, tenant_id)
-        secure_files.write_template_thumb(evento_id, nome, _gerar_miniatura(dados, nome_evento, logo_ref, tenant_id), tenant_id)
+        dados = secure_files.read_template(dono, nome, tenant_id)
+        secure_files.write_template_thumb(dono, nome, _gerar_miniatura(dados, NOME_EXEMPLO_CONCURSO, logo_ref, tenant_id), tenant_id)
     except Exception as exc:  # a miniatura é gerada de novo quando a tela pedir
         logging.getLogger(__name__).warning("Miniatura do template não gerada agora: %s", type(exc).__name__)
+
+
+async def _enviar(db: AsyncSession, tenant_id: int, file: UploadFile, current_user, background: BackgroundTasks) -> dict:
+    import os
+
+    conteudo = await file.read(TAMANHO_MAX_TEMPLATE + 1)
+    if len(conteudo) > TAMANHO_MAX_TEMPLATE:
+        raise HTTPException(status_code=413, detail="Arquivo excede o limite de 20 MB.")
+    dono = secure_files.dono_banca(tenant_id)
+    try:
+        secure_files.write_template(dono, file.filename or "", conteudo, tenant_id, enviado_por_id=getattr(current_user, "id", None))
+        nome_salvo = secure_files._template_path(dono, file.filename or "").name[:-len(".enc")]
+    except secure_files.SecureFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if nome_salvo.lower().endswith(".docx") and os.getenv("DIAGPRO_MINIATURA_AO_ENVIAR", "1") != "0":
+        background.add_task(_miniatura_em_segundo_plano, dono, nome_salvo, tenant_id, await _logo_da_banca(db, tenant_id))
+    return {"ok": True, "nome_arquivo": nome_salvo}
+
+
+def _excluir(tenant_id: int, nome_arquivo: str) -> dict:
+    if not secure_files.delete_template(secure_files.dono_banca(tenant_id), nome_arquivo):
+        raise HTTPException(status_code=404, detail="Template não encontrado.")
+    return {"ok": True}
+
+
+# ----- Configurações > Templates de prova (biblioteca da banca em gestão)
+@router.get("/banca/templates", response_model=List[dict])
+async def biblioteca_listar(db: AsyncSession = Depends(get_tenant_db), current_user=Depends(require_roles(*_PODE_GERIR))):
+    return await _listar(db, _tenant_da_banca(current_user), "/api/banca/templates")
+
+
+@router.get("/banca/templates/{nome_arquivo}/preview")
+def biblioteca_previa(nome_arquivo: str, current_user=Depends(require_roles(*_PODE_GERIR))):
+    return _previa(_tenant_da_banca(current_user), nome_arquivo)
+
+
+@router.get("/banca/templates/{nome_arquivo}/miniatura")
+async def biblioteca_miniatura(nome_arquivo: str, db: AsyncSession = Depends(get_tenant_db),
+                               current_user=Depends(require_roles(*_PODE_GERIR))):
+    return await _miniatura(db, _tenant_da_banca(current_user), nome_arquivo)
+
+
+@router.get("/banca/templates/{nome_arquivo}")
+def biblioteca_baixar(nome_arquivo: str, current_user=Depends(require_roles(*_PODE_GERIR))):
+    return _baixar(_tenant_da_banca(current_user), nome_arquivo)
+
+
+@router.post("/banca/templates/upload")
+async def biblioteca_enviar(background: BackgroundTasks, file: UploadFile = File(...), db: AsyncSession = Depends(get_tenant_db),
+                            current_user=Depends(require_roles(*_PODE_GERIR))):
+    return await _enviar(db, _tenant_da_banca(current_user), file, current_user, background)
+
+
+@router.delete("/banca/templates/{nome_arquivo}")
+def biblioteca_excluir(nome_arquivo: str, current_user=Depends(require_roles(*_PODE_GERIR))):
+    return _excluir(_tenant_da_banca(current_user), nome_arquivo)
+
+
+# ----- Rotas do evento (compatibilidade: exportação, pré-visualização da prova e telas antigas) — mesma biblioteca
+@router.get("/eventos/{evento_id}/templates", response_model=List[dict])
+async def listar_templates(evento=Depends(evento_autorizado), db: AsyncSession = Depends(get_tenant_db)):
+    return await _listar(db, evento.tenant_id, f"/api/eventos/{evento.id_evento}/templates")
+
+
+@router.get("/eventos/{evento_id}/templates/{nome_arquivo}/preview")
+def preview_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
+    return _previa(evento.tenant_id, nome_arquivo)
+
+
+@router.get("/eventos/{evento_id}/templates/{nome_arquivo}/miniatura")
+async def miniatura_template(nome_arquivo: str, evento=Depends(evento_autorizado), db: AsyncSession = Depends(get_tenant_db)):
+    return await _miniatura(db, evento.tenant_id, nome_arquivo)
+
+
+@router.get("/eventos/{evento_id}/templates/{nome_arquivo}")
+def baixar_template(nome_arquivo: str, evento=Depends(evento_autorizado)):
+    return _baixar(evento.tenant_id, nome_arquivo)
 
 
 @router.post("/eventos/{evento_id}/templates/upload")
@@ -352,32 +443,15 @@ async def upload_template(
     file: UploadFile = File(...),
     evento=Depends(evento_autorizado),
     db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    current_user=Depends(require_roles(*_PODE_GERIR)),
 ):
-    conteudo = await file.read(TAMANHO_MAX_TEMPLATE + 1)
-    if len(conteudo) > TAMANHO_MAX_TEMPLATE:
-        raise HTTPException(status_code=413, detail="Arquivo excede o limite de 20 MB.")
-    try:
-        secure_files.write_template(evento.id_evento, file.filename or "", conteudo, evento.tenant_id,
-                                    enviado_por_id=getattr(current_user, "id", None))
-        nome_salvo = secure_files._template_path(evento.id_evento, file.filename or "").name[:-len(".enc")]
-    except secure_files.SecureFileError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    import os
-    if nome_salvo.lower().endswith(".docx") and os.getenv("DIAGPRO_MINIATURA_AO_ENVIAR", "1") != "0":
-        from backend.app.db_models import Company
-        empresa = (await db.execute(select(Company).where(Company.tenant_id == evento.tenant_id))).scalars().first()
-        background.add_task(_miniatura_em_segundo_plano, evento.id_evento, nome_salvo, evento.tenant_id,
-                            getattr(evento, "nome_evento", "") or "", (empresa.company_logo_path or None) if empresa else None)
-    return {"ok": True, "nome_arquivo": nome_salvo}
+    return await _enviar(db, evento.tenant_id, file, current_user, background)
 
 
 @router.delete("/eventos/{evento_id}/templates/{nome_arquivo}")
 def deletar_template(
     nome_arquivo: str,
     evento=Depends(evento_autorizado),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)),
+    current_user=Depends(require_roles(*_PODE_GERIR)),
 ):
-    if not secure_files.delete_template(evento.id_evento, nome_arquivo):
-        raise HTTPException(status_code=404, detail="Template não encontrado.")
-    return {"ok": True}
+    return _excluir(evento.tenant_id, nome_arquivo)

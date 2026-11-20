@@ -30,12 +30,14 @@ import TemplatesPage from './pages/TemplatesPage';
 import PublicRegisterPage from './pages/PublicRegisterPage';
 import MinhaContaPage from './pages/MinhaContaPage';
 import FilaRevisaoPage from './pages/FilaRevisaoPage';
+import AvisoManutencao from './components/AvisoManutencao';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
 
   return (
     <CustomThemeProvider>
+      <AvisoManutencao />
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
           <CircularProgress />

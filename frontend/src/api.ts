@@ -26,6 +26,10 @@ api.interceptors.response.use(
   (resposta) => resposta,
   (erro) => {
     const url = String(erro?.config?.url || '');
+    // Modo manutenção: a faixa do topo (AvisoManutencao) mostra a mensagem
+    if (erro?.response?.status === 503 && erro?.response?.data?.manutencao) {
+      window.dispatchEvent(new CustomEvent('diagpro:manutencao', { detail: erro.response.data.detail }));
+    }
     if (erro?.response?.status === 401 && localStorage.getItem('authToken') && !url.startsWith('/auth/')) {
       localStorage.removeItem('authToken');
       localStorage.removeItem('userRole');

@@ -56,6 +56,15 @@ PADRAO_PLATAFORMA = {
         "remetente_email": "",
         "url_sistema": "http://localhost:3000",  # base dos links nos e-mails
     },
+    "backup": {
+        "automatico": True,
+        "hora": 2,      # hora do dia (0-23) do backup automático
+        "manter": 14,   # quantos backups automáticos guardar
+    },
+    "manutencao": {
+        "ativa": False,
+        "mensagem": "O DiagPro está em manutenção. Volte em alguns minutos.",
+    },
 }
 
 SEGURANCA_EMAIL = ("starttls", "ssl", "nenhuma")
@@ -170,6 +179,29 @@ def validar_plataforma(dados: dict) -> dict:
             erros.append("ia: formato inválido.")
         else:
             out["ia"] = _validar_ia_plataforma(ia, erros)
+    bk = (dados or {}).get("backup")
+    if bk is not None:
+        out["backup"] = {}
+        if "automatico" in bk:
+            if not isinstance(bk["automatico"], bool):
+                erros.append("backup.automatico: use sim ou não.")
+            out["backup"]["automatico"] = bool(bk["automatico"])
+        for campo, (mi, ma) in {"hora": (0, 23), "manter": (3, 365)}.items():
+            if campo in bk:
+                _int(bk[campo], f"backup.{campo}", mi, ma, erros)
+                out["backup"][campo] = bk[campo]
+    man = (dados or {}).get("manutencao")
+    if man is not None:
+        out["manutencao"] = {}
+        if "ativa" in man:
+            if not isinstance(man["ativa"], bool):
+                erros.append("manutencao.ativa: use sim ou não.")
+            out["manutencao"]["ativa"] = bool(man["ativa"])
+        if "mensagem" in man:
+            msg = str(man["mensagem"] or "").strip()
+            if not msg or len(msg) > 300:
+                erros.append("manutencao.mensagem: de 1 a 300 caracteres.")
+            out["manutencao"]["mensagem"] = msg
     em = (dados or {}).get("email")
     if em is not None:
         if not isinstance(em, dict):

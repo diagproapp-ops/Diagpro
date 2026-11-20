@@ -193,6 +193,7 @@ DiagPro/
 │   │   ├── sessoes.py            # Acessos: abrir/validar/encerrar, alerta de aparelho novo
 │   │   ├── fluxo_revisao.py      # Estados da revisão, envio, decisão, reabertura e avisos
 │   │   ├── versoes_questao.py    # Versões das questões e busca local de parecidas
+│   │   ├── backups.py, saude.py  # Backups cifrados agendados e painel de saúde
 │   │   ├── politica_senha.py     # Política de senha (valores vindos das configurações)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
 │   │   ├── rls_policies.sql      # Políticas RLS (21 tabelas, sem bypass)
@@ -390,6 +391,11 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 - Cada criação, edição e revisão guarda a questão completa (cifrada), com autor e motivo; na 1ª alteração de uma questão antiga, o estado anterior vira a versão 1. A tela de edição lista as versões, compara com o formulário (diferenças em destaque) e traz uma versão de volta para o formulário (vale ao salvar; imagens não são restauradas).
 - Ao salvar, o enunciado é comparado com as outras questões da banca (trigramas de palavras + coeficiente de Dice, tudo no servidor, sem serviço externo); a partir de 80% a tela pede confirmação. Professor vê detalhes só das questões dele; das outras, só o aviso e o grau.
 
+**Saúde, backups e manutenção** (`saude.py`, `backups.py`, `routes/sistema.py`; Configurações > Plataforma > Saúde e backups)
+- Painel do admin geral: banco (latência, TLS, tamanho), migrações em dia, RLS forçado em todas as tabelas com banca, fila de e-mails, último backup, chaves presentes, disco, LibreOffice, e-mail, IA e manutenção.
+- Backup automático diário (hora e quantos guardar configuráveis; padrão 2h, 14), além do botão "Fazer backup agora": `pg_dump` direto para a cifra (nada em claro no disco), conferido logo depois (decifra inteiro e confere a assinatura `PGDMP`). Falha avisa o admin geral. Sem download pela web. Variáveis: `DIAGPRO_BACKUP_CMD` (padrão `docker exec diagpro_postgres pg_dump -U diagpro_admin -Fc diagpro`), `DIAGPRO_BACKUP_DIR`, `DIAGPRO_BACKUP_AGENDADO=0` desliga o agendador.
+- Modo manutenção: todos recebem 503 com a mensagem configurada (faixa no topo de todas as telas, inclusive o login), menos o admin geral; login e `/status/manutencao` continuam abertos.
+
 **Autenticação e HTTP**
 - Política de senha (`politica_senha.py`): mínimo de 12 caracteres e 3 de 4 tipos, sem usuário/e-mail, sem senha comum ou sequência, sem repetir as 5 últimas (histórico bcrypt cifrado), validade de 180 dias. Senha definida por administrador é provisória. Troca obrigatória (provisória, vencida ou fora da política) acontece depois do 2FA e antes do acesso. Trocar a própria senha exige a senha atual e um código do autenticador.
 - Sessão: token de 30 min renovado pela tela só enquanto há uso (`/auth/renovar`); 30 min sem uso encerram; limite absoluto de 12 h desde o login (`auth_time`). 401 em qualquer tela leva ao login com aviso.
@@ -496,7 +502,7 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` , `tests/test_notificacoes.py`, `tests/test_sessoes.py`, `tests/test_revisao.py` e `tests/test_versoes.py`, 38 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` , `tests/test_notificacoes.py`, `tests/test_sessoes.py`, `tests/test_revisao.py`, `tests/test_versoes.py` e `tests/test_sistema.py`, 39 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
@@ -514,6 +520,7 @@ Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagp
 | Acessos | `test_sessions_logout_remote_signout_and_new_device_alert`, `test_browser_summary` |
 | Fluxo de revisão | `test_review_workflow_send_queue_return_approve_reopen` |
 | Versões e parecidas | `test_question_versions_and_similar_questions` |
+| Backups, saúde e manutenção | `test_backup_retention_health_and_maintenance` (dump sintético; nunca o banco real) |
 | HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
 
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.

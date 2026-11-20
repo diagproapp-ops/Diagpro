@@ -27,6 +27,8 @@ import PlataformaSegurancaTab from './SettingsTabs/PlataformaSegurancaTab';
 import BancaConfigTab from './SettingsTabs/BancaConfigTab';
 import PlataformaIATab from './SettingsTabs/PlataformaIATab';
 import PlataformaEmailTab from './SettingsTabs/PlataformaEmailTab';
+import PlataformaSaudeTab from './SettingsTabs/PlataformaSaudeTab';
+import MonitorHeartOutlinedIcon from '@mui/icons-material/MonitorHeartOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import BancaIATab from './SettingsTabs/BancaIATab';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
@@ -53,7 +55,8 @@ type SectionKey =
   | 'banca_regras'
   | 'banca_ia'
   | 'plataforma_ia'
-  | 'plataforma_email';
+  | 'plataforma_email'
+  | 'plataforma_saude';
 
 function SettingsPage() {
   const { user } = useAuth();
@@ -222,6 +225,13 @@ function SettingsPage() {
         desc: 'Servidor SMTP para os avisos por e-mail (senha cifrada) e envio de teste.',
         icon: <MailOutlineIcon fontSize="small" />,
         badge: 'Novo',
+      }, {
+        key: 'plataforma_saude' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'Saúde e backups',
+        desc: 'Conferências do sistema, backups cifrados agendados e modo manutenção.',
+        icon: <MonitorHeartOutlinedIcon fontSize="small" />,
+        badge: 'Novo',
       }]
       : []),
     {
@@ -350,6 +360,10 @@ function SettingsPage() {
                 <ListItemButton selected={section === 'plataforma_email'} onClick={() => setSection('plataforma_email')} sx={subNavSx(section === 'plataforma_email')}>
                   <ListItemIcon><MailOutlineIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="E-mail de avisos" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_saude'} onClick={() => setSection('plataforma_saude')} sx={subNavSx(section === 'plataforma_saude')}>
+                  <ListItemIcon><MonitorHeartOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Saúde e backups" />
                 </ListItemButton>
               </>
             )}
@@ -506,6 +520,7 @@ function SettingsPage() {
               {section === 'banca_ia' && <BancaIATab />}
               {section === 'plataforma_ia' && isAdminGeral && <PlataformaIATab />}
               {section === 'plataforma_email' && isAdminGeral && <PlataformaEmailTab />}
+              {section === 'plataforma_saude' && isAdminGeral && <PlataformaSaudeTab />}
             </Box>
           )}
         </Box>

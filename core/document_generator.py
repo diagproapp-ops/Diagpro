@@ -1080,6 +1080,16 @@ class DocxProofGenerator:
             if nome == "br":
                 paragraph.add_run().add_break()
                 return
+            if nome in ("span", "div") and no.get("data-type") in ("inline-math", "block-math", "math"):
+                # equação do editor -> equação nativa do Word, na mesma linha da letra/número
+                from backend.app import equacoes
+                latex = no.get("data-latex") or ""
+                try:
+                    paragraph._p.append(equacoes.latex_para_omml(latex, tamanho_pt=(tamanho.pt if tamanho else None)))
+                except equacoes.EquacaoInvalida as exc:
+                    self.logger.warning("Equação não convertida (%s): %s", exc, latex[:80])
+                    escrever(latex, {**fmt, "i": True})
+                return
             if nome in blocos:
                 if not primeiro_bloco[0] and paragraph.runs:
                     paragraph.add_run().add_break()
@@ -1108,7 +1118,10 @@ class DocxProofGenerator:
     def _texto_simples(self, html) -> str:
         """HTML do editor -> texto corrido (itens de Certo/Errado são impressos numa linha numerada)."""
         from bs4 import BeautifulSoup
-        texto = BeautifulSoup(str(html or ""), "html.parser").get_text(" ")
+        soup = BeautifulSoup(str(html or ""), "html.parser")
+        for eq in soup.select('[data-type="inline-math"], [data-type="block-math"], [data-type="math"]'):
+            eq.replace_with(f" {eq.get('data-latex') or ''} ")  # equação conta como texto
+        texto = soup.get_text(" ")
         return re.sub(r"\s+", " ", texto).strip()
 
     def _fonte_principal(self):
@@ -2509,6 +2522,24 @@ class AnswerKeyGenerator:
         return self._write_csv(filepath, output_data, headers)
 
 
+_CONFIG_TEMA_CLARO = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
+    '<item oor:path="/org.openoffice.Office.Common/Appearance"><prop oor:name="ApplicationAppearance" oor:op="fuse">'
+    '<value>1</value></prop></item>\n'
+    '</oor:items>\n'
+)
+
+
+def _forcar_tema_claro(perfil: str) -> None:
+    """Perfil do LibreOffice com aparência clara (1), independente do tema do sistema."""
+    pasta_user = os.path.join(perfil, "user")
+    os.makedirs(pasta_user, exist_ok=True)
+    with open(os.path.join(pasta_user, "registrymodifications.xcu"), "w", encoding="utf-8") as f:
+        f.write(_CONFIG_TEMA_CLARO)
+
+
 class PdfConverter:
     """Converte arquivos DOCX para PDF usando LibreOffice/soffice."""
     def __init__(self, app_instance: Optional[Any] = None, logger_param: Optional[logging.Logger] = None): # Adicionado logger_param
@@ -2580,6 +2611,9 @@ class PdfConverter:
         # na máquina) entregava o trabalho à primeira e saía sem gerar o PDF ("arquivo em uso por outro processo").
         perfil = os.path.join(abs_output_dir, ".perfil_libreoffice")
         os.makedirs(perfil, exist_ok=True)
+        # Tema CLARO forçado: com o tema do sistema (escuro), o LibreOffice desenha as equações da prova
+        # em BRANCO no PDF — elas sumiriam da prova impressa.
+        _forcar_tema_claro(perfil)
         command = [
             self.soffice_path,
             f"-env:UserInstallation={Path(perfil).as_uri()}",

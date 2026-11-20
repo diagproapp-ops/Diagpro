@@ -10,12 +10,25 @@ import re
 import io
 from PIL import Image
 
+from backend.app import equacoes
+
 logger = logging.getLogger(__name__)
 
 # Largura máxima de imagem embutida no texto (cabe numa coluna A4 com margens comuns).
 _LARGURA_MAX_IMAGEM = Inches(6)
 
 _BLOCOS_INTERNOS = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
+_INLINE_FORMATO = ("strong", "b", "em", "i", "u", "s", "strike", "del", "sup", "sub", "mark", "span", "a")
+
+# Cores de marca-texto que o Word aceita (o DOCX não tem marca-texto de cor livre)
+_MARCA_TEXTO = {
+    WD_COLOR_INDEX.YELLOW: (255, 255, 0), WD_COLOR_INDEX.BRIGHT_GREEN: (0, 255, 0),
+    WD_COLOR_INDEX.TURQUOISE: (0, 255, 255), WD_COLOR_INDEX.PINK: (255, 0, 255),
+    WD_COLOR_INDEX.BLUE: (0, 0, 255), WD_COLOR_INDEX.RED: (255, 0, 0),
+    WD_COLOR_INDEX.GRAY_25: (192, 192, 192), WD_COLOR_INDEX.GRAY_50: (128, 128, 128),
+    WD_COLOR_INDEX.TEAL: (0, 128, 128), WD_COLOR_INDEX.GREEN: (0, 128, 0),
+    WD_COLOR_INDEX.VIOLET: (128, 0, 128), WD_COLOR_INDEX.DARK_YELLOW: (128, 128, 0),
+}
 
 
 def _cor(valor):
@@ -33,6 +46,33 @@ def _cor(valor):
     return None
 
 
+def _marca_texto_mais_proxima(valor):
+    cor = _cor(valor)
+    if cor is None:
+        return WD_COLOR_INDEX.YELLOW
+    r, g, b = cor[0], cor[1], cor[2]
+    return min(_MARCA_TEXTO, key=lambda k: sum((a - c) ** 2 for a, c in zip(_MARCA_TEXTO[k], (r, g, b))))
+
+
+def _tamanho_pt(valor):
+    """'14pt', '16px', '1.2em' -> pontos (None se não reconhecer)."""
+    m = re.fullmatch(r"\s*([\d.]+)\s*(pt|px|em|rem)?\s*", valor or "")
+    if not m:
+        return None
+    n = float(m.group(1))
+    unidade = m.group(2) or "pt"
+    if unidade == "px":
+        n = n * 0.75
+    elif unidade in ("em", "rem"):
+        n = n * 12
+    return n if 4 <= n <= 96 else None
+
+
+def _estilo(tag, prop):
+    m = re.search(r'(?:^|;)\s*' + re.escape(prop) + r'\s*:\s*([^;]+)', tag.get("style", "") or "")
+    return m.group(1).strip() if m else None
+
+
 def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIGN_PARAGRAPH.JUSTIFY):
     """
     Converte o HTML do editor (tiptap) para python-docx.
@@ -41,9 +81,10 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
     - fonte: nome da fonte
     - tamanho: tamanho da fonte (int ou Pt)
 
-    Formatação reproduzida (inclusive aninhada, ex.: negrito + itálico): negrito, itálico, sublinhado,
-    tachado, marca-texto, sobrescrito, subscrito e cor; listas (com subníveis), citação, tabela,
-    alinhamento e linha horizontal.
+    Reproduz (inclusive combinado, ex.: negrito + itálico): negrito, itálico, sublinhado, tachado, marca-texto
+    (cor mais próxima das que o Word aceita), sobrescrito, subscrito, cor, fonte e tamanho; equações (nativas do
+    Word, editáveis); listas com subníveis, citação, títulos, tabela (com células mescladas), alinhamento,
+    espaçamento entre linhas, recuos e linha horizontal.
 
     Segurança: imagens só entram se vierem embutidas no próprio texto (data:image/...), lidas em
     memória — nada é gravado em disco e nenhum caminho/URL do HTML é aberto.
@@ -70,6 +111,28 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
         m = re.search(r'text-align\s*:\s*(left|right|center|justify)', style)
         return m.group(1) if m else None
 
+    def formatar_paragrafo(p, tag, alinhamento_padrao=None):
+        """Alinhamento, espaçamento entre linhas e recuos vindos do editor."""
+        set_alignment(p, parse_style(tag.get("style", "")) or alinhamento_padrao)
+        altura = _estilo(tag, "line-height")
+        if altura:
+            try:
+                valor = float(altura.rstrip("%")) / (100 if altura.endswith("%") else 1)
+                if 0.8 <= valor <= 4:
+                    p.paragraph_format.line_spacing = valor
+            except ValueError:
+                pass
+        recuo = _estilo(tag, "margin-left") or _estilo(tag, "padding-left")
+        if recuo:
+            pts = _tamanho_pt(recuo)
+            if pts:
+                p.paragraph_format.left_indent = Pt(min(pts, 200))
+        primeira = _estilo(tag, "text-indent")
+        if primeira:
+            pts = _tamanho_pt(primeira)
+            if pts:
+                p.paragraph_format.first_line_indent = Pt(min(pts, 100))
+
     def add_img_to_docx(paragraph, tagimg):
         src = (tagimg.get("src") or "").strip()
         match = re.match(r'data:image/(png|jpeg|jpg|gif|bmp);base64,(.*)', src, re.S)
@@ -83,14 +146,34 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
                 largura_px = image.width
                 dpi = (image.info.get("dpi") or (96, 96))[0] or 96
             largura = Inches(largura_px / float(dpi))
+            # largura escolhida no editor (style="width: 50%") = fração da largura útil
+            pct = _estilo(tagimg, "width")
+            m = re.fullmatch(r"([\d.]+)\s*%", pct or "")
+            if m and 5 <= float(m.group(1)) <= 100:
+                largura = int(_LARGURA_MAX_IMAGEM * float(m.group(1)) / 100)
             run = paragraph.add_run()
             run.add_picture(io.BytesIO(img_data), width=min(largura, _LARGURA_MAX_IMAGEM))
         except (binascii.Error, ValueError, OSError) as exc:
             logger.warning("Imagem inválida ignorada no texto: %s", exc)
 
+    def add_equacao(paragraph, tag, bloco=False):
+        latex = tag.get("data-latex") or ""
+        try:
+            paragraph._p.append(equacoes.latex_para_omml(latex, bloco=bloco, tamanho_pt=tamanho.pt))
+        except equacoes.EquacaoInvalida as exc:
+            # a checagem antes de exportar já bloqueia; aqui só não deixa a equação sumir em silêncio
+            logger.warning("Equação não convertida (%s): %s", exc, latex[:80])
+            run = paragraph.add_run(latex)
+            run.italic = True
+            run.font.name = fonte
+            run.font.size = tamanho
+
+    def eh_equacao(tag):
+        return getattr(tag, "name", None) in ("span", "div") and tag.get("data-type") in ("inline-math", "block-math", "math")
+
     def aplicar(run, fmt):
-        run.font.name = fonte
-        run.font.size = tamanho
+        run.font.name = fmt.get("fonte") or fonte
+        run.font.size = Pt(fmt["tamanho"]) if fmt.get("tamanho") else tamanho
         if fmt.get("b"):
             run.bold = True
         if fmt.get("i"):
@@ -104,7 +187,7 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
         if fmt.get("sub"):
             run.font.subscript = True
         if fmt.get("mark"):
-            run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+            run.font.highlight_color = fmt["mark"]
         if fmt.get("cor") is not None:
             run.font.color.rgb = fmt["cor"]
         if fmt.get("link"):
@@ -114,7 +197,7 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
     def formato_de(tag, fmt):
         novo = dict(fmt)
         nome = tag.name
-        if nome in ("strong", "b"):
+        if nome in ("strong", "b", "th"):
             novo["b"] = True
         elif nome in ("em", "i"):
             novo["i"] = True
@@ -127,17 +210,23 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
         elif nome == "sub":
             novo["sub"] = True
         elif nome == "mark":
-            novo["mark"] = True
+            novo["mark"] = _marca_texto_mais_proxima(tag.get("data-color") or _estilo(tag, "background-color"))
         elif nome == "a":
             novo["link"] = True
-        elif nome in ("th",):
-            novo["b"] = True
-        estilo = tag.get("style", "") or ""
-        m = re.search(r'(?:^|;)\s*color\s*:\s*([^;]+)', estilo)
-        if m:
-            cor = _cor(m.group(1))
-            if cor is not None:
-                novo["cor"] = cor
+        cor = _estilo(tag, "color")
+        if cor and _cor(cor) is not None:
+            novo["cor"] = _cor(cor)
+        fundo = _estilo(tag, "background-color")
+        if fundo and nome != "mark" and nome not in ("td", "th"):
+            novo["mark"] = _marca_texto_mais_proxima(fundo)
+        familia = _estilo(tag, "font-family")
+        if familia:
+            nome_fonte = familia.split(",")[0].strip().strip("'\"")
+            if nome_fonte and len(nome_fonte) <= 60:
+                novo["fonte"] = nome_fonte
+        tam = _estilo(tag, "font-size")
+        if tam and _tamanho_pt(tam):
+            novo["tamanho"] = _tamanho_pt(tam)
         return novo
 
     def process_children(parent, paragraph, fmt=None):
@@ -150,6 +239,8 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
                 texto = str(child)
                 if texto:
                     aplicar(paragraph.add_run(texto), fmt)
+            elif eh_equacao(child):
+                add_equacao(paragraph, child, bloco=False)
             elif child.name == "br":
                 paragraph.add_run().add_break()
             elif child.name == "img":
@@ -181,7 +272,7 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
         estilo = "List Bullet" if tag.name == "ul" else "List Number"
         for li in tag.find_all("li", recursive=False):
             p = paragrafo_lista(estilo, min(nivel, 2))
-            set_alignment(p, parse_style(li.get("style", "")) or "left")
+            formatar_paragrafo(p, li, "left")
             process_children(li, p)
             for sub in li.find_all(["ul", "ol"], recursive=False):
                 render_lista(sub, nivel + 1)
@@ -191,36 +282,60 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
                     render_lista(sub, nivel + 1)
 
     def render_tabela(tag):
-        rows = tag.find_all("tr")
-        if not rows:
+        """Tabela com bordas; células mescladas (colspan/rowspan) viram células mescladas no Word."""
+        linhas = tag.find_all("tr")
+        if not linhas:
             return
-        ncols = max((len(r.find_all(["td", "th"], recursive=False)) for r in rows), default=0)
+        ocupadas = set()
+        posicoes = []  # (linha, coluna, colspan, rowspan, célula)
+        ncols = 0
+        for i, tr in enumerate(linhas):
+            j = 0
+            for cel in tr.find_all(["td", "th"], recursive=False):
+                while (i, j) in ocupadas:
+                    j += 1
+                try:
+                    cs = max(1, min(int(cel.get("colspan") or 1), 50))
+                    rs = max(1, min(int(cel.get("rowspan") or 1), 200))
+                except ValueError:
+                    cs = rs = 1
+                rs = min(rs, len(linhas) - i)
+                posicoes.append((i, j, cs, rs, cel))
+                for di in range(rs):
+                    for dj in range(cs):
+                        ocupadas.add((i + di, j + dj))
+                j += cs
+                ncols = max(ncols, j)
         if not ncols:
             return
-        table = doc.add_table(rows=len(rows), cols=ncols)
+        table = doc.add_table(rows=len(linhas), cols=ncols)
         try:
             table.style = "Table Grid"  # bordas visíveis na prova
         except (KeyError, ValueError):
             pass
-        for i, row in enumerate(rows):
-            for j, cell in enumerate(row.find_all(["td", "th"], recursive=False)):
-                cell_par = table.cell(i, j).paragraphs[0]
-                set_alignment(cell_par, parse_style(cell.get("style", "")) or "left")
-                process_children(cell, cell_par, formato_de(cell, {}))
+        for i, j, cs, rs, cel in posicoes:
+            alvo = table.cell(i, j)
+            if cs > 1 or rs > 1:
+                alvo = alvo.merge(table.cell(i + rs - 1, j + cs - 1))
+            cell_par = alvo.paragraphs[0]
+            set_alignment(cell_par, parse_style(cel.get("style", "")) or "left")
+            process_children(cel, cell_par, formato_de(cel, {}))
 
     # Blocos principais
     for tag in soup.children:
         if isinstance(tag, Comment):
             continue
-        if tag.name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
+        if eh_equacao(tag):
             p = doc.add_paragraph()
-            set_alignment(p, parse_style(tag.get("style", "")) or "center")
-            process_children(tag, p, {"b": True})
-            for run in p.runs:
-                run.font.size = Pt(18 - (int(tag.name[1]) - 1) * 2)
+            set_alignment(p, "center" if tag.get("data-type") == "block-math" else None)
+            add_equacao(p, tag, bloco=tag.get("data-type") == "block-math")
+        elif tag.name in ["h1", "h2", "h3", "h4", "h5", "h6"]:
+            p = doc.add_paragraph()
+            formatar_paragrafo(p, tag, "center")
+            process_children(tag, p, {"b": True, "tamanho": 18 - (int(tag.name[1]) - 1) * 2})
         elif tag.name in ["p", "div"]:
             p = doc.add_paragraph()
-            set_alignment(p, parse_style(tag.get("style", "")))
+            formatar_paragrafo(p, tag)
             process_children(tag, p)
         elif tag.name in ("ul", "ol"):
             render_lista(tag)
@@ -231,7 +346,7 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
             add_img_to_docx(p, tag)
         elif tag.name == "blockquote":
             p = doc.add_paragraph()
-            set_alignment(p, None)
+            formatar_paragrafo(p, tag)
             process_children(tag, p)
             p.paragraph_format.left_indent = Pt(24)
         elif tag.name == "hr":
@@ -251,7 +366,7 @@ def html_to_docx(doc, html, fonte="Arial", tamanho=12, default_alignment=WD_ALIG
                 p = doc.add_paragraph()
                 set_alignment(p, None)
                 aplicar(p.add_run(str(tag)), {})
-        elif tag.name in ("strong", "b", "em", "i", "u", "s", "strike", "del", "sup", "sub", "mark", "span", "a"):
+        elif tag.name in _INLINE_FORMATO:
             # Trecho formatado solto fora de parágrafo
             p = doc.add_paragraph()
             set_alignment(p, None)

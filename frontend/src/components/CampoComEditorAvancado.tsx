@@ -31,11 +31,13 @@ function VisualizacaoComMath({ value }: { value: string }) {
   const contentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (contentRef.current) {
-      const mathSpans = contentRef.current.querySelectorAll('span[data-type="math"]');
-      mathSpans.forEach((el) => {
+      // equações do editor: formato atual (inline-math / block-math) e o antigo (math)
+      const equacoes = contentRef.current.querySelectorAll('[data-type="math"], [data-type="inline-math"], [data-type="block-math"]');
+      equacoes.forEach((el) => {
         const latex = el.getAttribute("data-latex") || "";
+        const bloco = el.getAttribute("data-type") === "block-math";
         try {
-          el.innerHTML = katex.renderToString(latex, { throwOnError: false, displayMode: false });
+          el.innerHTML = katex.renderToString(latex, { throwOnError: false, displayMode: bloco });
           el.classList.add("math-tiptap");
         } catch {
           el.textContent = latex;

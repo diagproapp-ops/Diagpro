@@ -214,6 +214,7 @@ SCHEMAS = {
     }),
     "melhorar_texto": _obj({"texto": _STR, "mudancas": _LISTA_STR}),
     "chat": _obj({"resposta": _STR}),
+    "equacao": _obj({"latex": _STR, "explicacao": _STR}),
     "teste": _obj({"ok": {"type": "boolean"}}),
 }
 
@@ -306,6 +307,16 @@ def montar_pedido(recurso: str, entrada: dict) -> tuple[str, int]:
                   + _material(material_em_edicao=texto_puro(e.get("contexto"), 8000),
                               pergunta=texto_puro(e.get("mensagem"), 2000)))
         return pedido, 3000
+    if recurso == "equacao":
+        pedido = ("Escreva em LaTeX a equação descrita pelo professor, para ser impressa numa prova. Regras do LaTeX: "
+                  "sem delimitadores ($, \\[ \\]); só comandos padrão do amsmath (frações, raízes, potências, índices, "
+                  "\\sum, \\int, \\lim, matrizes pmatrix/bmatrix/vmatrix, cases, aligned, \\vec, \\overline, letras "
+                  "gregas, \\text{...} para palavras); NÃO use \\boxed, \\cancel, \\ce, \\color nem pacotes extras; "
+                  "fórmulas químicas com \\mathrm{H_2O}. Se houver uma equação atual, altere-a conforme o pedido. "
+                  "Em 'explicacao', diga em uma frase curta o que a equação representa.\n"
+                  + _material(pedido_do_professor=texto_puro(e.get("descricao"), 1000),
+                              equacao_atual=(e.get("latex_atual") or "")[:4000]))
+        return pedido, 1500
     if recurso == "teste":
         return 'Teste de conexão. Responda {"ok": true}.', 200
     raise HTTPException(status_code=404, detail="Recurso de IA desconhecido.")

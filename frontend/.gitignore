@@ -21,3 +21,6 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# fontes do editor de equações (copiadas de node_modules/mathlive por scripts/copiar-fontes-mathlive.js)
+/public/mathlive/

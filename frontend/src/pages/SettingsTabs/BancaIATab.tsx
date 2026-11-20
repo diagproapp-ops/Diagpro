@@ -20,6 +20,7 @@ export const NOMES_RECURSOS: Record<string, string> = {
   justificativa: 'Escrever justificativa do gabarito',
   melhorar_texto: 'Melhorar texto (português, clareza, linguagem formal)',
   chat: 'Chat de apoio no editor',
+  equacao: 'Criar equação a partir de uma descrição',
 };
 
 // IA da BANCA: liga/desliga, recursos, orientações de estilo e uso dos últimos 30 dias.

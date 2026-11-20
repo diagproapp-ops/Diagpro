@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app import assistente_ia, configuracoes
+from backend.app import assistente_ia, configuracoes, equacoes
 from backend.app.auth import get_current_user
 from backend.app.db_models import UsoIA, User
 from backend.app.rate_limit import rate_limit
@@ -67,6 +67,11 @@ class MelhorarTextoIn(BaseModel):
     modo: Literal["revisar_portugues", "clareza", "simplificar", "formalizar"] = "revisar_portugues"
 
 
+class EquacaoIn(BaseModel):
+    descricao: str = Field(..., min_length=1, max_length=1000)
+    latex_atual: str = Field("", max_length=4000)
+
+
 class ChatIn(BaseModel):
     mensagem: str = Field(..., min_length=1, max_length=2000)
     contexto: str = Field("", max_length=60000)
@@ -117,6 +122,14 @@ async def justificar(dados: QuestaoIA, db: AsyncSession = Depends(get_tenant_db)
 @router.post("/texto/melhorar", dependencies=[_LIMITE_MINUTO])
 async def melhorar_texto(dados: MelhorarTextoIn, db: AsyncSession = Depends(get_tenant_db), current_user=Depends(_QUEM_USA)):
     return await assistente_ia.executar(db, current_user, "melhorar_texto", dados.model_dump())
+
+
+@router.post("/equacao", dependencies=[_LIMITE_MINUTO])
+async def criar_equacao(dados: EquacaoIn, db: AsyncSession = Depends(get_tenant_db), current_user=Depends(_QUEM_USA)):
+    """Equação a partir de uma descrição. O LaTeX devolvido já vem conferido pela mesma conversão da prova."""
+    resposta = await assistente_ia.executar(db, current_user, "equacao", dados.model_dump())
+    latex = str(resposta.get("latex") or "").strip()
+    return {"latex": latex, "explicacao": str(resposta.get("explicacao") or ""), "erro": equacoes.validar(latex)}
 
 
 @router.post("/chat", dependencies=[_LIMITE_MINUTO])

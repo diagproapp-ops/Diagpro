@@ -14,7 +14,7 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app import configuracoes
+from backend.app import configuracoes, equacoes
 from backend.app.dados_prova import LINHAS_PADRAO_SUBJETIVA, completar_questoes
 from backend.app.db_models import DisciplinaDaProva, QuestoesBanco
 
@@ -22,7 +22,26 @@ _TAGS = re.compile(r"<[^>]+>")
 
 
 def _texto(html) -> str:
-    return _TAGS.sub("", str(html or "")).replace("&nbsp;", " ").strip()
+    """Texto visível; uma equação conta como conteúdo (o texto dela fica no atributo data-latex)."""
+    texto = _TAGS.sub("", str(html or "")).replace("&nbsp;", " ").strip()
+    if not texto and any(lx.strip() for lx in equacoes.equacoes_no_html(html)):
+        return "[equação]"
+    return texto
+
+
+def _equacoes_com_problema(q: dict) -> list[str]:
+    """Onde há equação que não pode ser impressa (sem expor o conteúdo da equação)."""
+    locais = []
+    def checar(html, onde):
+        for k, lx in enumerate(equacoes.equacoes_no_html(html), start=1):
+            if equacoes.validar(lx):
+                locais.append(f"{onde} (equação {k})")
+    checar(q.get("enunciado"), "enunciado")
+    for i, o in enumerate(q.get("opcoes") or []):
+        checar(o.get("texto_opcao"), f"alternativa {chr(ord('A') + i)}")
+    for i, it in enumerate(q.get("itens_vf") or [], start=1):
+        checar(it.get("afirmacao"), f"item {i}")
+    return locais
 
 
 async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) -> dict:
@@ -54,6 +73,8 @@ async def verificar_prova(db: AsyncSession, cargo, prova_montada, blocos: list) 
         vistos.add(id_q)
 
         tipo = str(getattr(atual, "tipo", None) or q.get("tipo") or "MULTIPLA_ESCOLHA").upper()
+        for local in _equacoes_com_problema(q):
+            add(bloqueios, f"Equação que não pode ser impressa no {local}: abra a questão no editor para corrigir.")
         if not _texto(q.get("enunciado")) and not q.get("caminho_imagem_relativo"):
             add(bloqueios, "Enunciado vazio.")
 

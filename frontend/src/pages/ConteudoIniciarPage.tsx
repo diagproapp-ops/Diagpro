@@ -9,10 +9,12 @@ import {
   LinearProgress,
   Chip,
   Stack,
+  Alert,
 } from '@mui/material';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api';
 import Layout from '../components/Layout';
+import { ChipStatusRevisao, PODE_ENVIAR_REVISAO } from '../components/statusRevisao';
 import { useAuth } from '../contexts/AuthContext';
 
 interface ConteudoType {
@@ -54,6 +56,23 @@ const ConteudoIniciarPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const podeRevisar = PERFIS_REVISAO.includes(String(user?.role || ''));
+  const podeEnviarRevisao = ['professor', 'administrador', 'administrador geral'].includes(String(user?.role || ''));
+  const [enviando, setEnviando] = useState<string | null>(null);
+  const [avisoEnvio, setAvisoEnvio] = useState<string | null>(null);
+
+  const enviarParaRevisao = async (id: string) => {
+    setEnviando(id);
+    setAvisoEnvio(null);
+    try {
+      await api.post(`/revisao/questoes/${id}/enviar`);
+      setQuestoes(qs => qs.map(q => (q.id_questao === id ? { ...q, status_revisao: 'ENVIADA' } : q)));
+      setAvisoEnvio('Questão enviada para revisão. O revisor foi avisado.');
+    } catch (e: any) {
+      setAvisoEnvio(typeof e?.response?.data?.detail === 'string' ? e.response.data.detail : 'Não foi possível enviar para revisão.');
+    } finally {
+      setEnviando(null);
+    }
+  };
   const [conteudo, setConteudo] = useState<ConteudoType | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [textosReferencia, setTextosReferencia] = useState<TextoReferenciaType[]>([]);
@@ -183,6 +202,7 @@ const ConteudoIniciarPage: React.FC = () => {
         <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
           Questões deste Conteúdo:
         </Typography>
+        {avisoEnvio && <Alert severity="info" sx={{ mb: 1.5 }} onClose={() => setAvisoEnvio(null)}>{avisoEnvio}</Alert>}
         {questoes.length === 0 ? (
           <Typography variant="body2" color="text.secondary">Nenhuma questão cadastrada.</Typography>
         ) : (
@@ -195,13 +215,18 @@ const ConteudoIniciarPage: React.FC = () => {
                       {q.codigo_curto_questao || 'Questão'}
                     </Typography>
                     {q.tipo && <Chip size="small" label={q.tipo} />}
-                    {q.status_revisao && <Chip size="small" color="info" variant="outlined" label={q.status_revisao} />}
+                    <ChipStatusRevisao status={q.status_revisao} />
                   </Stack>
                   <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     {resumoTexto(q.enunciado) || 'Sem enunciado.'}
                   </Typography>
                 </Box>
                 <Stack direction="row" spacing={1}>
+                  {podeEnviarRevisao && PODE_ENVIAR_REVISAO.includes(String(q.status_revisao || '').toUpperCase()) && (
+                    <Button size="small" variant="contained" disabled={enviando === q.id_questao} onClick={() => enviarParaRevisao(q.id_questao)}>
+                      {enviando === q.id_questao ? 'Enviando...' : 'Enviar para revisão'}
+                    </Button>
+                  )}
                   <Button size="small" variant="outlined" onClick={() => navigate(`${base}/questao/${q.id_questao}/editar`)}>
                     Editar
                   </Button>

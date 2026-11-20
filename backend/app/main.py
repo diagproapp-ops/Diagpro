@@ -18,6 +18,7 @@ from sqlalchemy import text
 from backend.app.database import SessionLocal
 from backend.app.routes.ia import router as ia_router
 from backend.app.routes.notificacoes import router as notificacoes_router
+from backend.app.routes.revisao import router as revisao_router
 from backend.app import notificacoes as _notificacoes
 from backend.app.routes.plagio import router as plagio_router
 from backend.app.routes.biblioteca import router as biblioteca_router
@@ -84,6 +85,7 @@ app.include_router(textos_referencia.router)
 app.include_router(questoes_router)
 app.include_router(ia_router)
 app.include_router(notificacoes_router)
+app.include_router(revisao_router)
 
 
 @app.on_event("startup")

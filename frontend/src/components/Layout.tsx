@@ -33,6 +33,7 @@ import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SearchIcon from '@mui/icons-material/Search';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import SinoNotificacoes from './SinoNotificacoes';
+import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
 import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
 import { useAuth } from '../contexts/AuthContext';
@@ -180,6 +181,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     user?.role === 'admin';
 
   const isProfessor = user?.role === 'professor';
+  const podeVerFilaRevisao = ['revisor', 'administrador', 'administrador geral'].includes(String(user?.role || ''));
 
   const displayName = user?.full_name || user?.username || 'Usuário';
   const roleLabel = (user?.role || 'usuário').toUpperCase();
@@ -202,6 +204,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           { label: 'Gabaritos & Variações', sub: eventoCabecalho?.nome_evento || 'Evento ativo', path: `/eventos/${eventId}/recursos` },
           { label: 'Templates de Prova', sub: eventoCabecalho?.nome_evento || 'Evento ativo', path: `/eventos/${eventId}/templates` },
         ]
+      : []),
+    ...(podeVerFilaRevisao
+      ? [{ label: 'Fila de revisão', sub: 'Questões aguardando revisão', path: '/revisao' }]
       : []),
     ...(isAdmin
       ? [{ label: 'Configurações & Governança', sub: 'Usuários, banca, frases, clientes e temas', path: '/settings' }]
@@ -457,6 +462,17 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 >
                   <ListItemIcon><SubjectIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="Meus Conteúdos" />
+                </ListItemButton>
+              </ListItem>
+            )}
+            {podeVerFilaRevisao && (
+              <ListItem disablePadding>
+                <ListItemButton
+                  onClick={() => navigate('/revisao')}
+                  sx={navItemSx(location.pathname.startsWith('/revisao'))}
+                >
+                  <ListItemIcon><FactCheckOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Fila de revisão" />
                 </ListItemButton>
               </ListItem>
             )}

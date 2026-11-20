@@ -191,6 +191,7 @@ DiagPro/
 │   │   ├── assistente_ia.py      # IA: provedores (Anthropic/OpenAI), pedidos, formatos de resposta, limites e registro de uso
 │   │   ├── notificacoes.py       # Avisos (sino + e-mail): preferências, fila SMTP com novas tentativas
 │   │   ├── sessoes.py            # Acessos: abrir/validar/encerrar, alerta de aparelho novo
+│   │   ├── fluxo_revisao.py      # Estados da revisão, envio, decisão, reabertura e avisos
 │   │   ├── politica_senha.py     # Política de senha (valores vindos das configurações)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
 │   │   ├── rls_policies.sql      # Políticas RLS (20 tabelas, sem bypass)
@@ -378,6 +379,12 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 - Trocar a senha encerra os outros acessos; reset do 2FA encerra todos.
 - Login de navegador/sistema/rede (/24) não usados nos últimos 90 dias gera aviso de segurança (sino + e-mail obrigatório).
 
+**Fluxo de revisão** (`fluxo_revisao.py`, `routes/revisao.py`)
+- Estados: Em elaboração → Aguardando revisão → Aprovada, ou Devolvida com ajustes / Reprovada → (corrige e reenvia).
+- O professor envia pela lista de questões do conteúdo (só quem elaborou ou o professor do conteúdo); revisores da banca (ou, sem revisor, os administradores) recebem aviso. A Fila de revisão no menu mostra cada estado com evento, conteúdo, autor e recado.
+- A decisão do revisor avisa quem elaborou; a tela de edição mostra a observação. O nome do revisor no histórico vem do login, não do formulário.
+- Questão aprovada que é alterada volta para "Em elaboração" e precisa de nova revisão (com "revisão obrigatória" ligada, isso bloqueia a exportação até reaprovar).
+
 **Autenticação e HTTP**
 - Política de senha (`politica_senha.py`): mínimo de 12 caracteres e 3 de 4 tipos, sem usuário/e-mail, sem senha comum ou sequência, sem repetir as 5 últimas (histórico bcrypt cifrado), validade de 180 dias. Senha definida por administrador é provisória. Troca obrigatória (provisória, vencida ou fora da política) acontece depois do 2FA e antes do acesso. Trocar a própria senha exige a senha atual e um código do autenticador.
 - Sessão: token de 30 min renovado pela tela só enquanto há uso (`/auth/renovar`); 30 min sem uso encerram; limite absoluto de 12 h desde o login (`auth_time`). 401 em qualquer tela leva ao login com aviso.
@@ -484,7 +491,7 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` , `tests/test_notificacoes.py` e `tests/test_sessoes.py`, 36 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` , `tests/test_notificacoes.py`, `tests/test_sessoes.py` e `tests/test_revisao.py`, 37 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
@@ -500,6 +507,7 @@ Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagp
 | Assistente de IA | `test_ai_assistant_rules_secrecy_and_limits`, `test_ai_text_is_stripped_of_html_and_images` (provedor falso; nunca chama IA real) |
 | Avisos e e-mail | `test_notifications_queue_preferences_and_isolation` (SMTP falso; nunca envia e-mail real) |
 | Acessos | `test_sessions_logout_remote_signout_and_new_device_alert`, `test_browser_summary` |
+| Fluxo de revisão | `test_review_workflow_send_queue_return_approve_reopen` |
 | HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
 
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.

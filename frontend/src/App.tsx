@@ -29,6 +29,7 @@ import GabaritoPage from './pages/GabaritoPage';
 import TemplatesPage from './pages/TemplatesPage';
 import PublicRegisterPage from './pages/PublicRegisterPage';
 import MinhaContaPage from './pages/MinhaContaPage';
+import FilaRevisaoPage from './pages/FilaRevisaoPage';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
@@ -74,6 +75,7 @@ function App() {
                     <Route path="/eventos/:eventId" element={<EventoDetalhesPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/minha-conta" element={<MinhaContaPage />} />
+                    <Route path="/revisao" element={<FilaRevisaoPage />} />
                     <Route path="/eventos/:eventId/cargo" element={<CargoManagerPage />} />
                     <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
                     <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />

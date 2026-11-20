@@ -13,6 +13,8 @@ from backend.app import secure_files
 from backend.app.db_models import QuestoesBanco, OpcoesQuestao, ItensVerdadeiroFalso, DetalhesQuestaoDiscursiva, Conteudo
 from backend.app.models import QuestaoOut, OpcaoQuestao, ItemVerdadeiroFalso, DetalhesQuestaoDiscursiva as DetalhesQuestaoDiscursivaModel
 from backend.app import configuracoes
+from backend.app import fluxo_revisao
+from backend.app.auth import get_current_user
 from backend.app.security import get_tenant_db, require_roles
 from backend.app.roles import UserRole
 from backend.app.utils_crypto import encrypt_text, decrypt_text
@@ -74,7 +76,8 @@ async def criar_questao(
     alternativa_imagem_E: UploadFile = File(None),
     autor_elaborador: str = Form(None),
     db: AsyncSession = Depends(get_tenant_db),
-    evento=Depends(evento_autorizado)
+    evento=Depends(evento_autorizado),
+    current_user=Depends(get_current_user),
 ):
     tenant_id = evento.tenant_id
     # tipos de questão que a banca usa (Configurações > Regras das questões)
@@ -124,6 +127,8 @@ async def criar_questao(
         resposta_correta=encrypt_text(resposta_correta) if resposta_correta else None,
         pontuacao=pontuacao,
         autor_elaborador=autor_elaborador,
+        criador_id=str(current_user.id),  # quem elaborou (avisos da revisão vão para essa pessoa)
+        status_revisao=fluxo_revisao.RASCUNHO,
         nivel_dificuldade=nivel_dificuldade,
         tags_keywords=",".join(tags_list),
         anulada=anulada,
@@ -298,6 +303,7 @@ async def criar_questao(
         tenant_id=nova_questao.tenant_id,
         data_criacao=nova_questao.data_criacao,
         data_modificacao=nova_questao.data_modificacao,
+        status_revisao=nova_questao.status_revisao,
         observacao_revisor=getattr(nova_questao, "observacao_revisor", None),
         autor_elaborador=nova_questao.autor_elaborador,
     )
@@ -651,6 +657,7 @@ async def editar_questao(
     questao.metadados_questao = json.dumps(metadados_dict) if metadados_dict else None
     questao.caminho_imagem_relativo = caminho_imagem_relativo
     questao.data_modificacao = datetime.now()
+    fluxo_revisao.reabrir_se_aprovada(db, questao, current_user.username)
 
     # --------- ALTERNATIVAS COM IMAGEM -----------
     alt_anteriores = {}
@@ -813,10 +820,13 @@ async def revisar_questao(
     tenant_id = evento.tenant_id
     from backend.app.utils_crypto import encrypt_text
 
+    status_revisao = (status_revisao or "").upper()
+    if status_revisao not in fluxo_revisao.DECISOES_DO_REVISOR:
+        raise HTTPException(status_code=400, detail="Escolha Aprovada, Reprovada ou Solicitar ajustes.")
     revisao = HistoricoRevisaoQuestao(
         id=str(uuid4()),
         id_questao_fk=id_questao,
-        usuario_revisor=usuario_revisor,
+        usuario_revisor=current_user.username,  # nunca o nome enviado pela tela
         data_revisao=datetime.now(),
         status_revisao=status_revisao,
         observacao_revisor=observacao_revisor,
@@ -985,6 +995,7 @@ async def revisar_questao(
         db.add(novo_detalhe)
 
     await db.commit()
+    await fluxo_revisao.decisao_do_revisor(db, questao, status_revisao, current_user.username)
     return {"ok": True}
 
 

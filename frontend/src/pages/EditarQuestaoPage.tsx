@@ -22,6 +22,8 @@ import {
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api";
 import Layout from "../components/Layout";
+import { ChipStatusRevisao } from "../components/statusRevisao";
+import { htmlParaTexto } from "../components/ia/iaComum";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
 import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
@@ -186,8 +188,6 @@ export default function EditarQuestaoPage() {
         const { data } = await api.get<QuestaoFromApi>(
           `/eventos/${eventId}/conteudos/${id_conteudo}/questoes/${id_questao}`
         );
-        console.log("API data:", data);
-        console.log("caminho_imagem_relativo:", data.caminho_imagem_relativo);
         setForm(prev => ({
           ...prev,
           ...data,
@@ -414,9 +414,22 @@ export default function EditarQuestaoPage() {
             </Button>
           </Box>
         </Box>
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ mt: 1, mb: 1 }}>
+        <Typography variant="subtitle1" fontWeight="bold" sx={{ mt: 1, mb: 1, display: "flex", alignItems: "center", gap: 1.5 }}>
           Código da Questão: {form.codigo_curto_questao || ""}
+          <ChipStatusRevisao status={(form as any).status_revisao} />
         </Typography>
+        {["AJUSTES", "REPROVADA"].includes(String((form as any).status_revisao || "")) && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <strong>{(form as any).status_revisao === "AJUSTES" ? "A revisão pediu ajustes." : "A revisão reprovou esta questão."}</strong>
+            {(form as any).observacao_revisor ? <> Observação do revisor: {htmlParaTexto((form as any).observacao_revisor)}</> : null}
+            {" "}Corrija e use "Enviar para revisão" na lista de questões do conteúdo.
+          </Alert>
+        )}
+        {String((form as any).status_revisao || "") === "APROVADA" && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Esta questão está aprovada. Se você salvar alterações, ela volta para elaboração e precisa ser revisada de novo.
+          </Alert>
+        )}
         {form.autor_elaborador && (
           <Typography variant="subtitle2" sx={{ color: "text.secondary", mb: 1 }}>
             Autor: {form.autor_elaborador}

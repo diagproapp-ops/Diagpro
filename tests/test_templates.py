@@ -116,3 +116,51 @@ async def test_template_thumbnail_is_rendered_cached_encrypted_and_invalidated(a
         assert not [a for a in pasta.iterdir() if a.name.startswith("ZZTesteMiniatura")]
     finally:
         await async_client.delete(f"{BASE}/{nome}", headers=a1)
+
+
+def _cabecalho_rodape(doc):
+    from core.document_generator import DocxProofGenerator
+    gerador = DocxProofGenerator(prova_montada_obj={"identificador_prova": "PADRÃO"}, evento_obj={"nome_evento": "EVENTO-X"},
+                                 cargo_obj={"codigo_cargo": "C1", "nome_cargo": "Cargo Um"}, format_options={},
+                                 image_storage_base_dir=".", logo_path_override=None)
+    gerador._add_header_footer(doc)
+    secao = doc.sections[0]
+    return secao.header, secao.footer
+
+
+def _texto(parte):
+    return " ".join("".join(parte._element.itertext()).split())
+
+
+def test_export_keeps_template_own_header_and_footer_without_tables():
+    import io as _io
+    from docx.shared import Inches
+    from PIL import Image
+    doc = Document()
+    logo = _io.BytesIO(); Image.new("RGB", (60, 20), "navy").save(logo, format="PNG"); logo.seek(0)
+    doc.sections[0].header.paragraphs[0].add_run().add_picture(logo, width=Inches(1))
+    doc.sections[0].header.add_paragraph("PREFEITURA MUNICIPAL - EDITAL 01")
+    doc.sections[0].footer.paragraphs[0].text = "RODAPE-PROPRIO"
+    cab, rod = _cabecalho_rodape(doc)
+    assert "PREFEITURA MUNICIPAL - EDITAL 01" in _texto(cab) and cab._element.xpath(".//w:drawing"), "conteúdo do template mantido"
+    assert "EVENTO-X" in _texto(cab)
+    assert "RODAPE-PROPRIO" in _texto(rod) and "C1 - Cargo Um - PADRÃO" in _texto(rod) and "Página" in _texto(rod)
+
+
+def test_export_header_unchanged_for_empty_and_table_templates():
+    # cabeçalho vazio: continua virando a tabela evento | logotipo (prova idêntica à de antes)
+    cab, rod = _cabecalho_rodape(Document())
+    assert len(cab.tables) == 1 and cab.tables[0].cell(0, 0).text == "EVENTO-X"
+    assert len(rod.tables) == 1 and rod.tables[0].cell(0, 0).text == "C1 - Cargo Um - PADRÃO"
+    # cabeçalho com tabela (ex.: Timbrado da banca): a tabela do template é preenchida, nada é acrescentado
+    doc = Document()
+    doc.sections[0].header.add_table(rows=1, cols=2, width=Inches_(6))
+    doc.sections[0].footer.add_table(rows=1, cols=2, width=Inches_(6))
+    cab, rod = _cabecalho_rodape(doc)
+    assert len(cab.tables) == 1 and cab.tables[0].cell(0, 0).text == "EVENTO-X"
+    assert len(rod.tables) == 1 and rod.tables[0].cell(0, 0).text == "C1 - Cargo Um - PADRÃO"
+
+
+def Inches_(n):
+    from docx.shared import Inches
+    return Inches(n)

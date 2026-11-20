@@ -876,6 +876,12 @@ class DocxProofGenerator:
                 self._add_paragraph_formatting(cell_logo.paragraphs[0], alignment=WD_ALIGN_PARAGRAPH.RIGHT)
             else:
                 cell_logo.text = ""
+        elif _tem_conteudo_proprio(header):
+            # Papel timbrado com cabeçalho próprio (texto/imagem, sem tabela): mantém o conteúdo do template e
+            # acrescenta o nome do evento numa linha abaixo (o logotipo da banca não é repetido).
+            p_evento = header.add_paragraph()
+            p_evento.add_run(nome_evento)
+            self._add_paragraph_formatting(p_evento, alignment=WD_ALIGN_PARAGRAPH.LEFT, font_size=Pt(11), bold=True)
         else:
             for para in header.paragraphs:
                 para.clear()
@@ -982,8 +988,10 @@ class DocxProofGenerator:
 
             self._add_paragraph_formatting(pf_dir, alignment=WD_ALIGN_PARAGRAPH.RIGHT, font_size=Pt(9))
         else:
-            for para in footer.paragraphs:
-                para.clear()
+            # Rodapé próprio do template (texto/imagem, sem tabela) é mantido; a linha cargo/página vem abaixo dele.
+            if not _tem_conteudo_proprio(footer):
+                for para in footer.paragraphs:
+                    para.clear()
             tablef = footer.add_table(rows=1, cols=2, width=Inches(6.5))
             tablef.allow_autofit = True
             tablef.columns[0].width = Pt(350)
@@ -2520,6 +2528,14 @@ class AnswerKeyGenerator:
             output_data.append(row_dict)
         
         return self._write_csv(filepath, output_data, headers)
+
+
+def _tem_conteudo_proprio(parte) -> bool:
+    """Cabeçalho/rodapé do template com texto ou imagem próprios (fora de tabela)."""
+    el = parte._element
+    if "".join(el.itertext()).strip():
+        return True
+    return bool(el.xpath(".//w:drawing") or el.xpath(".//w:pict"))
 
 
 _CONFIG_TEMA_CLARO = (

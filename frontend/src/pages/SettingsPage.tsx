@@ -25,7 +25,9 @@ import AuditTab from './SettingsTabs/AuditTab';
 import AdminClientsTab from './AdminClientsTab';
 import PlataformaSegurancaTab from './SettingsTabs/PlataformaSegurancaTab';
 import BancaConfigTab from './SettingsTabs/BancaConfigTab';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import PlataformaIATab from './SettingsTabs/PlataformaIATab';
+import BancaTemplatesTab from './SettingsTabs/BancaTemplatesTab';
 import PlataformaEmailTab from './SettingsTabs/PlataformaEmailTab';
 import PlataformaSaudeTab from './SettingsTabs/PlataformaSaudeTab';
 import { BancaLgpdTab, PlataformaLgpdTab } from './SettingsTabs/LgpdTabs';
@@ -56,6 +58,7 @@ type SectionKey =
   | 'banca_identidade'
   | 'banca_regras'
   | 'banca_ia'
+  | 'banca_templates'
   | 'plataforma_ia'
   | 'plataforma_email'
   | 'plataforma_saude'
@@ -66,7 +69,11 @@ function SettingsPage() {
   const { user } = useAuth();
   const isAdminGeral = user?.role === 'administrador geral';
 
-  const [section, setSection] = useState<SectionKey>('overview');
+  // ?secao=banca_templates abre direto uma seção (ex.: link vindo da tela do evento)
+  const [section, setSection] = useState<SectionKey>(() => {
+    const pedida = new URLSearchParams(window.location.search).get('secao');
+    return (pedida === 'banca_templates' ? pedida : 'overview') as SectionKey;
+  });
   const [counts, setCounts] = useState({
     users: 0,
     phrases: 0,
@@ -197,6 +204,14 @@ function SettingsPage() {
       title: 'Regras das questões',
       desc: 'Tipos de questão usados pela banca e revisão obrigatória para exportar.',
       icon: <RuleOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
+    {
+      key: 'banca_templates' as SectionKey,
+      group: 'BANCA',
+      title: 'Templates de prova',
+      desc: 'Biblioteca de papel timbrado da banca; cada evento escolhe o seu padrão.',
+      icon: <DescriptionOutlinedIcon fontSize="small" />,
       badge: 'Novo',
     },
     {
@@ -359,6 +374,10 @@ function SettingsPage() {
             <ListItemButton selected={section === 'banca_regras'} onClick={() => setSection('banca_regras')} sx={subNavSx(section === 'banca_regras')}>
               <ListItemIcon><RuleOutlinedIcon fontSize="small" /></ListItemIcon>
               <ListItemText primary="Regras das questões" />
+            </ListItemButton>
+            <ListItemButton selected={section === 'banca_templates'} onClick={() => setSection('banca_templates')} sx={subNavSx(section === 'banca_templates')}>
+              <ListItemIcon><DescriptionOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Templates de prova" />
             </ListItemButton>
             <ListItemButton selected={section === 'banca_ia'} onClick={() => setSection('banca_ia')} sx={subNavSx(section === 'banca_ia')}>
               <ListItemIcon><AutoAwesomeOutlinedIcon fontSize="small" /></ListItemIcon>
@@ -545,6 +564,7 @@ function SettingsPage() {
               {section === 'banca_regras' && <BancaConfigTab key="reg" secao="regras" />}
               {section === 'plataforma_seguranca' && isAdminGeral && <PlataformaSegurancaTab />}
               {section === 'banca_ia' && <BancaIATab />}
+              {section === 'banca_templates' && <BancaTemplatesTab />}
               {section === 'plataforma_ia' && isAdminGeral && <PlataformaIATab />}
               {section === 'plataforma_email' && isAdminGeral && <PlataformaEmailTab />}
               {section === 'plataforma_saude' && isAdminGeral && <PlataformaSaudeTab />}

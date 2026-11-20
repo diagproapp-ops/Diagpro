@@ -57,7 +57,7 @@ async def test_template_cards_show_when_who_and_size_and_files_stay_encrypted(as
         assert not any(n.endswith(".meta") for n in nomes), "o arquivo de informações não pode aparecer como template"
         assert item["tamanho"] == len(arquivo) and item["enviado_em"] and item["enviado_por"]
         # tudo cifrado no disco: nem o conteúdo nem as informações aparecem em claro
-        pasta = secure_files.TEMPLATES_ROOT / EV
+        pasta = secure_files.TEMPLATES_ROOT / secure_files.dono_banca(1)
         for arq in pasta.iterdir():
             bruto = arq.read_bytes()
             assert b"CABECALHO-TIMBRADO" not in bruto and b"enviado_por_id" not in bruto and b"word/document.xml" not in bruto
@@ -103,7 +103,7 @@ async def test_template_thumbnail_is_rendered_cached_encrypted_and_invalidated(a
             return
         assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:8] == b"\x89PNG\r\n\x1a\n"
         assert "no-store" in r.headers["cache-control"]
-        pasta = secure_files.TEMPLATES_ROOT / EV
+        pasta = secure_files.TEMPLATES_ROOT / secure_files.dono_banca(1)
         thumb = pasta / f"{nome}.thumb.enc"
         assert thumb.is_file() and b"\x89PNG" not in thumb.read_bytes()  # guardada cifrada
         assert nome + ".thumb" not in [t["nome_arquivo"] for t in (await async_client.get(BASE, headers=a1)).json()]
@@ -164,3 +164,60 @@ def test_export_header_unchanged_for_empty_and_table_templates():
 def Inches_(n):
     from docx.shared import Inches
     return Inches(n)
+
+
+async def test_library_lives_in_settings_and_events_see_it(async_client):
+    reset_rate_limits()
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    nome = "ZZTesteBiblioteca.docx"
+    try:
+        r = await async_client.post("/api/banca/templates/upload", headers=a1, files={"file": (nome, _docx("CAB-BIB"), "application/octet-stream")})
+        assert r.status_code == 200 and r.json()["nome_arquivo"] == nome
+        assert nome in [t["nome_arquivo"] for t in (await async_client.get("/api/banca/templates", headers=a1)).json()]
+        # o evento enxerga a mesma biblioteca (exportação e pré-visualização continuam pedindo "o template do evento")
+        assert nome in [t["nome_arquivo"] for t in (await async_client.get(BASE, headers=a1)).json()]
+        assert "CAB-BIB" in (await async_client.get(f"{BASE}/{nome}/preview", headers=a1)).json()["header_html"]
+        assert secure_files.read_template(EV, nome, 1) == secure_files.read_template(secure_files.dono_banca(1), nome, 1)
+        # outra banca tem a sua própria biblioteca (vazia de templates da banca 1)
+        assert nome not in [t["nome_arquivo"] for t in (await async_client.get("/api/banca/templates", headers=a2)).json()]
+        assert (await async_client.get(f"/api/banca/templates/{nome}/preview", headers=a2)).status_code == 404
+        # admin geral precisa escolher o cliente; professor não gerencia templates
+        assert (await async_client.get("/api/banca/templates", headers=ag)).status_code == 400
+        assert (await async_client.get("/api/banca/templates", headers={**ag, "X-Tenant-Id": "1"})).status_code == 200
+        assert (await async_client.post("/api/banca/templates/upload", headers=hp, files={"file": (nome, _docx(), "application/octet-stream")})).status_code == 403
+        # o padrão do evento fica nas preferências de exportação
+        prefs = (await async_client.get(f"/api/export/eventos/{EV}/preferencias", headers=a1)).json()
+        assert (await async_client.put(f"/api/export/eventos/{EV}/preferencias", headers=a1, json={**prefs, "template": nome})).status_code == 200
+        assert (await async_client.get(f"/api/export/eventos/{EV}/preferencias", headers=a1)).json()["template"] == nome
+    finally:
+        await async_client.delete(f"/api/banca/templates/{nome}", headers=a1)
+        prefs = (await async_client.get(f"/api/export/eventos/{EV}/preferencias", headers=a1)).json()
+        prefs.pop("template", None)
+        await async_client.put(f"/api/export/eventos/{EV}/preferencias", headers=a1, json=prefs)
+
+
+async def test_migration_moves_event_templates_to_the_library(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("migrar", Path(__file__).resolve().parents[1] / "scripts" / "migrar_templates_para_banca.py")
+    migrar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migrar)
+    dono = secure_files.dono_banca(1)
+    original = _docx("CAB-MIGRA")
+    secure_files.write_template(EV, "ZZMigra.docx", original, 1, enviado_por_id=None, enviado_em="2026-02-03T10:00:00")
+    try:
+        assert await migrar.main(aplicar=False) == 0
+        assert (secure_files.TEMPLATES_ROOT / EV / "ZZMigra.docx.enc").exists(), "simulação não altera nada"
+        assert await migrar.main(aplicar=True) == 0
+        assert not (secure_files.TEMPLATES_ROOT / EV / "ZZMigra.docx.enc").exists()
+        assert secure_files.read_template(dono, "ZZMigra.docx", 1) == original
+        assert secure_files.info_template(dono, "ZZMigra.docx", 1)["enviado_em"] == "2026-02-03T10:00:00"
+        backups = list((tmp_path / "DiagPro" / "backups").glob("templates_eventos_*/" + EV + "/ZZMigra.docx.enc"))
+        assert backups and b"CAB-MIGRA" not in backups[0].read_bytes(), "original guardado e ainda cifrado"
+    finally:
+        secure_files.delete_template(dono, "ZZMigra.docx")
+        secure_files.delete_template(EV, "ZZMigra.docx")

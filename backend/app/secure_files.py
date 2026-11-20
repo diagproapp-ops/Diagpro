@@ -370,7 +370,8 @@ def _template_meta_path(path: Path) -> Path:
     return path.with_name(path.name[:-len(".enc")] + ".meta.enc")
 
 
-def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int, enviado_por_id: int | None = None) -> None:
+def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int, enviado_por_id: int | None = None,
+                   enviado_em: str | None = None) -> None:
     path = _template_path(evento_id, nome)
     _check_magic(data, os.path.splitext(nome)[1])
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -379,7 +380,8 @@ def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int, envia
         _encrypt_to(f, data, _scope(tenant_id), _named_fid(f"template|{evento_id}|{os.path.basename(path)}"))
     os.replace(tmp, path)
     # só o id de quem enviou (o nome é lido do cadastro ao listar: anonimização LGPD vale aqui também)
-    meta = json.dumps({"enviado_por_id": enviado_por_id, "enviado_em": datetime.now().isoformat(timespec="seconds"),
+    meta = json.dumps({"enviado_por_id": enviado_por_id,
+                       "enviado_em": enviado_em or datetime.now().isoformat(timespec="seconds"),
                        "tamanho": len(data)}).encode("utf-8")
     mpath = _template_meta_path(path)
     mtmp = mpath.with_suffix(".tmp")
@@ -434,9 +436,22 @@ def info_template(evento_id: str, nome: str, tenant_id: int) -> dict:
             "tamanho": None}
 
 
+def dono_banca(tenant_id: int) -> str:
+    """Pasta da BIBLIOTECA de templates da banca (Configurações > Templates). Ids de evento são UUIDs: não colidem."""
+    return f"banca-{int(tenant_id)}"
+
+
 def read_template(evento_id: str, nome: str, tenant_id: int) -> bytes:
+    """
+    Template pelo nome. Procura primeiro na pasta indicada (evento antigo ou a própria biblioteca) e, se não houver,
+    na biblioteca da banca — assim a exportação e a pré-visualização, que pedem "o template do evento", encontram os
+    templates da biblioteca sem mudança.
+    """
     path = _template_path(evento_id, nome)
     if not path.is_file():
+        biblioteca = dono_banca(tenant_id)
+        if str(evento_id) != biblioteca and _template_path(biblioteca, nome).is_file():
+            return read_template(biblioteca, nome, tenant_id)
         raise SecureFileError("Template não encontrado.")
     with open(path, "rb") as f:
         return _decrypt_from(f, _scope(tenant_id), _named_fid(f"template|{evento_id}|{os.path.basename(path)}"))

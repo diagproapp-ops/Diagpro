@@ -36,6 +36,10 @@ jobs:
       DB_SSLMODE: disable
       # Chave mestra efêmera gerada no próprio job (nunca uma chave real)
       DIAGPRO_MASTER_KEY_FILE: /tmp/diagpro_ci_master.key
+      # reCAPTCHA falha fechada em produção; no CI não há chave do Google.
+      # Desligado só aqui (o teste de falha fechada o religa e confere a recusa).
+      RECAPTCHA_SECRET_KEY: ""
+      DIAGPRO_RECAPTCHA_DESATIVADO: "1"
 
     steps:
       - uses: actions/checkout@v4

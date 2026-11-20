@@ -3,7 +3,7 @@ import {
   Box, Button, Typography, Table, TableBody, TableCell, TableHead, TableRow, Paper, Stack, Alert,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, IconButton, TableContainer
 } from '@mui/material';
-import { Edit, Delete, PhonelinkLock } from '@mui/icons-material';
+import { Edit, Delete, PhonelinkLock, Logout } from '@mui/icons-material';
 import { Chip, Tooltip } from '@mui/material';
 import api from '../../api';
 import { Switch } from '@mui/material';
@@ -159,6 +159,16 @@ export default function UserManagementTab() {
       ));
   }
 
+  function handleDesconectar(u: UserForm) {
+    if (!u.id) return;
+    if (!window.confirm(`Desconectar ${u.username} de todos os aparelhos?\n\nA pessoa precisará entrar de novo.`)) return;
+    api.post(`/users/${u.id}/sessoes/encerrar`)
+      .then(({ data }) => setMessage(`${u.username} desconectado(a) de ${data.encerradas} acesso(s).`))
+      .catch(err => setError(
+        typeof err?.response?.data?.detail === "string" ? err.response.data.detail : "Erro ao desconectar."
+      ));
+  }
+
   function handleDelete(id?: number) {
     if (!id) return;
     if (window.confirm("Tem certeza que deseja excluir este usuário?")) {
@@ -232,6 +242,9 @@ export default function UserManagementTab() {
                     <span>
                       <IconButton onClick={() => handleResetar2fa(u)} disabled={!(u as any).totp_ativo}><PhonelinkLock /></IconButton>
                     </span>
+                  </Tooltip>
+                  <Tooltip title="Desconectar de todos os aparelhos">
+                    <IconButton onClick={() => handleDesconectar(u)}><Logout /></IconButton>
                   </Tooltip>
                   <IconButton onClick={() => handleDelete(u.id)}><Delete /></IconButton>
                 </TableCell>

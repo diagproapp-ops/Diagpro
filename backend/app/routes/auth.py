@@ -9,7 +9,7 @@ def print(*args, **kwargs):  # noqa: A001
 
 import os
 import requests
-from fastapi import APIRouter, Depends, HTTPException, status, Form
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Form
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -19,7 +19,7 @@ from backend.app.auth import get_current_user, verify_password
 from backend.app.roles import UserRole
 from backend.app import dois_fatores as df
 from backend.app import politica_senha
-from backend.app import configuracoes, notificacoes
+from backend.app import configuracoes, notificacoes, sessoes
 from backend.app.auth import oauth2_scheme, decode_token_payload
 from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
@@ -119,7 +119,7 @@ def _role(user) -> str:
     return r.value if isinstance(r, UserRole) else str(r)
 
 
-async def _resposta_acesso(user, extra: dict | None = None, payload: dict | None = None) -> dict:
+async def _resposta_acesso(user, extra: dict | None = None, payload: dict | None = None, request: Request | None = None) -> dict:
     if payload and payload.get("trocar"):
         # 2FA ok, mas a senha precisa ser trocada antes de entrar
         cfg = (await configuracoes.ler_plataforma())["seguranca"]
@@ -128,7 +128,8 @@ async def _resposta_acesso(user, extra: dict | None = None, payload: dict | None
         resposta.update(extra or {})
         return resposta
     minutos = await configuracoes.inatividade_do_usuario(user.tenant_id)
-    resposta = {"access_token": df.criar_token_acesso(user, minutos=minutos), "token_type": "bearer",
+    sid = await sessoes.abrir(user, request)
+    resposta = {"access_token": df.criar_token_acesso(user, minutos=minutos, sid=sid), "token_type": "bearer",
                 "role": user.role, "inatividade_minutos": minutos}
     if user.tenant_id is not None:
         resposta["tenant_id"] = user.tenant_id
@@ -151,7 +152,7 @@ async def iniciar_cadastro_2fa(body: PasseBody, db: AsyncSession = Depends(get_a
 
 
 @router.post("/2fa/cadastro/confirmar")
-async def confirmar_cadastro_2fa(body: CodigoBody, db: AsyncSession = Depends(get_auth_db)):
+async def confirmar_cadastro_2fa(body: CodigoBody, request: Request, db: AsyncSession = Depends(get_auth_db)):
     """Primeiro código certo ativa o 2FA, devolve os códigos de recuperação (uma única vez) e o acesso."""
     payload = df.ler_passe(body.token_2fa, (df.SCOPE_CADASTRO,))
     chave = f"2fa:{payload['sub']}:{payload.get('tenant_id')}"
@@ -169,11 +170,11 @@ async def confirmar_cadastro_2fa(body: CodigoBody, db: AsyncSession = Depends(ge
     user.codigos_recuperacao = hashes
     await db.commit()
     logger.warning("2FA ativado (usuário %s)", user.id)
-    return await _resposta_acesso(user, {"codigos_recuperacao": codigos}, payload)
+    return await _resposta_acesso(user, {"codigos_recuperacao": codigos}, payload, request)
 
 
 @router.post("/2fa/verificar")
-async def verificar_2fa(body: CodigoBody, db: AsyncSession = Depends(get_auth_db)):
+async def verificar_2fa(body: CodigoBody, request: Request, db: AsyncSession = Depends(get_auth_db)):
     """Código do aplicativo (6 dígitos) ou um código de recuperação (uso único)."""
     payload = df.ler_passe(body.token_2fa, (df.SCOPE_VERIFICAR,))
     chave = f"2fa:{payload['sub']}:{payload.get('tenant_id')}"
@@ -194,7 +195,7 @@ async def verificar_2fa(body: CodigoBody, db: AsyncSession = Depends(get_auth_db
         extra["codigos_recuperacao_restantes"] = len(restantes)
         logger.warning("Login com código de recuperação (usuário %s, restam %d)", user.id, len(restantes))
     await db.commit()
-    return await _resposta_acesso(user, extra, payload)
+    return await _resposta_acesso(user, extra, payload, request)
 
 
 @router.post("/2fa/codigos-recuperacao")
@@ -253,21 +254,23 @@ async def regras_da_senha():
 
 
 @router.post("/senha/trocar", dependencies=[Depends(rate_limit(10, 60, "troca-senha"))])
-async def trocar_senha_obrigatoria(body: TrocaSenhaBody, db: AsyncSession = Depends(get_auth_db)):
+async def trocar_senha_obrigatoria(body: TrocaSenhaBody, request: Request, db: AsyncSession = Depends(get_auth_db)):
     """Troca obrigatória logo depois do 2FA (senha provisória, vencida ou fora da política)."""
     user = await _usuario_do_passe(db, df.ler_passe(body.token_2fa, (df.SCOPE_TROCA_SENHA,)))
     cfg = await _validar_nova_senha(user, body.nova_senha)
     politica_senha.aplicar_nova_senha(user, body.nova_senha, cfg=cfg)
     await db.commit()
     logger.warning("Senha trocada no login (usuário %s)", user.id)
+    await sessoes.encerrar_do_usuario(user.id, "senha_alterada")
     await notificacoes.notificar(user.id, "seguranca_senha_alterada", "Sua senha foi alterada",
                                  "A senha da sua conta no DiagPro acabou de ser alterada. Se não foi você, avise o administrador da sua banca imediatamente.", "/minha-conta")
-    return await _resposta_acesso(user)
+    return await _resposta_acesso(user, request=request)
 
 
 @router.post("/senha/minha", dependencies=[Depends(rate_limit(10, 60, "minha-senha"))])
 async def trocar_minha_senha(
     body: MinhaSenhaBody,
+    request: Request,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_auth_db),
 ):
@@ -286,13 +289,15 @@ async def trocar_minha_senha(
     user.totp_ultimo_passo = passo
     politica_senha.aplicar_nova_senha(user, body.nova_senha, cfg=cfg)
     await db.commit()
+    # senha nova: os outros acessos (que podem ser de quem tinha a senha antiga) caem na hora
+    await sessoes.encerrar_do_usuario(user.id, "senha_alterada", exceto=getattr(request.state, "sid", None))
     await notificacoes.notificar(user.id, "seguranca_senha_alterada", "Sua senha foi alterada",
                                  "A senha da sua conta no DiagPro acabou de ser alterada. Se não foi você, avise o administrador da sua banca imediatamente.", "/minha-conta")
     return {"ok": True}
 
 
 @router.post("/renovar")
-async def renovar_sessao(token: str = Depends(oauth2_scheme), current_user=Depends(get_current_user)):
+async def renovar_sessao(request: Request, token: str = Depends(oauth2_scheme), current_user=Depends(get_current_user)):
     """
     Renova o token enquanto a pessoa está usando o sistema (a tela chama só se houve atividade).
     Sem uso, o token vence em 30 min e a sessão cai. Limite absoluto de 12 h desde o login.
@@ -307,8 +312,50 @@ async def renovar_sessao(token: str = Depends(oauth2_scheme), current_user=Depen
     dados = {"sub": payload["sub"], "role": payload.get("role"), "mfa": True, "auth_time": int(auth_time)}
     if payload.get("tenant_id") is not None:
         dados["tenant_id"] = payload["tenant_id"]
+    if payload.get("sid"):
+        dados["sid"] = payload["sid"]
+        await sessoes.tocar(payload["sid"])
+    else:  # token anterior às sessões: passa a ter uma (do admin geral, sem banca)
+        from types import SimpleNamespace
+        dono = SimpleNamespace(id=current_user.id, tenant_id=None if _role(current_user) == UserRole.ADMIN_GERAL.value else current_user.tenant_id)
+        dados["sid"] = await sessoes.abrir(dono, request, alertar=False)
     from backend.app.auth import create_access_token
     from datetime import timedelta as _td
     minutos = await configuracoes.inatividade_do_usuario(payload.get("tenant_id"))
     return {"access_token": create_access_token(dados, expires_delta=_td(minutes=minutos)), "token_type": "bearer",
             "inatividade_minutos": minutos}
+
+
+# --------------------------------------------------------------------------- acessos (sessões) da própria pessoa
+@router.post("/sair")
+async def sair(request: Request, current_user=Depends(get_current_user)):
+    """Sair: encerra este acesso no servidor (o token deixa de valer mesmo que alguém tenha copiado)."""
+    sid = getattr(request.state, "sid", None)
+    if sid:
+        await sessoes.encerrar(sid, current_user.id, "saiu")
+    return {"ok": True}
+
+
+@router.get("/sessoes")
+async def minhas_sessoes(request: Request, current_user=Depends(get_current_user)):
+    max_horas = (await configuracoes.ler_plataforma())["seguranca"]["sessao_maxima_horas"]
+    atual = getattr(request.state, "sid", None)
+    itens = []
+    for s in await sessoes.ativas_do_usuario(current_user.id, max_horas):
+        d = s.detalhes or {}
+        itens.append({"id": s.id, "atual": s.id == atual, "navegador": d.get("navegador"), "sistema": d.get("sistema"),
+                      "ip": d.get("ip"), "criada_em": s.criada_em.isoformat() + "Z", "ultimo_uso_em": s.ultimo_uso_em.isoformat() + "Z"})
+    return {"itens": itens}
+
+
+@router.post("/sessoes/{sid}/encerrar")
+async def encerrar_minha_sessao(sid: str, current_user=Depends(get_current_user)):
+    if not await sessoes.encerrar(sid[:32], current_user.id, "encerrada_pelo_usuario"):
+        raise HTTPException(status_code=404, detail="Acesso não encontrado.")
+    return {"ok": True}
+
+
+@router.post("/sessoes/encerrar-outras")
+async def encerrar_outras_sessoes(request: Request, current_user=Depends(get_current_user)):
+    n = await sessoes.encerrar_do_usuario(current_user.id, "encerrada_pelo_usuario", exceto=getattr(request.state, "sid", None))
+    return {"encerradas": n}

@@ -33,7 +33,8 @@ DECLARE
         'HistoricoRevisaoQuestao',
         'configuracoes',
         'uso_ia',
-        'notificacoes'
+        'notificacoes',
+        'sessoes'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

@@ -146,6 +146,16 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
             detail="Sessão sem verificação em duas etapas. Faça login novamente.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    sid = payload.get("sid")
+    if sid is not None:
+        from backend.app import sessoes  # import tardio: sessoes -> notificacoes -> configuracoes
+        if not isinstance(sid, str) or not await sessoes.valida(sid):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Este acesso foi encerrado. Entre novamente.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    request.state.sid = sid
     user = await _load_user_from_token(payload)
 
     if user is None:

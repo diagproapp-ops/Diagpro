@@ -24,7 +24,7 @@ from uuid import uuid4
 import logging
 from datetime import datetime
 
-from backend.app import configuracoes, notificacoes, politica_senha
+from backend.app import configuracoes, notificacoes, politica_senha, sessoes
 
 logger = logging.getLogger(__name__)
 
@@ -382,9 +382,23 @@ async def resetar_2fa(
     user.codigos_recuperacao = None
     await db.commit()
     logger.warning("2FA resetado (usuário %s por administrador %s)", user.id, admin_user.id)
+    await sessoes.encerrar_do_usuario(user.id, "2fa_resetado")
     await notificacoes.notificar(user.id, "seguranca_2fa_resetado", "Sua verificação em duas etapas foi resetada",
                                  "Um administrador resetou o autenticador da sua conta. No próximo acesso você vai "
                                  "cadastrar o autenticador de novo. Se você não pediu isso, avise a sua banca.", "/minha-conta")
+
+
+@router.post("/{user_id}/sessoes/encerrar")
+async def desconectar_usuario(
+    user_id: int = Path(..., description="ID do usuário"),
+    db: AsyncSession = Depends(get_tenant_db),
+    admin_user: DBUser = Depends(get_admin_user),
+):
+    """Administrador desconecta todos os acessos de alguém da banca (ex.: computador perdido, saída da equipe)."""
+    user = await _buscar_usuario_gerenciavel(db, user_id, admin_user)
+    n = await sessoes.encerrar_do_usuario(user.id, "encerrada_pelo_administrador")
+    logger.warning("Administrador %s desconectou o usuário %s (%s acesso(s))", admin_user.id, user.id, n)
+    return {"encerradas": n}
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

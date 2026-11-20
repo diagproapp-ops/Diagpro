@@ -103,9 +103,12 @@ def ler_passe(passe: str, scopes: tuple[str, ...]) -> dict:
     return payload
 
 
-def criar_token_acesso(user, auth_time: int | None = None, minutos: int | None = None) -> str:
-    """auth_time = momento do login (mantido nas renovações). minutos = inatividade que derruba a sessão."""
+def criar_token_acesso(user, auth_time: int | None = None, minutos: int | None = None, sid: str | None = None) -> str:
+    """auth_time = momento do login (mantido nas renovações). minutos = inatividade que derruba a sessão.
+    sid = id da sessão (tabela sessoes): encerrada a sessão, o token deixa de valer na hora."""
     dados = {"sub": user.username, "role": user.role, "mfa": True, "auth_time": auth_time or int(time.time())}
+    if sid:
+        dados["sid"] = sid
     if user.tenant_id is not None:
         dados["tenant_id"] = user.tenant_id
     return create_access_token(dados, expires_delta=timedelta(minutes=minutos) if minutos else None)

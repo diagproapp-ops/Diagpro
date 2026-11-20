@@ -386,6 +386,35 @@ def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int, envia
     with open(mtmp, "wb") as f:
         _encrypt_to(f, meta, _scope(tenant_id), _named_fid(f"template-meta|{evento_id}|{os.path.basename(path)}"))
     os.replace(mtmp, mpath)
+    _template_thumb_path(path).unlink(missing_ok=True)  # template novo: a miniatura antiga não vale mais
+
+
+def _template_thumb_path(path: Path) -> Path:
+    """Miniatura da 1ª página (como sai na prova), cifrada: X.docx.thumb.enc."""
+    return path.with_name(path.name[:-len(".enc")] + ".thumb.enc")
+
+
+def read_template_thumb(evento_id: str, nome: str, tenant_id: int) -> bytes | None:
+    path = _template_path(evento_id, nome)
+    tpath = _template_thumb_path(path)
+    if not path.is_file() or not tpath.is_file():
+        return None
+    try:
+        with open(tpath, "rb") as f:
+            return _decrypt_from(f, _scope(tenant_id), _named_fid(f"template-thumb|{evento_id}|{os.path.basename(path)}"))
+    except SecureFileError:
+        return None
+
+
+def write_template_thumb(evento_id: str, nome: str, png: bytes, tenant_id: int) -> None:
+    path = _template_path(evento_id, nome)
+    if not path.is_file():
+        raise SecureFileError("Template não encontrado.")
+    tpath = _template_thumb_path(path)
+    tmp = tpath.with_suffix(".tmp")
+    with open(tmp, "wb") as f:
+        _encrypt_to(f, png, _scope(tenant_id), _named_fid(f"template-thumb|{evento_id}|{os.path.basename(path)}"))
+    os.replace(tmp, tpath)
 
 
 def info_template(evento_id: str, nome: str, tenant_id: int) -> dict:
@@ -420,7 +449,7 @@ def list_templates(evento_id: str) -> list[str]:
     if not pasta.is_dir():
         return []
     return sorted(p.name[:-4] for p in pasta.iterdir()
-                  if p.is_file() and p.name.endswith(".enc") and not p.name.endswith(".meta.enc"))
+                  if p.is_file() and p.name.endswith(".enc") and not p.name.endswith((".meta.enc", ".thumb.enc")))
 
 
 def delete_template(evento_id: str, nome: str) -> bool:
@@ -428,6 +457,7 @@ def delete_template(evento_id: str, nome: str) -> bool:
     if path.is_file():
         path.unlink()
         _template_meta_path(path).unlink(missing_ok=True)
+        _template_thumb_path(path).unlink(missing_ok=True)
         return True
     return False
 

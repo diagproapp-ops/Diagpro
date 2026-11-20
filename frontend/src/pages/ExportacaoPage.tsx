@@ -16,6 +16,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import api from '../api';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
+import EntregaPorLink from '../components/EntregaPorLink';
 
 type Cargo = {
   id_cargo: string;
@@ -565,6 +566,19 @@ const ExportacaoProvaPage: React.FC = () => {
             Sair
           </Button>
         </Stack>
+
+        <EntregaPorLink
+          eventId={eventId || ''}
+          habilitado={!carregando && senhaCorreta && !exportando && cargosFiltrados.filter(c => c.selecionado).length > 0}
+          gabaritoMarcado={exibirGabaritoMarcado}
+          corpo={() => ({
+            cargos_id: cargosFiltrados.filter(c => c.selecionado).map(c => c.id_cargo),
+            fonte, tamanhoFonte, duasColunas, quebraBloco, manterDocx, senha,
+            template: templateSelecionado,
+            exibir_codigo_curto_questao: exibirCodigoCurto,
+            exibir_gabarito_marcado: exibirGabaritoMarcado,
+          })}
+        />
 
         {/* Snackbar feedback */}
         <Snackbar open={snackbar.open} autoHideDuration={3500} onClose={() => setSnackbar({ ...snackbar, open: false })}>

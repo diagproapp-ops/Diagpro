@@ -33,6 +33,7 @@ import FilaRevisaoPage from './pages/FilaRevisaoPage';
 import AvisoManutencao from './components/AvisoManutencao';
 import AceiteTermos from './components/AceiteTermos';
 import DocumentoLegalPage from './pages/DocumentoLegalPage';
+import EntregaPublicaPage from './pages/EntregaPublicaPage';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
@@ -51,6 +52,7 @@ function App() {
             {/* públicas para todos (LGPD) */}
             <Route path="/privacidade" element={<DocumentoLegalPage tipo="politica" />} />
             <Route path="/termos" element={<DocumentoLegalPage tipo="termos" />} />
+            <Route path="/entrega/:id" element={<EntregaPublicaPage />} />
             {!isAuthenticated ? (
               <>
                 <Route path="/login" element={<LoginPage />} />

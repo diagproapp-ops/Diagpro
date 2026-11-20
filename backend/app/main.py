@@ -22,6 +22,8 @@ from backend.app.routes.revisao import router as revisao_router
 from backend.app.routes.versoes import router as versoes_router
 from backend.app.routes.sistema import router as sistema_router
 from backend.app.routes.lgpd import router as lgpd_router
+from backend.app.routes.entregas import router as entregas_router
+from backend.app import entregas as _entregas
 from backend.app import lgpd as _lgpd
 from backend.app import backups as _backups
 from backend.app import notificacoes as _notificacoes
@@ -100,7 +102,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
     if os.getenv("ENABLE_HSTS", "false").lower() == "true":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    if request.url.path.startswith(("/api/", "/auth/", "/users/", "/admin/")):
+    if request.url.path.startswith(("/api/", "/auth/", "/users/", "/admin/", "/entrega/", "/lgpd/")):
         response.headers.setdefault("Cache-Control", "no-store")
     return response
 
@@ -122,6 +124,7 @@ app.include_router(revisao_router)
 app.include_router(versoes_router)
 app.include_router(sistema_router)
 app.include_router(lgpd_router)
+app.include_router(entregas_router)
 
 
 @app.on_event("startup")
@@ -133,6 +136,7 @@ async def _iniciar_fila_de_email():
     if _backups.agendador_ligado():
         app.state.backup_agendado = asyncio.create_task(_backups.laco_agendado())
         app.state.retencao_lgpd = asyncio.create_task(_lgpd.laco_retencao())
+        app.state.limpeza_entregas = asyncio.create_task(_entregas.laco_limpeza())
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")

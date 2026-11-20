@@ -5,6 +5,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, TextField
 } from '@mui/material';
 import Layout from '../components/Layout';
+import MarcaDagua from '../components/MarcaDagua';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api';
 
@@ -354,6 +355,7 @@ const GabaritoPage: React.FC = () => {
               : cargo ? "Nenhum gabarito disponível para este filtro." : "Selecione um cargo para ver o gabarito."}
           </Typography>
         ) : (
+          <MarcaDagua>
           <Box sx={{ overflowX: "auto" }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -380,6 +382,7 @@ const GabaritoPage: React.FC = () => {
               </tbody>
             </table>
           </Box>
+          </MarcaDagua>
         )}
 
         {/* Modal Exportar Gabarito */}

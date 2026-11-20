@@ -145,6 +145,25 @@ class RegistroLGPD(Base):
     detalhes = Column(Ciphertext, nullable=True)
 
 
+class Entrega(Base):
+    """Pacote de prova entregue por link com código, validade e limite de downloads (arquivo cifrado)."""
+    __tablename__ = "entregas"
+    id = Column(String(32), primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False, index=True)
+    criado_por = Column(Integer, nullable=True)
+    criado_em = Column(DateTime, nullable=False)
+    expira_em = Column(DateTime, nullable=False)
+    max_downloads = Column(Integer, nullable=False)
+    downloads = Column(Integer, nullable=False, default=0)
+    falhas_codigo = Column(Integer, nullable=False, default=0)
+    encerrada_em = Column(DateTime, nullable=True)
+    motivo_encerramento = Column(String(30), nullable=True)
+    codigo_hash = Column(String(100), nullable=False)
+    arquivo = Column(Ciphertext, nullable=True)
+    detalhes = Column(Ciphertext, nullable=False)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

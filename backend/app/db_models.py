@@ -77,6 +77,19 @@ class Configuracao(Base):
     atualizado_por = Column(Ciphertext, nullable=True)
 
 
+class UsoIA(Base):
+    """Uma chamada ao assistente de IA (sem o texto: só quem, quando, tokens e resultado)."""
+    __tablename__ = "uso_ia"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    usuario_id = Column(Integer, nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    tokens_entrada = Column(Integer, nullable=False, default=0)
+    tokens_saida = Column(Integer, nullable=False, default=0)
+    sucesso = Column(Boolean, nullable=False, default=False)
+    detalhes = Column(Ciphertext, nullable=False)  # {recurso, provedor, modelo, erro}
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

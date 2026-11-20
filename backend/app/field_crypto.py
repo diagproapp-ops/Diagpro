@@ -178,6 +178,7 @@ ENCRYPTED: dict[str, dict[str, str]] = {
                                "agencia", "conta_corrente", "terms_acceptance", "totp_secret"], "text"),
               "codigos_recuperacao": "json", "senha_historico": "json"},
     "configuracoes": {"dados": "json", "atualizado_por": "text"},
+    "uso_ia": {"detalhes": "json"},
     "company_data": dict.fromkeys(["company_name", "company_cnpj", "company_address", "company_phone",
                                    "company_email", "company_website", "company_logo_path"], "text"),
     "audit_log_geracao": dict.fromkeys(["usuario", "evento", "cargo", "parametros", "frases", "seed", "ip",

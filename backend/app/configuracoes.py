@@ -5,10 +5,15 @@ Configurações em dois escopos guardados (o terceiro, "pessoal", é a página M
 - PLATAFORMA (tenant_id nulo, só admin geral): política de senha e sessão para todos.
 - BANCA (por cliente, RLS): sessão mais curta, identidade da prova, regras das questões.
 
+IA: a plataforma escolhe o provedor/modelo e guarda as chaves (cifradas, nunca devolvidas à tela);
+a banca decide se liga e quais recursos usa. Vale só se as DUAS ligarem.
+
 Os padrões reproduzem o comportamento anterior; a validação impõe limites seguros (ninguém consegue,
 por exemplo, baixar a senha mínima para 4 caracteres). Tudo é cifrado no banco.
 """
 import copy
+import os
+import re
 import time
 from datetime import datetime
 
@@ -31,7 +36,20 @@ PADRAO_PLATAFORMA = {
         "sessao_inatividade_minutos": 30,
         "sessao_maxima_horas": 12,
     },
+    "ia": {
+        "habilitada": False,
+        "provedor": "anthropic",
+        "modelo_anthropic": "claude-opus-5-5",
+        "modelo_openai": "gpt-5",
+        "limite_diario_usuario": 60,
+        "limite_diario_banca": 1500,
+        "chaves": {"anthropic": "", "openai": ""},  # segredo: nunca sai do servidor
+    },
 }
+
+PROVEDORES_IA = ("anthropic", "openai")
+RECURSOS_IA = ("gerar_questao", "revisar_questao", "alternativas", "justificativa", "melhorar_texto", "chat")
+_VAR_AMBIENTE = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 PADRAO_BANCA = {
     "seguranca": {
@@ -44,6 +62,12 @@ PADRAO_BANCA = {
     "regras_questoes": {
         "tipos_permitidos": TIPOS_QUESTAO,
         "revisao_obrigatoria": False,
+    },
+    "ia": {
+        "habilitada": False,
+        "recursos": dict.fromkeys(RECURSOS_IA, True),
+        "orientacoes_banca": "",          # estilo da banca, entra em toda instrução à IA
+        "limite_diario_usuario": None,    # None = o da plataforma; só pode ser MENOR
     },
 }
 
@@ -75,15 +99,84 @@ def _int(valor, nome, minimo, maximo, erros):
         erros.append(f"{nome}: use um número inteiro entre {minimo} e {maximo}.")
 
 
+_MODELO_OK = re.compile(r"^[A-Za-z0-9._:\-]{2,80}$")
+_CHAVE_OK = re.compile(r"^\S{20,400}$")
+
+
+def _validar_ia_plataforma(ia: dict, erros: list) -> dict:
+    out = {}
+    if "habilitada" in ia:
+        if not isinstance(ia["habilitada"], bool):
+            erros.append("ia.habilitada: use sim ou não.")
+        out["habilitada"] = bool(ia["habilitada"])
+    if "provedor" in ia:
+        if ia["provedor"] not in PROVEDORES_IA:
+            erros.append("ia.provedor: escolha anthropic ou openai.")
+        out["provedor"] = ia["provedor"]
+    for campo in ("modelo_anthropic", "modelo_openai"):
+        if campo in ia:
+            if not isinstance(ia[campo], str) or not _MODELO_OK.match(ia[campo].strip()):
+                erros.append(f"ia.{campo}: nome de modelo inválido.")
+            else:
+                out[campo] = ia[campo].strip()
+    for campo, (mi, ma) in {"limite_diario_usuario": (1, 1000), "limite_diario_banca": (1, 100000)}.items():
+        if campo in ia:
+            _int(ia[campo], f"ia.{campo}", mi, ma, erros)
+            out[campo] = ia[campo]
+    chaves = ia.get("chaves")
+    if chaves is not None:
+        if not isinstance(chaves, dict):
+            erros.append("ia.chaves: formato inválido.")
+        else:
+            out["chaves"] = {}
+            for prov, valor in chaves.items():
+                if prov not in PROVEDORES_IA:
+                    erros.append(f"ia.chaves: provedor desconhecido ({prov}).")
+                elif valor is None or valor == "":
+                    out["chaves"][prov] = ""  # remover a chave
+                elif not isinstance(valor, str) or not _CHAVE_OK.match(valor.strip()):
+                    erros.append(f"ia.chaves.{prov}: chave em formato inválido.")
+                else:
+                    out["chaves"][prov] = valor.strip()
+    return out
+
+
 def validar_plataforma(dados: dict) -> dict:
     erros = []
     seg = (dados or {}).get("seguranca") or {}
     for campo, (mi, ma) in _LIMITES_PLATAFORMA.items():
         if campo in seg:
             _int(seg[campo], campo, mi, ma, erros)
+    out = {"seguranca": {k: seg[k] for k in _LIMITES_PLATAFORMA if k in seg}}
+    ia = (dados or {}).get("ia")
+    if ia is not None:
+        if not isinstance(ia, dict):
+            erros.append("ia: formato inválido.")
+        else:
+            out["ia"] = _validar_ia_plataforma(ia, erros)
     if erros:
         raise HTTPException(status_code=400, detail={"mensagem": "Configuração inválida.", "problemas": erros})
-    return {"seguranca": {k: seg[k] for k in _LIMITES_PLATAFORMA if k in seg}}
+    return out
+
+
+def plataforma_publica(dados: dict) -> dict:
+    """O que a tela pode ver: as chaves viram só 'definida' + os 4 últimos caracteres."""
+    out = copy.deepcopy(dados)
+    ia = out.get("ia") or {}
+    chaves = ia.pop("chaves", {}) or {}
+    ia["chaves"] = {
+        prov: {"definida": bool(chaves.get(prov)),
+               "final": ("…" + chaves[prov][-4:]) if chaves.get(prov) else "",
+               "no_ambiente": bool(os.getenv(_VAR_AMBIENTE[prov], "").strip())}
+        for prov in PROVEDORES_IA
+    }
+    return out
+
+
+def chave_do_provedor(plataforma: dict, provedor: str) -> str:
+    """Chave salva na tela (cifrada no banco) ou, se não houver, a variável de ambiente do servidor."""
+    salva = (((plataforma.get("ia") or {}).get("chaves") or {}).get(provedor) or "").strip()
+    return salva or os.getenv(_VAR_AMBIENTE[provedor], "").strip()
 
 
 def validar_banca(dados: dict, plataforma: dict) -> dict:
@@ -126,8 +219,40 @@ def validar_banca(dados: dict, plataforma: dict) -> dict:
             erros.append("revisao_obrigatoria: use sim ou não.")
         out["regras_questoes"] = {"tipos_permitidos": [t for t in TIPOS_QUESTAO if t in tipos],
                                   "revisao_obrigatoria": bool(regras.get("revisao_obrigatoria", False))}
+    ia = (dados or {}).get("ia")
+    if ia is not None:
+        out["ia"] = _validar_ia_banca(ia, plataforma, erros)
     if erros:
         raise HTTPException(status_code=400, detail={"mensagem": "Configuração inválida.", "problemas": erros})
+    return out
+
+
+def _validar_ia_banca(ia: dict, plataforma: dict, erros: list) -> dict:
+    if not isinstance(ia, dict):
+        erros.append("ia: formato inválido.")
+        return {}
+    out = {}
+    if "habilitada" in ia:
+        if not isinstance(ia["habilitada"], bool):
+            erros.append("ia.habilitada: use sim ou não.")
+        out["habilitada"] = bool(ia["habilitada"])
+    if "recursos" in ia:
+        rec = ia["recursos"]
+        if not isinstance(rec, dict) or any(k not in RECURSOS_IA or not isinstance(v, bool) for k, v in rec.items()):
+            erros.append("ia.recursos: formato inválido.")
+        else:
+            out["recursos"] = {k: rec.get(k, True) for k in RECURSOS_IA}
+    if "orientacoes_banca" in ia:
+        texto = ia["orientacoes_banca"]
+        if not isinstance(texto, str) or len(texto) > 3000:
+            erros.append("ia.orientacoes_banca: até 3000 caracteres.")
+        else:
+            out["orientacoes_banca"] = texto.strip()
+    if "limite_diario_usuario" in ia:
+        teto = plataforma["ia"]["limite_diario_usuario"]
+        if ia["limite_diario_usuario"] is not None:
+            _int(ia["limite_diario_usuario"], "ia.limite_diario_usuario", 1, teto, erros)
+        out["limite_diario_usuario"] = ia["limite_diario_usuario"]
     return out
 
 

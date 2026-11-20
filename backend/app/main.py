@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from backend.app.database import SessionLocal
-from backend.app.routes.ia_chat import router as ia_chat_router
+from backend.app.routes.ia import router as ia_router
 from backend.app.routes.plagio import router as plagio_router
 from backend.app.routes.biblioteca import router as biblioteca_router
 from backend.app.routes.dicionario import router as dicionario_router
@@ -80,7 +80,7 @@ app.include_router(cargos_import_router)
 app.include_router(conteudos_router, prefix="/conteudos")
 app.include_router(textos_referencia.router)
 app.include_router(questoes_router)
-app.include_router(ia_chat_router, prefix="/api")
+app.include_router(ia_router)
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")

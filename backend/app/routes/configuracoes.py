@@ -22,7 +22,7 @@ def _tenant_da_banca(current_user) -> int:
 
 @router.get("/plataforma")
 async def ler_plataforma(current_user=Depends(require_roles(UserRole.ADMIN_GERAL))):
-    return await configuracoes.ler_plataforma(forcar=True)
+    return configuracoes.plataforma_publica(await configuracoes.ler_plataforma(forcar=True))
 
 
 @router.put("/plataforma")
@@ -31,7 +31,7 @@ async def salvar_plataforma(request: Request, current_user=Depends(require_roles
         raise HTTPException(status_code=400, detail="Volte para a visão global para alterar a plataforma.")
     dados = await configuracoes.salvar_plataforma(await request.json(), current_user.username)
     logger.warning("Configurações da plataforma alteradas por %s", current_user.id)
-    return dados
+    return configuracoes.plataforma_publica(dados)
 
 
 @router.get("/banca")
@@ -42,7 +42,11 @@ async def ler_banca(
     tenant = _tenant_da_banca(current_user)
     banca = await configuracoes.ler_banca(db, tenant)
     plataforma = await configuracoes.ler_plataforma()
-    return {**banca, "limites": {"sessao_inatividade_minutos_maximo": plataforma["seguranca"]["sessao_inatividade_minutos"]}}
+    return {**banca, "limites": {
+        "sessao_inatividade_minutos_maximo": plataforma["seguranca"]["sessao_inatividade_minutos"],
+        "ia_liberada_pela_plataforma": bool(plataforma["ia"]["habilitada"]),
+        "ia_limite_diario_usuario_maximo": plataforma["ia"]["limite_diario_usuario"],
+    }}
 
 
 @router.put("/banca")

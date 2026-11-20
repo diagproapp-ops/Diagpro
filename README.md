@@ -56,7 +56,7 @@ Classificação adotada:
 
 | Funcionalidade | Classificação | Evidência / Observação |
 | :--- | :--- | :--- |
-| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 16 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
+| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 18 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
 | Cifra de campos (AES-256-GCM, chave por tenant) | **Implementada e verificada** | `backend/app/field_crypto.py`: 122 colunas sensíveis cifradas, incluindo enunciados, alternativas, gabarito (`correta`, `valor_correto`) e dados pessoais. Varredura no banco real: 4.034 valores, nenhum em texto claro. |
 | Arquivos cifrados e URLs assinadas | **Implementada e verificada** | `backend/app/secure_files.py`: imagens, avatares, logos, capas, templates e CSV de candidatos cifrados por tenant; entrega por URL assinada de 5 min. Pastas públicas `/static` e `/avatars` removidas. |
 | Provas geradas sem armazenamento | **Implementada e verificada** | Saídas criadas em pasta temporária privada por requisição e apagadas ao final; ZIP do lote protegido pela senha do evento. Testado ponta a ponta numa cópia do banco. |
@@ -69,7 +69,7 @@ Classificação adotada:
 | Importação de Questões via DOCX | **Implementada parcialmente** | Imagens extraídas vão direto para o armazenamento cifrado; a confirmação aceita só referências de arquivo do próprio cliente (testado). A extração DOCX em si não tem teste automatizado. |
 | Montagem, Simulação e Geração de Provas/Gabaritos | **Implementada parcialmente** | Ponta a ponta testado num banco de teste com dados sintéticos (19/11/2026): montagem, lote ZIP AES com PDF e DOCX legíveis (acentos, alternativas, texto de referência), gabarito batendo com a ordem impressa da alternativa correta, ZIP de gabaritos. Prova pronta e gabarito só com a senha do evento. Geração das provas reais não executada (exige a senha do evento). Sorteios (ordem das questões, alternativas e letras do gabarito) derivam de uma semente secreta gravada (cifrada) na montagem: cada exportação da mesma montagem sai idêntica e o gabarito não é previsível; montagens anteriores a 19/11/2026 mantêm a fórmula antiga para não mudar provas já exportadas. Checagem antes de exportar (bloqueios e avisos), relatório no ZIP, nomes únicos por variação ("PADRÃO" ou "Tipo A"...), versão com gabarito marcado identificada, auditoria com SHA-256, padrão de exportação por evento (só sugestão) e "Atualizar questões da montagem" sem novo sorteio. Certo/Errado: comando sem número e itens numerados na sequência da prova toda, gabarito C/E por item. Subjetiva: enunciado e a quantidade de linhas definida na questão (padrão 10). Alternativas e itens vindos do editor (HTML) saem com a formatação, sem tags. |
 | Auditoria de Geração (`audit_log_geracao`) | **Implementada parcialmente** | Gravação e filtro por usuário (índice cego) testados; cobre geração, não leitura/edição geral. |
-| Chat com IA (OpenAI) | **Implementada parcialmente** | `ia_chat.py` usa `openai.ChatCompletion`, removido no SDK v1; `requirements.txt` fixa `openai==1.109.1`, então a rota falha. |
+| Assistente de IA (Claude ou OpenAI) | **Implementada e verificada** | Rascunho de questão, revisão, alternativas erradas, justificativa, melhoria de texto e chat no editor. Desligado por padrão; a plataforma e a banca precisam ligar. Testado com provedor falso local pelos dois SDKs; chamada real depende da chave do provedor. |
 | Verificação de Plágio (Bing) | **Implementada parcialmente** | Autenticada, rate limit 20/60 s; chamada externa não testada. |
 | Dicionário (`dicio.com.br`) | **Implementada parcialmente** | Scraping HTML via regex; não testado. |
 | Biblioteca de Questões (`/api/biblioteca`) | **Implementada e verificada** | Busca em conteúdo cifrado (decifra só as questões do próprio cliente na memória); isolamento tenant 1 × tenant 2 testado. |
@@ -148,7 +148,7 @@ Fora do projeto e do banco ficam a chave mestra, a chave de backup, a CA/certifi
 
 - **Backend Python** (`backend/requirements.txt`, 30 pacotes, versões fixadas exceto `redis>=5.0`): FastAPI, Starlette, Uvicorn, SQLAlchemy Async (`SQLAlchemy[asyncio]`, `greenlet`, `asyncpg`), `psycopg2-binary` (Alembic e scripts), Alembic, Pydantic, `email_validator`, `python-jose`, `passlib[bcrypt]`/`bcrypt`, `cryptography` (AES-GCM, HKDF), `python-multipart`, `python-docx`, `pypdf`, `pdfrw`, `reportlab`, `pillow`, `beautifulsoup4`, `pyzipper`, `openai`, `requests`, `httpx`, `redis`, `python-dotenv`, `pytest`, `pytest-asyncio`.
   - *Versões verificadas no `.venv` da raiz:* Python `3.11.0`, Uvicorn `0.37.0`, Alembic `1.20.1`, pytest `9.2.0`.
-  - *Divergências conhecidas:* `openai==1.109.1` é incompatível com `ia_chat.py`; `boto3` (backend S3 de `storage.py`) não consta no arquivo; `redis` não está instalado no `.venv` local (o rate limit usa memória).
+  - *Divergências conhecidas:* `boto3` (backend S3 de `storage.py`) não consta no arquivo; `redis` não está instalado no `.venv` local (o rate limit usa memória).
   - `aiosqlite` foi removido: o sistema não usa mais SQLite.
 - **Processamento de Documentos Externo**: LibreOffice (`soffice.exe` para DOCX → PDF, com até 3 tentativas por conversão) e Java + **Apache PDFBox 3.0.5** (`backend/app/pdfbox-app-3.0.5.jar`, `json.jar`).
 - **Frontend (`frontend/package.json`)**: React `18.2.0`, TypeScript `4.9.5`, Material UI v7, TipTap v3, `@dnd-kit`, `axios`, `react-router-dom` v7, `html2pdf.js`, `react-markdown`, `react-google-recaptcha`.
@@ -180,7 +180,7 @@ DiagPro/
 │   │   ├── admin_clients.py      # Gestão de clientes (administrador geral)
 │   │   ├── auth.py               # JWT, bcrypt, get_current_user (runtime por tenant; plataforma só p/ admin geral; X-Tenant-Id)
 │   │   ├── database.py           # Engines runtime/plataforma, TLS obrigatório, set_tenant_context
-│   │   ├── db_models.py          # 17 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
+│   │   ├── db_models.py          # 19 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
 │   │   ├── field_crypto.py       # Cifra de campos AES-256-GCM por tenant, índices cegos, eventos do ORM
 │   │   ├── secure_files.py       # Arquivos cifrados por tenant, URLs assinadas, templates, pasta por requisição
 │   │   ├── log_redaction.py      # Filtro que mascara senhas, assinaturas, tokens e caminhos nos logs
@@ -188,9 +188,10 @@ DiagPro/
 │   │   ├── verificacao_prova.py  # Checagem da prova montada antes de exportar (bloqueios e avisos)
 │   │   ├── dados_prova.py        # Completa a cópia da montagem (tipo, itens Certo/Errado, linhas)
 │   │   ├── configuracoes.py      # Configurações da plataforma e da banca (padrões, limites, cache)
+│   │   ├── assistente_ia.py      # IA: provedores (Anthropic/OpenAI), pedidos, formatos de resposta, limites e registro de uso
 │   │   ├── politica_senha.py     # Política de senha (valores vindos das configurações)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
-│   │   ├── rls_policies.sql      # Políticas RLS (16 tabelas, sem bypass)
+│   │   ├── rls_policies.sql      # Políticas RLS (18 tabelas, sem bypass)
 │   │   ├── rate_limit.py, jobs.py, storage.py, models.py, roles.py, ...
 │   │   ├── utils_crypto.py       # Camada Fernet LEGADA, desativada (funções sem efeito; mask_pii)
 │   │   └── PreencheCapaPDF_JSON_PDFBox.java
@@ -234,9 +235,9 @@ Definido em `backend/app/db_models.py` (**17 tabelas** registradas em `Base.meta
 - **Ficam em claro** apenas: chaves (PK/FK), `tenant_id`, códigos técnicos gerados (`identificador_*`, `codigo_*`), papéis/estados/tipos usados em autorização e fluxo, datas, números, `password_hash` (bcrypt) e `senha_evento` (bcrypt).
 - **Índices cegos** (HMAC-SHA256, colunas `*_bidx`) permitem busca exata e unicidade sem expor o valor: `users.username/email` (escopo global, usado no login), `tenants.name/domain` (global), `users.full_name`, `banco_frases.categoria` e `frase_bidx`, `Disciplinas.nome_disciplina` e `audit_log_geracao.usuario/evento/cargo` (escopo por cliente: o mesmo valor em clientes diferentes gera índices diferentes).
 
-### 17 modelos ORM × 16 tabelas com RLS
+### 19 modelos ORM × 18 tabelas com RLS
 
-`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **16** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
+`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **18** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
 
 - O acesso a `tenants` só ocorre pela role `diagpro_platform`, em rotas exclusivas do `administrador geral`. A camada de cifra também bloqueia sessões de runtime que tentem carregar linhas de `tenants`.
 - Em `users`, linhas com `tenant_id` nulo (administrador geral) só são visíveis pela role `diagpro_platform`, que tem `BYPASSRLS`. Não existe bypass por variável de sessão.
@@ -308,7 +309,7 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 
 ## 13. Integrações Externas
 
-- **OpenAI API** (`ia_chat.py`): modelo por `OPENAI_MODEL` (padrão `gpt-3.5-turbo`), requer `OPENAI_API_KEY` (sem ela, 503). **Inoperante:** usa `openai.ChatCompletion`, removido no SDK `>=1.0`, e `requirements.txt` fixa `openai==1.109.1`.
+- **Assistente de IA** (`assistente_ia.py`, rotas `/ia/*`): Claude pelo SDK `anthropic` (padrão `claude-opus-5-5`, saída em JSON com schema, `effort` médio e *fallback* de recusa do servidor) ou OpenAI pelo SDK `openai` (`json_schema` estrito, `store=false`). Provedor, modelo, chaves e limites ficam em Configurações > Plataforma > Inteligência artificial; a chave salva na tela fica cifrada e nunca volta para a tela (sem ela, usa `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` do servidor). O texto enviado sai para o provedor escolhido.
 - **Bing Web Search API v7** (`plagio.py`): requer `BING_API_KEY`. O texto analisado sai do sistema para um serviço externo.
 - **Google reCAPTCHA** (`routes/auth.py`): requer `RECAPTCHA_SECRET_KEY`; sem a chave ou sem resposta do Google, o login é recusado (*fail-closed*).
 - **Dicio (`dicio.com.br`)** (`dicionario.py`): requisição HTTP e regex sobre HTML.
@@ -355,6 +356,13 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 - Plataforma (só admin geral, visão global): política de senha e sessão para todas as bancas, com limites seguros (ex.: senha mínima de 8 a 64).
 - Banca (administrador do cliente): sessão mais curta que a da plataforma (nunca mais longa), instruções impressas por bloco/disciplina e da discursiva (padrão = textos anteriores, prova idêntica enquanto não editar), tipos de questão usados e revisão obrigatória para exportar (vira bloqueio na checagem).
 - Pessoal (`/minha-conta`, qualquer perfil): trocar a própria senha (senha atual + código do autenticador) e gerar novos códigos de recuperação.
+
+**Assistente de IA** (`assistente_ia.py`, `routes/ia.py`, tabela `uso_ia` cifrada e com RLS)
+- Desligado por padrão. Só funciona se o admin geral ligar na plataforma **e** o administrador da banca ligar na banca; a banca escolhe os recursos e escreve orientações de estilo que vão em todo pedido.
+- A IA recebe só o texto que o usuário mandou naquele clique: nada é lido do banco para a IA (nem prova montada, nem gabaritos de outras questões, nem nomes). HTML vira texto puro e imagens/base64 são removidas antes de sair.
+- O texto enviado e o recebido nunca são gravados nem registrados em log. `uso_ia` guarda só usuário, data, tokens, sucesso e (cifrados) recurso, provedor, modelo e erro; a banca vê o resumo em Configurações > IA da banca.
+- Respostas sempre em JSON com formato fixo e chegam como rascunho: o usuário escolhe o que aplicar e revisa antes de salvar. O conteúdo do usuário vai marcado como material, não como instrução.
+- Limites: por usuário/dia (a banca pode reduzir), por banca/dia e 20 pedidos por minuto. Diagramador não usa.
 
 **Autenticação e HTTP**
 - Política de senha (`politica_senha.py`): mínimo de 12 caracteres e 3 de 4 tipos, sem usuário/e-mail, sem senha comum ou sequência, sem repetir as 5 últimas (histórico bcrypt cifrado), validade de 180 dias. Senha definida por administrador é provisória. Troca obrigatória (provisória, vencida ou fora da política) acontece depois do 2FA e antes do acesso. Trocar a própria senha exige a senha atual e um código do autenticador.
@@ -410,7 +418,8 @@ Copie `.env.example` para `.env` e preencha. Nunca versione o `.env`.
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_PLATFORM_POOL_SIZE`, `DB_PLATFORM_MAX_OVERFLOW` | Não | Pools de conexão |
 | `CORS_ORIGINS`, `ENABLE_HSTS`, `RATE_LIMIT_ENABLED` | Não | HTTP e rate limit |
 | `RECAPTCHA_SECRET_KEY` | **Obrigatória** | Sem ela, nenhum login é aceito (`DIAGPRO_RECAPTCHA_DESATIVADO=1` só em testes) |
-| `OPENAI_API_KEY`, `OPENAI_MODEL`, `BING_API_KEY` | Não | Integrações externas |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Não | Chave de IA de reserva (a salva em Configurações > Plataforma tem prioridade) |
+| `BING_API_KEY` | Não | Verificação de plágio |
 | `REDIS_URL`, `S3_*`, `LOCAL_STORAGE_DIR` | Não | Rate limit compartilhado e `storage.py` |
 
 ### Preparar um ambiente novo
@@ -461,7 +470,7 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, 31 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py` e `tests/test_assistente_ia.py`, 33 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
@@ -474,6 +483,7 @@ Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagp
 | Gestão multi-cliente | `test_tenant_change_without_reencryption_is_blocked_by_database`, `test_admin_geral_must_choose_valid_tenant_to_create_event`, `test_admin_geral_global_view_and_managed_client_isolation` |
 | Questões e conteúdos | `test_question_types_create_edit_review_and_professor_contents` |
 | Prova pronta e gabarito | `test_finished_exam_and_answer_key_require_event_password`, `test_generator_refuses_ciphertext`, `test_cors_preflight_allows_app_custom_headers`, `test_exam_seed_is_secret_reproducible_and_legacy_compatible`, `test_export_preferences_and_precheck_endpoints`, `test_generator_renders_editor_html_inline_and_answer_lines` |
+| Assistente de IA | `test_ai_assistant_rules_secrecy_and_limits`, `test_ai_text_is_stripped_of_html_and_images` (provedor falso; nunca chama IA real) |
 | HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
 
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.

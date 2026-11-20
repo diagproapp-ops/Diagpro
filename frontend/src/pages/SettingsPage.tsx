@@ -25,6 +25,10 @@ import AuditTab from './SettingsTabs/AuditTab';
 import AdminClientsTab from './AdminClientsTab';
 import PlataformaSegurancaTab from './SettingsTabs/PlataformaSegurancaTab';
 import BancaConfigTab from './SettingsTabs/BancaConfigTab';
+import PlataformaIATab from './SettingsTabs/PlataformaIATab';
+import BancaIATab from './SettingsTabs/BancaIATab';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import LockClockOutlinedIcon from '@mui/icons-material/LockClockOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
@@ -44,7 +48,9 @@ type SectionKey =
   | 'plataforma_seguranca'
   | 'banca_seguranca'
   | 'banca_identidade'
-  | 'banca_regras';
+  | 'banca_regras'
+  | 'banca_ia'
+  | 'plataforma_ia';
 
 function SettingsPage() {
   const { user } = useAuth();
@@ -183,6 +189,14 @@ function SettingsPage() {
       icon: <RuleOutlinedIcon fontSize="small" />,
       badge: 'Novo',
     },
+    {
+      key: 'banca_ia' as SectionKey,
+      group: 'BANCA',
+      title: 'IA da banca',
+      desc: 'Liga o assistente de IA, escolhe os recursos, orienta o estilo e mostra o uso.',
+      icon: <AutoAwesomeOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
     ...(isAdminGeral
       ? [{
         key: 'plataforma_seguranca' as SectionKey,
@@ -190,6 +204,13 @@ function SettingsPage() {
         title: 'Segurança da plataforma',
         desc: 'Política de senha e sessão para todas as bancas.',
         icon: <ShieldOutlinedIcon fontSize="small" />,
+        badge: 'Novo',
+      }, {
+        key: 'plataforma_ia' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'Inteligência artificial',
+        desc: 'Provedor (Claude ou OpenAI), modelo, chaves cifradas e limites diários.',
+        icon: <SmartToyOutlinedIcon fontSize="small" />,
         badge: 'Novo',
       }]
       : []),
@@ -300,6 +321,10 @@ function SettingsPage() {
               <ListItemIcon><RuleOutlinedIcon fontSize="small" /></ListItemIcon>
               <ListItemText primary="Regras das questões" />
             </ListItemButton>
+            <ListItemButton selected={section === 'banca_ia'} onClick={() => setSection('banca_ia')} sx={subNavSx(section === 'banca_ia')}>
+              <ListItemIcon><AutoAwesomeOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="IA da banca" />
+            </ListItemButton>
 
             {isAdminGeral && (
               <>
@@ -307,6 +332,10 @@ function SettingsPage() {
                 <ListItemButton selected={section === 'plataforma_seguranca'} onClick={() => setSection('plataforma_seguranca')} sx={subNavSx(section === 'plataforma_seguranca')}>
                   <ListItemIcon><ShieldOutlinedIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="Segurança da plataforma" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_ia'} onClick={() => setSection('plataforma_ia')} sx={subNavSx(section === 'plataforma_ia')}>
+                  <ListItemIcon><SmartToyOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Inteligência artificial" />
                 </ListItemButton>
               </>
             )}
@@ -460,6 +489,8 @@ function SettingsPage() {
               {section === 'banca_identidade' && <BancaConfigTab key="ide" secao="identidade" />}
               {section === 'banca_regras' && <BancaConfigTab key="reg" secao="regras" />}
               {section === 'plataforma_seguranca' && isAdminGeral && <PlataformaSegurancaTab />}
+              {section === 'banca_ia' && <BancaIATab />}
+              {section === 'plataforma_ia' && isAdminGeral && <PlataformaIATab />}
             </Box>
           )}
         </Box>

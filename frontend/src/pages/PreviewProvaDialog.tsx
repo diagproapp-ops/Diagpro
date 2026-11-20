@@ -21,6 +21,7 @@ import {
   TableHead,
 } from '@mui/material';
 import WarningIcon from '@mui/icons-material/Warning';
+import MarcaDagua from '../components/MarcaDagua';
 import DoneIcon from '@mui/icons-material/Done';
 
 type QuestaoResumo = {
@@ -106,6 +107,7 @@ const PreviewProvaDialog: React.FC<PreviewProvaDialogProps> = ({
         />
       </DialogTitle>
       <DialogContent>
+        <MarcaDagua>
         {/* Resumo geral */}
         <Box sx={{ mb: 2 }}>
           <Typography variant="h6">{prova.titulo_prova || prova.nome_prova_montada}</Typography>
@@ -269,6 +271,7 @@ const PreviewProvaDialog: React.FC<PreviewProvaDialogProps> = ({
           )}
           <Button variant="text" color="inherit" onClick={onClose}>Fechar</Button>
         </Stack>
+        </MarcaDagua>
       </DialogContent>
     </Dialog>
   );

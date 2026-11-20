@@ -18,6 +18,16 @@ from sqlalchemy import text
 from backend.app.database import SessionLocal
 from backend.app.routes.ia import router as ia_router
 from backend.app.routes.notificacoes import router as notificacoes_router
+from backend.app.routes.revisao import router as revisao_router
+from backend.app.routes.versoes import router as versoes_router
+from backend.app.routes.sistema import router as sistema_router
+from backend.app.routes.lgpd import router as lgpd_router
+from backend.app.routes.entregas import router as entregas_router
+from backend.app.routes.estatisticas import router as estatisticas_router
+from backend.app.routes.recursos import router as recursos_router
+from backend.app import entregas as _entregas
+from backend.app import lgpd as _lgpd
+from backend.app import backups as _backups
 from backend.app import notificacoes as _notificacoes
 from backend.app.routes.plagio import router as plagio_router
 from backend.app.routes.biblioteca import router as biblioteca_router
@@ -40,6 +50,34 @@ from backend.app.routes.files import router as files_router
 
 # Aqui está o segredo!
 app = FastAPI(multipart_params={"max_part_size": 50 * 1024 * 1024})  # 50 MB por parte
+
+# Modo manutenção: registrado ANTES do CORS para que o 503 saia com os cabeçalhos CORS (a tela lê a mensagem).
+_LIVRES_NA_MANUTENCAO = ("/auth/", "/status/", "/lgpd/documentos", "/docs", "/openapi.json")
+
+
+@app.middleware("http")
+async def modo_manutencao_middleware(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path.startswith(_LIVRES_NA_MANUTENCAO):
+        return await call_next(request)
+    from backend.app import configuracoes as _cfg
+    try:
+        man = (await _cfg.ler_plataforma())["manutencao"]
+    except Exception:
+        return await call_next(request)  # sem banco, cada rota responde com o próprio erro
+    if man["ativa"]:
+        papel = None
+        auth_h = request.headers.get("authorization", "")
+        if auth_h.lower().startswith("bearer "):
+            try:
+                from backend.app.auth import decode_token_payload
+                papel = decode_token_payload(auth_h[7:]).get("role")
+            except Exception:
+                papel = None
+        if papel != "administrador geral":
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=503, content={"detail": man["mensagem"], "manutencao": True})
+    return await call_next(request)
+
 
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
@@ -66,7 +104,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
     if os.getenv("ENABLE_HSTS", "false").lower() == "true":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    if request.url.path.startswith(("/api/", "/auth/", "/users/", "/admin/")):
+    if request.url.path.startswith(("/api/", "/auth/", "/users/", "/admin/", "/entrega/", "/lgpd/")):
         response.headers.setdefault("Cache-Control", "no-store")
     return response
 
@@ -84,6 +122,13 @@ app.include_router(textos_referencia.router)
 app.include_router(questoes_router)
 app.include_router(ia_router)
 app.include_router(notificacoes_router)
+app.include_router(revisao_router)
+app.include_router(versoes_router)
+app.include_router(sistema_router)
+app.include_router(lgpd_router)
+app.include_router(entregas_router)
+app.include_router(estatisticas_router)
+app.include_router(recursos_router)
 
 
 @app.on_event("startup")
@@ -92,6 +137,10 @@ async def _iniciar_fila_de_email():
     import asyncio
     if _notificacoes.fila_ligada():
         app.state.fila_email = asyncio.create_task(_notificacoes.laco_da_fila())
+    if _backups.agendador_ligado():
+        app.state.backup_agendado = asyncio.create_task(_backups.laco_agendado())
+        app.state.retencao_lgpd = asyncio.create_task(_lgpd.laco_retencao())
+        app.state.limpeza_entregas = asyncio.create_task(_entregas.laco_limpeza())
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")

@@ -119,6 +119,101 @@ class Sessao(Base):
     detalhes = Column(Ciphertext, nullable=False)  # {ip, navegador, sistema}
 
 
+class VersaoQuestao(Base):
+    """Cópia completa (cifrada) de uma questão a cada salvamento: histórico e restauração."""
+    __tablename__ = "versoes_questao"
+    __table_args__ = (UniqueConstraint("id_questao_fk", "versao", name="uq_versoes_questao_versao"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    id_questao_fk = Column(String, ForeignKey("QuestoesBanco.id_questao", ondelete="CASCADE"), nullable=False, index=True)
+    versao = Column(Integer, nullable=False)
+    criada_em = Column(DateTime, nullable=False)
+    motivo = Column(String(30), nullable=False)
+    autor = Column(Ciphertext, nullable=True)
+    snapshot = Column(Ciphertext, nullable=False)
+
+
+class RegistroLGPD(Base):
+    """Prestação de contas LGPD: exportação de dados, anonimização, aceite de termos, limpezas por retenção."""
+    __tablename__ = "registros_lgpd"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    titular_id = Column(Integer, nullable=True)
+    autor_id = Column(Integer, nullable=True)
+    acao = Column(String(30), nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    detalhes = Column(Ciphertext, nullable=True)
+
+
+class Entrega(Base):
+    """Pacote de prova entregue por link com código, validade e limite de downloads (arquivo cifrado)."""
+    __tablename__ = "entregas"
+    id = Column(String(32), primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False, index=True)
+    criado_por = Column(Integer, nullable=True)
+    criado_em = Column(DateTime, nullable=False)
+    expira_em = Column(DateTime, nullable=False)
+    max_downloads = Column(Integer, nullable=False)
+    downloads = Column(Integer, nullable=False, default=0)
+    falhas_codigo = Column(Integer, nullable=False, default=0)
+    encerrada_em = Column(DateTime, nullable=True)
+    motivo_encerramento = Column(String(30), nullable=True)
+    codigo_hash = Column(String(100), nullable=False)
+    arquivo = Column(Ciphertext, nullable=True)
+    detalhes = Column(Ciphertext, nullable=False)
+
+
+class AnaliseProva(Base):
+    """Estatísticas pós-prova de um cargo: só agregados por questão (nenhum dado de candidato)."""
+    __tablename__ = "analises_prova"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False)
+    cargo_id = Column(String, nullable=False)
+    criada_em = Column(DateTime, nullable=False)
+    criada_por = Column(Integer, nullable=True)
+    n_candidatos = Column(Integer, nullable=False)
+    resultado = Column(Ciphertext, nullable=False)
+
+
+class Recurso(Base):
+    """Recurso de candidato sobre uma questão de um caderno (só protocolo e argumentação, cifrados)."""
+    __tablename__ = "recursos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False)
+    cargo_id = Column(String, nullable=False)
+    tipo_prova = Column(String(30), nullable=False)
+    numero_questao = Column(Integer, nullable=False)
+    id_questao = Column(String, nullable=False)
+    item = Column(Integer, nullable=True)
+    pedido = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+    protocolo = Column(Ciphertext, nullable=True)
+    argumentacao = Column(Ciphertext, nullable=True)
+    parecer = Column(Ciphertext, nullable=True)
+    parecer_por = Column(Integer, nullable=True)
+
+
+class DecisaoRecurso(Base):
+    """Decisão da banca sobre uma questão (ou item de Certo/Errado) após os recursos."""
+    __tablename__ = "decisoes_recurso"
+    __table_args__ = (UniqueConstraint("evento_id", "id_questao", "item", name="uq_decisao_recurso"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False)
+    id_questao = Column(String, nullable=False)
+    item = Column(Integer, nullable=True)
+    decisao = Column(String(20), nullable=False)
+    nova_correta = Column(String(5), nullable=True)
+    decidido_em = Column(DateTime, nullable=False)
+    decidido_por = Column(Integer, nullable=True)
+    justificativa = Column(Ciphertext, nullable=True)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

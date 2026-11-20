@@ -22,6 +22,10 @@ import {
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api";
 import Layout from "../components/Layout";
+import { ChipStatusRevisao } from "../components/statusRevisao";
+import { htmlParaTexto } from "../components/ia/iaComum";
+import HistoricoVersoesDialog, { confirmarSeHouverParecida } from "../components/HistoricoVersoesDialog";
+import HistoryIcon from "@mui/icons-material/History";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
 import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
@@ -149,6 +153,8 @@ export default function EditarQuestaoPage() {
   // Assistente de IA (só aparece se a plataforma e a banca ligarem)
   const statusIA = useStatusIA();
   const [iaAberto, setIaAberto] = useState(false);
+  const [historicoAberto, setHistoricoAberto] = useState(false);
+  const [dadosApi, setDadosApi] = useState<any>(null);
   const [sending, setSending] = useState(false);
 
   // Textos de Referência
@@ -186,8 +192,16 @@ export default function EditarQuestaoPage() {
         const { data } = await api.get<QuestaoFromApi>(
           `/eventos/${eventId}/conteudos/${id_conteudo}/questoes/${id_questao}`
         );
-        console.log("API data:", data);
-        console.log("caminho_imagem_relativo:", data.caminho_imagem_relativo);
+        setDadosApi(data);
+        preencherForm(data);
+      } catch (err) {
+        setSnackbar({ open: true, message: "Erro ao carregar questão.", severity: "error" });
+      }
+    }
+    if (id_questao) fetchQuestao();
+  }, [id_questao, eventId, id_conteudo]);
+
+  function preencherForm(data: any) {
         setForm(prev => ({
           ...prev,
           ...data,
@@ -216,12 +230,16 @@ export default function EditarQuestaoPage() {
         // Inicializa imagensItensComando para ter o mesmo tamanho dos itens do comando
         const itensQtde = data.itens_vf?.length ?? 1;
         setImagensItensComando(Array(itensQtde).fill(null));
-      } catch (err) {
-        setSnackbar({ open: true, message: "Erro ao carregar questão.", severity: "error" });
-      }
-    }
-    if (id_questao) fetchQuestao();
-  }, [id_questao, eventId, id_conteudo]);
+  }
+
+  // Questão no formato da API a partir do formulário (para comparar com versões antigas)
+  const formComoApi = () => ({
+    enunciado: form.enunciado,
+    alternativas: form.tipo === "MULTIPLA_ESCOLHA" ? form.alternativas.map(a => ({ letra: a.letra, texto: a.texto, correta: a.correta })) : [],
+    itens_vf: form.tipo === "CERTO_ERRADO" ? form.itens_comando.map((t, i) => ({ afirmacao: t, valor_correto: form.respostas_certo_errado[i] === "CERTO" })) : [],
+    justificativa_questao: form.justificativa_questao,
+    nivel_dificuldade: form.nivel_dificuldade,
+  });
 
   function handleAlternativaChange(idx: number, newData: Partial<AlternativaType>) {
     setForm(prev => ({
@@ -308,6 +326,10 @@ export default function EditarQuestaoPage() {
     }
 
     if (!validate()) {
+      setSending(false);
+      return;
+    }
+    if (!(await confirmarSeHouverParecida(form.enunciado, id_questao))) {
       setSending(false);
       return;
     }
@@ -404,6 +426,9 @@ export default function EditarQuestaoPage() {
             Editar Questão
           </Typography>
           <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            <Button variant="outlined" startIcon={<HistoryIcon />} onClick={() => setHistoricoAberto(true)}>
+              Histórico de versões
+            </Button>
             {statusIA.disponivel && (
               <Button variant="contained" color="secondary" startIcon={<AutoAwesomeIcon />} onClick={() => setIaAberto(true)}>
                 Assistente de IA
@@ -414,9 +439,22 @@ export default function EditarQuestaoPage() {
             </Button>
           </Box>
         </Box>
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ mt: 1, mb: 1 }}>
+        <Typography variant="subtitle1" fontWeight="bold" sx={{ mt: 1, mb: 1, display: "flex", alignItems: "center", gap: 1.5 }}>
           Código da Questão: {form.codigo_curto_questao || ""}
+          <ChipStatusRevisao status={(form as any).status_revisao} />
         </Typography>
+        {["AJUSTES", "REPROVADA"].includes(String((form as any).status_revisao || "")) && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <strong>{(form as any).status_revisao === "AJUSTES" ? "A revisão pediu ajustes." : "A revisão reprovou esta questão."}</strong>
+            {(form as any).observacao_revisor ? <> Observação do revisor: {htmlParaTexto((form as any).observacao_revisor)}</> : null}
+            {" "}Corrija e use "Enviar para revisão" na lista de questões do conteúdo.
+          </Alert>
+        )}
+        {String((form as any).status_revisao || "") === "APROVADA" && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Esta questão está aprovada. Se você salvar alterações, ela volta para elaboração e precisa ser revisada de novo.
+          </Alert>
+        )}
         {form.autor_elaborador && (
           <Typography variant="subtitle2" sx={{ color: "text.secondary", mb: 1 }}>
             Autor: {form.autor_elaborador}
@@ -860,6 +898,18 @@ export default function EditarQuestaoPage() {
           {snackbar.message}
         </Alert>
       </Snackbar>
+      <HistoricoVersoesDialog
+        open={historicoAberto}
+        onClose={() => setHistoricoAberto(false)}
+        base={`/eventos/${eventId}/conteudos/${id_conteudo}/questoes/${id_questao}`}
+        atual={formComoApi()}
+        onRestaurar={(q, versao) => {
+          // mantém o que é da questão hoje (código, estado da revisão); o resto vem da versão escolhida
+          preencherForm({ ...q, codigo_curto_questao: form.codigo_curto_questao, status_revisao: (form as any).status_revisao,
+            observacao_revisor: (form as any).observacao_revisor, caminho_imagem_relativo: (dadosApi || {}).caminho_imagem_relativo });
+          setSnackbar({ open: true, message: `Versão ${versao} trazida para o formulário. Confira e salve para valer.`, severity: "info" });
+        }}
+      />
       {iaAberto && (
         <AssistenteIAQuestao
           open={iaAberto}

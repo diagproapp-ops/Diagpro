@@ -4,7 +4,7 @@ import {
   Box, TextField, Button, Typography, Alert, Checkbox, FormControlLabel, MenuItem, Paper, Stack, Avatar
 } from '@mui/material';
 import PhotoCamera from '@mui/icons-material/PhotoCamera';
-// Importe seu logo se tiver. Exemplo: import DiagProLogo from '../assets/diagpro_logo.png';
+import DiagProLogo from '../components/DiagProLogo';
 import api from '../api';
 
 type PublicUserForm = {
@@ -152,10 +152,8 @@ export default function PublicRegisterPage() {
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', display: 'flex', alignItems: 'center' }}>
       <Paper elevation={4} sx={{ p: { xs: 2, md: 4 }, maxWidth: 520, mx: 'auto', borderRadius: 5 }}>
         {/* LOGO E NOME NO TOPO */}
-        <Stack direction="column" alignItems="center" spacing={1} sx={{ mb: 2 }}>
-          {/* Substitua pelo seu logo se quiser */}
-          <Avatar sx={{ width: 64, height: 64, mb: 1, bgcolor: "primary.main", fontWeight: "bold" }}>D</Avatar>
-          <Typography variant="h4" fontWeight="bold" color="primary">DiagPro</Typography>
+        <Stack direction="column" alignItems="center" sx={{ mb: 2.5 }}>
+          <DiagProLogo variant="stacked" showSlogan />
         </Stack>
         <Typography color="text.secondary" align="center" gutterBottom>
           Preencha todos os campos obrigatórios para realizar seu cadastro.

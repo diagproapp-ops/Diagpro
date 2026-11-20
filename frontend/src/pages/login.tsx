@@ -3,6 +3,7 @@ import ReCAPTCHA from 'react-google-recaptcha';
 import { useAuth } from '../contexts/AuthContext';
 import DoisFatoresDialog from '../components/DoisFatoresDialog';
 import TrocarSenhaDialog from '../components/TrocarSenhaDialog';
+import DiagProLogo, { DiagProIcon } from '../components/DiagProLogo';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -355,6 +356,15 @@ export default function LoginPage() {
                   boxShadow: '0 28px 65px -15px rgba(0, 0, 0, 0.9)',
                 }}
               >
+                <Box
+                  sx={{
+                    pb: 2,
+                    mb: 2.25,
+                    borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+                  }}
+                >
+                  <DiagProLogo variant="compact" />
+                </Box>
                 <Typography
                   sx={{
                     fontSize: '0.66rem',
@@ -613,35 +623,21 @@ export default function LoginPage() {
                   </svg>
                 </Box>
 
-                {/* Orbital Dual-Arc Brand Icon (Operan Logo Style) */}
+                {/* Ícone oficial DiagPro */}
                 <Box
                   sx={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: '50%',
-                    bgcolor: 'rgba(3, 10, 28, 0.75)',
+                    width: 44,
+                    height: 44,
+                    borderRadius: '12px',
+                    bgcolor: 'rgba(3, 10, 28, 0.78)',
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5)',
                   }}
                 >
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M6 9.5A6.5 6.5 0 0 1 17.5 8"
-                      stroke="#38BDF8"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M18 14.5A6.5 6.5 0 0 1 6.5 16"
-                      stroke="#2563EB"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                    />
-                    <circle cx="18" cy="8.5" r="1.7" fill="#67E8F9" />
-                    <circle cx="6" cy="15.5" r="1.7" fill="#38BDF8" />
-                  </svg>
+                  <DiagProIcon size={28} color="#22D3EE" />
                 </Box>
 
                 {/* Center Headline */}
@@ -681,12 +677,12 @@ export default function LoginPage() {
                       sx={{
                         fontSize: '0.66rem',
                         fontWeight: 500,
-                        letterSpacing: '0.2em',
+                        letterSpacing: '0.18em',
                         color: '#94A3B8',
                         textTransform: 'uppercase',
                       }}
                     >
-                      GESTÃO DE CONCURSOS E PROVAS EM REDE
+                      CONCURSOS MAIS ORGANIZADOS. RESULTADOS COM PRECISÃO.
                     </Typography>
                     <Box
                       sx={{

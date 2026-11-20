@@ -29,12 +29,22 @@ import GabaritoPage from './pages/GabaritoPage';
 import TemplatesPage from './pages/TemplatesPage';
 import PublicRegisterPage from './pages/PublicRegisterPage';
 import MinhaContaPage from './pages/MinhaContaPage';
+import FilaRevisaoPage from './pages/FilaRevisaoPage';
+import PainelBancaPage from './pages/PainelBancaPage';
+import EstatisticasProvaPage from './pages/EstatisticasProvaPage';
+import RecursosCandidatosPage from './pages/RecursosCandidatosPage';
+import AvisoManutencao from './components/AvisoManutencao';
+import AceiteTermos from './components/AceiteTermos';
+import DocumentoLegalPage from './pages/DocumentoLegalPage';
+import EntregaPublicaPage from './pages/EntregaPublicaPage';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
 
   return (
     <CustomThemeProvider>
+      <AvisoManutencao />
+      {isAuthenticated && !loading && <AceiteTermos />}
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
           <CircularProgress />
@@ -42,6 +52,10 @@ function App() {
       ) : (
         <Router>
           <Routes>
+            {/* públicas para todos (LGPD) */}
+            <Route path="/privacidade" element={<DocumentoLegalPage tipo="politica" />} />
+            <Route path="/termos" element={<DocumentoLegalPage tipo="termos" />} />
+            <Route path="/entrega/:id" element={<EntregaPublicaPage />} />
             {!isAuthenticated ? (
               <>
                 <Route path="/login" element={<LoginPage />} />
@@ -74,6 +88,10 @@ function App() {
                     <Route path="/eventos/:eventId" element={<EventoDetalhesPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/minha-conta" element={<MinhaContaPage />} />
+                    <Route path="/revisao" element={<FilaRevisaoPage />} />
+                    <Route path="/painel" element={<PainelBancaPage />} />
+                    <Route path="/eventos/:eventId/estatisticas" element={<EstatisticasProvaPage />} />
+                    <Route path="/eventos/:eventId/candidatos/recursos" element={<RecursosCandidatosPage />} />
                     <Route path="/eventos/:eventId/cargo" element={<CargoManagerPage />} />
                     <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
                     <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />

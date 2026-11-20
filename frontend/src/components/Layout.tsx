@@ -33,8 +33,12 @@ import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SearchIcon from '@mui/icons-material/Search';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
 import SinoNotificacoes from './SinoNotificacoes';
+import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import QueryStatsOutlinedIcon from '@mui/icons-material/QueryStatsOutlined';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
-import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
+import { DiagProIcon, DIAGPRO_SLOGAN } from './DiagProLogo';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api, { CLIENTE_EM_GESTAO_KEY } from '../api';
@@ -180,6 +184,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     user?.role === 'admin';
 
   const isProfessor = user?.role === 'professor';
+  const podeVerFilaRevisao = ['revisor', 'administrador', 'administrador geral'].includes(String(user?.role || ''));
 
   const displayName = user?.full_name || user?.username || 'Usuário';
   const roleLabel = (user?.role || 'usuário').toUpperCase();
@@ -202,6 +207,12 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           { label: 'Gabaritos & Variações', sub: eventoCabecalho?.nome_evento || 'Evento ativo', path: `/eventos/${eventId}/recursos` },
           { label: 'Templates de Prova', sub: eventoCabecalho?.nome_evento || 'Evento ativo', path: `/eventos/${eventId}/templates` },
         ]
+      : []),
+    ...(podeVerFilaRevisao
+      ? [{ label: 'Fila de revisão', sub: 'Questões aguardando revisão', path: '/revisao' }]
+      : []),
+    ...(isAdmin
+      ? [{ label: 'Painel da banca', sub: 'Andamento de eventos, elaboração e revisão', path: '/painel' }]
       : []),
     ...(isAdmin
       ? [{ label: 'Configurações & Governança', sub: 'Usuários, banca, frases, clientes e temas', path: '/settings' }]
@@ -380,60 +391,53 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         }}
       >
         {/* Brand Header */}
-        <Box
-          onClick={() => navigate(isProfessor ? '/conteudos' : '/dashboard')}
-          sx={{
-            px: 2.5,
-            py: 2.25,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1.5,
-            borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
-            cursor: 'pointer',
-          }}
-        >
+        <Tooltip title={DIAGPRO_SLOGAN} placement="right">
           <Box
+            onClick={() => navigate(isProfessor ? '/conteudos' : '/dashboard')}
             sx={{
-              width: 36,
-              height: 36,
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%)',
+              px: 2.5,
+              py: 2.25,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 14px rgba(14, 165, 233, 0.4)',
+              gap: 1.5,
+              borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
+              cursor: 'pointer',
+              transition: 'background-color 0.18s ease',
+              '&:hover': { bgcolor: 'rgba(14, 165, 233, 0.06)' },
             }}
           >
-            <AutoAwesomeMosaicIcon sx={{ fontSize: 20, color: '#FFF' }} />
-          </Box>
-          <Box sx={{ minWidth: 0 }}>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography sx={{ fontWeight: 800, fontSize: '1.02rem', letterSpacing: '0.03em', color: '#F8FAFC' }}>
-                DIAGPRO
-              </Typography>
-              <Box
-                sx={{
-                  px: 0.85,
-                  py: 0.1,
-                  borderRadius: '6px',
-                  fontSize: '0.65rem',
-                  fontWeight: 700,
-                  color: '#38BDF8',
-                  bgcolor: 'rgba(14, 165, 233, 0.14)',
-                  border: '1px solid rgba(56, 189, 248, 0.4)',
-                }}
-              >
-                PRO
-              </Box>
-            </Stack>
-            <Typography
-              noWrap
-              sx={{ fontSize: '0.72rem', color: '#64748B', mt: 0.15 }}
+            <Box
+              sx={{
+                width: 40,
+                height: 40,
+                borderRadius: '10px',
+                background: 'rgba(14, 165, 233, 0.1)',
+                border: '1px solid rgba(56, 189, 248, 0.28)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 14px rgba(14, 165, 233, 0.18)',
+                flexShrink: 0,
+              }}
             >
-              Gestão de Concursos & Provas
-            </Typography>
+              <DiagProIcon size={30} color="#00B4D8" />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={0.85} alignItems="center">
+                <Typography sx={{ fontWeight: 800, fontSize: '1.14rem', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+                  <Box component="span" sx={{ color: '#F8FAFC' }}>Diag</Box>
+                  <Box component="span" sx={{ color: '#0EA5E9' }}>Pro</Box>
+                </Typography>
+              </Stack>
+              <Typography
+                noWrap
+                sx={{ fontSize: '0.7rem', color: '#94A3B8', mt: 0.25 }}
+              >
+                Concursos mais organizados.
+              </Typography>
+            </Box>
           </Box>
-        </Box>
+        </Tooltip>
 
         {/* Scrollable Navigation Sections */}
         <Box sx={{ overflowY: 'auto', flexGrow: 1, py: 1 }}>
@@ -457,6 +461,28 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 >
                   <ListItemIcon><SubjectIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="Meus Conteúdos" />
+                </ListItemButton>
+              </ListItem>
+            )}
+            {isAdmin && (
+              <ListItem disablePadding>
+                <ListItemButton
+                  onClick={() => navigate('/painel')}
+                  sx={navItemSx(location.pathname.startsWith('/painel'))}
+                >
+                  <ListItemIcon><InsightsOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Painel da banca" />
+                </ListItemButton>
+              </ListItem>
+            )}
+            {podeVerFilaRevisao && (
+              <ListItem disablePadding>
+                <ListItemButton
+                  onClick={() => navigate('/revisao')}
+                  sx={navItemSx(location.pathname.startsWith('/revisao'))}
+                >
+                  <ListItemIcon><FactCheckOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Fila de revisão" />
                 </ListItemButton>
               </ListItem>
             )}
@@ -522,6 +548,28 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     <ListItemText primary="Gabaritos & Recursos" />
                   </ListItemButton>
                 </ListItem>
+                {isAdmin && (
+                  <ListItem disablePadding>
+                    <ListItemButton
+                      onClick={() => navigate(`/eventos/${eventId}/estatisticas`)}
+                      sx={navItemSx(isActiveSubroute(`/eventos/${eventId}/estatisticas`))}
+                    >
+                      <ListItemIcon><QueryStatsOutlinedIcon fontSize="small" /></ListItemIcon>
+                      <ListItemText primary="Estatísticas pós-prova" />
+                    </ListItemButton>
+                  </ListItem>
+                )}
+                {isAdmin && (
+                  <ListItem disablePadding>
+                    <ListItemButton
+                      onClick={() => navigate(`/eventos/${eventId}/candidatos/recursos`)}
+                      sx={navItemSx(isActiveSubroute(`/eventos/${eventId}/candidatos/recursos`))}
+                    >
+                      <ListItemIcon><GavelOutlinedIcon fontSize="small" /></ListItemIcon>
+                      <ListItemText primary="Recursos dos candidatos" />
+                    </ListItemButton>
+                  </ListItem>
+                )}
                 <ListItem disablePadding>
                   <ListItemButton
                     onClick={() => navigate(`/eventos/${eventId}/templates`)}

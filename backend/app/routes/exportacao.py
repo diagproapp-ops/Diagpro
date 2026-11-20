@@ -13,6 +13,7 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from backend.app import secure_files
+from backend.app import entregas as _entregas
 from backend.app.security import get_tenant_db, is_admin_geral, require_roles
 from backend.app.jobs import create_job, get_job_for_tenant, update_job
 from backend.app.rate_limit import rate_limit
@@ -879,6 +880,18 @@ async def gerar_todos_arquivos_multiplos(
     nome_evento = evento.nome_evento.strip().replace(" ", "_")
     senha_evento = evento.senha_evento_cripto  # usada para cifrar o ZIP
 
+    # Entrega por link (em vez de baixar agora): validada ANTES de gerar qualquer arquivo
+    entrega_cfg = body.get("entrega")
+    if entrega_cfg is not None:
+        horas, max_dl = entrega_cfg.get("horas"), entrega_cfg.get("max_downloads")
+        destinatario = str(entrega_cfg.get("destinatario") or "").strip()
+        if (not isinstance(horas, int) or isinstance(horas, bool) or not 1 <= horas <= 72
+                or not isinstance(max_dl, int) or isinstance(max_dl, bool) or not 1 <= max_dl <= 5
+                or not destinatario or len(destinatario) > 120):
+            raise HTTPException(status_code=400, detail="Entrega: validade de 1 a 72 h, de 1 a 5 downloads e o destinatário.")
+        if body.get("exibir_gabarito_marcado"):
+            raise HTTPException(status_code=400, detail="Pacote com gabarito marcado é de uso interno e não pode ser entregue por link.")
+
     # Opções de formatação e exportação
     fonte = body.get("fonte", "Calibri")
     tamanhoFonte = body.get("tamanhoFonte", 12)
@@ -1146,6 +1159,16 @@ async def gerar_todos_arquivos_multiplos(
                     "template": bool(template), "falhas": falhas},
         arquivos=[(arc, path) for path, arc in arquivos_para_zip],
     )
+    if entrega_cfg is not None:
+        with open(zip_path, "rb") as fh:
+            dados_zip = fh.read()
+        entrega, codigo = _entregas.criar(db, evento.tenant_id, evento_id, current_user.id, dados_zip, nome_zip,
+                                          horas, max_dl, destinatario, [v["cargo"] for v in verificacoes])
+        await db.commit()
+        logger.warning("Entrega %s criada por %s (evento %s, %s h, %s download(s))", entrega.id, current_user.id, evento_id, horas, max_dl)
+        # o código aparece só aqui, uma única vez
+        return {"entrega": _entregas.publico(entrega), "codigo": codigo, "falhas": falhas, "avisos": len(avisos_txt)}
+
     resposta = _resposta_arquivo(zip_path, nome_zip, "application/zip")
     resposta.headers["X-Exportacao-Falhas"] = str(falhas)
     resposta.headers["X-Exportacao-Avisos"] = str(len(avisos_txt))

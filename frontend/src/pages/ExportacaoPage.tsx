@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Paper, Divider, Button, List, ListItem, ListItemIcon, ListItemText,
   Checkbox, Snackbar, Alert, CircularProgress, Tooltip, Stack, FormControlLabel,
-  Select, MenuItem, InputLabel, FormControl, TextField, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions, IconButton
+  Select, MenuItem, InputLabel, FormControl, TextField, LinearProgress, Dialog, DialogTitle, DialogContent, DialogActions, IconButton,
+  ToggleButton, ToggleButtonGroup
 } from '@mui/material';
 import AssignmentIndIcon from '@mui/icons-material/AssignmentInd';
 import DescriptionIcon from '@mui/icons-material/Description';
@@ -17,6 +18,22 @@ import api from '../api';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import EntregaPorLink from '../components/EntregaPorLink';
+
+function sanitizePreviewHtml(rawHtml: string): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(rawHtml || '', 'text/html');
+  doc.querySelectorAll('script, iframe, object, embed, link, meta').forEach((el) => el.remove());
+  doc.querySelectorAll('*').forEach((el) => {
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      const val = attr.value.trim().toLowerCase();
+      if (name.startsWith('on') || /^javascript:/i.test(val)) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+  return doc.body.innerHTML;
+}
 
 type Cargo = {
   id_cargo: string;
@@ -46,6 +63,20 @@ const ExportacaoProvaPage: React.FC = () => {
   const [selecionarTodos, setSelecionarTodos] = useState(true);
   const [filtroCargo, setFiltroCargo] = useState('');
   const [previewTemplateOpen, setPreviewTemplateOpen] = useState(false);
+  const [previewPartes, setPreviewPartes] = useState<{ headerHtml: string; bodyHtml: string; footerHtml: string }>({
+    headerHtml: '',
+    bodyHtml: '',
+    footerHtml: '',
+  });
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewErro, setPreviewErro] = useState<string | null>(null);
+
+  // Preview da prova real antes da exportação
+  const [previewProvaOpen, setPreviewProvaOpen] = useState(false);
+  const [previewProvaCargoId, setPreviewProvaCargoId] = useState('');
+  const [previewProvaLoading, setPreviewProvaLoading] = useState(false);
+  const [previewProvaErro, setPreviewProvaErro] = useState<string | null>(null);
+  const [previewProvaDados, setPreviewProvaDados] = useState<any | null>(null);
 
   // Opções de formatação e saída
   const [fonte, setFonte] = useState("Calibri");
@@ -60,7 +91,8 @@ const ExportacaoProvaPage: React.FC = () => {
   const [senha, setSenha] = useState('');
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [senhaCorreta, setSenhaCorreta] = useState(false);
-  
+  const [validandoSenha, setValidandoSenha] = useState(false);
+  const [erroSenha, setErroSenha] = useState<string | null>(null);
 
   // Barra de progresso da exportação
   const [exportando, setExportando] = useState(false);
@@ -81,25 +113,106 @@ const ExportacaoProvaPage: React.FC = () => {
     { open: false, message: '', severity: "success" }
   );
 
-  
-    const validarSenhaEvento = async (senhaDigitada: string) => {
-        try {
-            const resp = await api.post(`/api/export/eventos/${eventId}/validar-senha`, { senha: senhaDigitada });
-            setSenhaCorreta(resp.data && resp.data.valida === true);
-        } catch {
-            setSenhaCorreta(false);
-        }
-        };
+  const validarSenhaEvento = async (senhaDigitada: string) => {
+    const limpa = senhaDigitada.trim();
+    if (!limpa) {
+      setSenhaCorreta(false);
+      setErroSenha(null);
+      return;
+    }
+    setValidandoSenha(true);
+    setErroSenha(null);
+    try {
+      const resp = await api.post(`/api/export/eventos/${eventId}/validar-senha`, { senha: senhaDigitada });
+      const valida = Boolean(resp.data && resp.data.valida === true);
+      setSenhaCorreta(valida);
+      if (!valida) setErroSenha('Senha do evento incorreta.');
+    } catch (err: any) {
+      setSenhaCorreta(false);
+      if (err?.response?.status === 429) {
+        setErroSenha('Muitas tentativas seguidas. Aguarde 1 minuto antes de tentar novamente.');
+      } else {
+        setErroSenha('Não foi possível validar a senha.');
+      }
+    } finally {
+      setValidandoSenha(false);
+    }
+  };
 
-        const handleSenhaChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const valor = e.target.value;
-        setSenha(valor);
-        if (valor.length > 0) {
-            await validarSenhaEvento(valor);
-        } else {
-            setSenhaCorreta(false);
-        }
-        };
+  const handleSenhaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSenha(e.target.value);
+    setSenhaCorreta(false);
+    setErroSenha(null);
+  };
+
+  const abrirPreviewTemplate = async () => {
+    setPreviewTemplateOpen(true);
+    setPreviewPartes({ headerHtml: '', bodyHtml: '', footerHtml: '' });
+    setPreviewErro(null);
+    if (!templateSelecionado) return;
+    if (!templateSelecionado.toLowerCase().endsWith('.docx')) {
+      setPreviewErro('Visualização direta disponível apenas para templates .docx.');
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const res = await api.get<{ header_html?: string; body_html?: string; footer_html?: string }>(
+        `/api/eventos/${eventId}/templates/${encodeURIComponent(templateSelecionado)}/preview`
+      );
+      setPreviewPartes({
+        headerHtml: sanitizePreviewHtml(res.data?.header_html || ''),
+        bodyHtml: sanitizePreviewHtml(res.data?.body_html || ''),
+        footerHtml: sanitizePreviewHtml(res.data?.footer_html || ''),
+      });
+    } catch (err: any) {
+      setPreviewErro(err?.response?.data?.detail || 'Não foi possível carregar o preview deste template.');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // Pré-visualização = a prova gerada pelo MESMO código da exportação, com as MESMAS opções desta tela.
+  const carregarPreviewProvaReal = async (cargoIdAlvo: string, variacao = 1) => {
+    if (!cargoIdAlvo) return;
+    setPreviewProvaCargoId(cargoIdAlvo);
+    setPreviewProvaLoading(true);
+    setPreviewProvaErro(null);
+    setPreviewProvaDados(null);
+    try {
+      const res = await api.post(`/api/export/eventos/${eventId}/preview-prova`, {
+        cargo_id: cargoIdAlvo,
+        variacao,
+        fonte,
+        tamanhoFonte,
+        duasColunas,
+        quebraBloco,
+        manterDocx,
+        senha,
+        template: templateSelecionado,
+        exibir_codigo_curto_questao: exibirCodigoCurto,
+        exibir_gabarito_marcado: exibirGabaritoMarcado,
+      }, { timeout: 300000 });
+      setPreviewProvaDados(res.data);
+    } catch (err: any) {
+      setPreviewProvaErro(err?.response?.data?.detail || 'Não foi possível carregar o preview da prova real.');
+    } finally {
+      setPreviewProvaLoading(false);
+    }
+  };
+
+  const abrirPreviewProvaReal = () => {
+    const selecionados = cargosFiltrados.filter(c => c.selecionado);
+    if (!selecionados.length) {
+      setSnackbar({ open: true, message: "Selecione ao menos um cargo para pré-visualizar a prova.", severity: "warning" });
+      return;
+    }
+    if (!senhaCorreta) {
+      setSnackbar({ open: true, message: "Valide a senha do evento antes de pré-visualizar a prova real.", severity: "warning" });
+      return;
+    }
+    setPreviewProvaOpen(true);
+    carregarPreviewProvaReal(selecionados[0].id_cargo);
+  };
   // Carrega cargos que têm prova montada (igual tela geração)
   useEffect(() => {
     async function fetchCargos() {
@@ -313,30 +426,58 @@ const ExportacaoProvaPage: React.FC = () => {
 
         {/* Campo para senha do evento */}
         <Box sx={{ bgcolor: "background.default", border: "1px solid", borderColor: "divider", p: 2, borderRadius: 2, mb: 3 }}>
-          <TextField
-            label="Senha do Evento"
-                type={mostrarSenha ? "text" : "password"}
-                value={senha}
-                onChange={handleSenhaChange}
-                required
-                size="small"
-                fullWidth
-                InputProps={{
-                    endAdornment: (
-                    <IconButton
-                        onClick={() => setMostrarSenha(v => !v)}
-                        size="small"
-                        tabIndex={-1}
-                        edge="end"
-                        aria-label="mostrar senha"
-                    >
-                        {mostrarSenha ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                    </IconButton>
-                    )
-                }}
-                helperText={senha && !senhaCorreta ? "Senha incorreta!" : ""}
-                error={senha.length > 0 && !senhaCorreta}
-                />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'flex-start' }}>
+            <TextField
+              label="Senha do Evento"
+              type={mostrarSenha ? "text" : "password"}
+              value={senha}
+              onChange={handleSenhaChange}
+              onBlur={() => {
+                if (senha.trim() && !senhaCorreta && !validandoSenha) {
+                  validarSenhaEvento(senha);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  validarSenhaEvento(senha);
+                }
+              }}
+              required
+              size="small"
+              fullWidth
+              InputProps={{
+                endAdornment: (
+                  <IconButton
+                    onClick={() => setMostrarSenha(v => !v)}
+                    size="small"
+                    tabIndex={-1}
+                    edge="end"
+                    aria-label="mostrar senha"
+                  >
+                    {mostrarSenha ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                  </IconButton>
+                )
+              }}
+              helperText={
+                erroSenha
+                  ? erroSenha
+                  : senhaCorreta
+                    ? "Senha validada com sucesso."
+                    : "Digite a senha do evento e clique em Validar (ou pressione Enter)."
+              }
+              error={Boolean(erroSenha)}
+            />
+            <Button
+              variant={senhaCorreta ? "outlined" : "contained"}
+              color={senhaCorreta ? "success" : "primary"}
+              onClick={() => validarSenhaEvento(senha)}
+              disabled={!senha.trim() || validandoSenha}
+              sx={{ minWidth: 136, height: 40, flexShrink: 0 }}
+            >
+              {validandoSenha ? "Validando..." : senhaCorreta ? "Validada" : "Validar Senha"}
+            </Button>
+          </Stack>
         </Box>
 
         {/* 1. Seleção de Cargos */}
@@ -422,7 +563,7 @@ const ExportacaoProvaPage: React.FC = () => {
                 <Button
                   size="small"
                   startIcon={<PreviewIcon />}
-                  onClick={() => setPreviewTemplateOpen(true)}
+                  onClick={abrirPreviewTemplate}
                   variant="outlined"
                 >
                   Preview
@@ -533,7 +674,21 @@ const ExportacaoProvaPage: React.FC = () => {
         )}
 
         {/* Botões de ação */}
-        <Stack direction="row" spacing={2} justifyContent="flex-end" alignItems="center">
+        <Stack direction="row" spacing={2} justifyContent="flex-end" alignItems="center" flexWrap="wrap" useFlexGap>
+          <Button
+            variant="outlined"
+            size="large"
+            startIcon={<PreviewIcon />}
+            onClick={abrirPreviewProvaReal}
+            disabled={
+              carregando ||
+              !senhaCorreta ||
+              cargosFiltrados.filter(c => c.selecionado).length === 0 ||
+              exportando || verificando
+            }
+          >
+            Pré-visualizar Prova Real
+          </Button>
           <Button
             variant="contained"
             size="large"
@@ -587,32 +742,230 @@ const ExportacaoProvaPage: React.FC = () => {
 
         {/* Dialog de preview do template */}
         <Dialog open={previewTemplateOpen} onClose={() => setPreviewTemplateOpen(false)} maxWidth="md" fullWidth>
-          <DialogTitle>Preview do Template</DialogTitle>
+          <DialogTitle>
+            Preview do Template — {templateSelecionado === "" ? "Padrão do Sistema" : (templateAtual?.nome || templateSelecionado)}
+          </DialogTitle>
           <DialogContent dividers>
-            {templateSelecionado !== "" && templateAtual?.urlPreview ? (
-              <iframe
-                src={templateAtual.urlPreview}
-                title="Preview do Template"
-                style={{ width: "100%", height: "450px", border: 0 }}
-              />
+            {templateSelecionado !== "" ? (
+              previewLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 260, gap: 1.5 }}>
+                  <CircularProgress size={22} />
+                  <Typography variant="body2" color="text.secondary">Carregando visualização do documento...</Typography>
+                </Box>
+              ) : previewErro ? (
+                <Alert severity="warning">{previewErro}</Alert>
+              ) : previewPartes.headerHtml || previewPartes.bodyHtml || previewPartes.footerHtml ? (
+                <Box
+                  sx={{
+                    bgcolor: '#FFFFFF',
+                    color: '#0F172A',
+                    p: { xs: 2.5, md: 4 },
+                    borderRadius: 2,
+                    minHeight: 380,
+                    maxHeight: 500,
+                    overflowY: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: 2.5,
+                    fontFamily: fonte,
+                    fontSize: `${tamanhoFonte}pt`,
+                    boxShadow: 'inset 0 0 0 1px rgba(15, 23, 42, 0.12)',
+                  }}
+                >
+                  {previewPartes.headerHtml && (
+                    <Box
+                      sx={{
+                        borderBottom: '1px dashed #CBD5E1',
+                        pb: 1.5,
+                        '& img': { maxWidth: '100%', height: 'auto' },
+                      }}
+                      dangerouslySetInnerHTML={{ __html: previewPartes.headerHtml }}
+                    />
+                  )}
+                  <Box sx={{ flexGrow: 1 }}>
+                    {previewPartes.bodyHtml ? (
+                      <Box dangerouslySetInnerHTML={{ __html: previewPartes.bodyHtml }} />
+                    ) : (
+                      <Box sx={{ py: 2, color: '#475569', fontSize: '0.88rem' }}>
+                        <Typography sx={{ fontWeight: 700, mb: 0.75, color: '#0F172A', fontSize: '0.92rem' }}>
+                          [Área onde as questões da prova serão inseridas]
+                        </Typography>
+                        <Typography sx={{ fontSize: '0.82rem', color: '#64748B' }}>
+                          Fonte: {fonte} ({tamanhoFonte} pt) • {duasColunas ? '2 Colunas' : '1 Coluna'} • {quebraBloco ? 'Quebra por disciplina' : 'Fluxo contínuo'}
+                        </Typography>
+                      </Box>
+                    )}
+                  </Box>
+                  {previewPartes.footerHtml && (
+                    <Box
+                      sx={{
+                        borderTop: '1px dashed #CBD5E1',
+                        pt: 1.5,
+                        '& img': { maxWidth: '100%', height: 'auto' },
+                      }}
+                      dangerouslySetInnerHTML={{ __html: previewPartes.footerHtml }}
+                    />
+                  )}
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Este template está vazio ou não possui conteúdo textual visível no preview.
+                </Typography>
+              )
             ) : (
-              <Typography variant="body2">
-                {templateSelecionado === ""
-                  ? "O template padrão do sistema será utilizado para a exportação."
-                  : "Sem preview disponível para este template."}
-              </Typography>
-            )}
-            {templateSelecionado !== "" && templateAtual?.descricao && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                {templateAtual.descricao}
-              </Typography>
-            )}
-            {templateSelecionado === "" && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                Template padrão do sistema: layout básico e institucional.
-              </Typography>
+              <Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Prévia esquemática do layout padrão institucional com as configurações atuais:
+                </Typography>
+                <Box
+                  sx={{
+                    bgcolor: '#FFFFFF',
+                    color: '#0F172A',
+                    p: { xs: 2.5, md: 3.5 },
+                    borderRadius: 2,
+                    fontFamily: fonte,
+                    fontSize: `${Math.max(11, tamanhoFonte)}px`,
+                    boxShadow: 'inset 0 0 0 1px rgba(15, 23, 42, 0.12)',
+                  }}
+                >
+                  {exibirGabaritoMarcado && (
+                    <Box sx={{ bgcolor: '#FEE2E2', color: '#991B1B', px: 1.5, py: 0.6, borderRadius: 1, mb: 2, fontWeight: 700, fontSize: '0.78rem', textAlign: 'center' }}>
+                      USO INTERNO — VERSÃO COM GABARITO MARCADO
+                    </Box>
+                  )}
+                  <Box sx={{ borderBottom: '2px solid #0F172A', pb: 1.25, mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Box>
+                      <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: '#0F172A', fontFamily: 'inherit' }}>
+                        CADERNO DE PROVA OBJETIVA
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.78rem', color: '#475569', fontFamily: 'inherit' }}>
+                        Fonte: {fonte} ({tamanhoFonte} pt) • {duasColunas ? '2 Colunas' : '1 Coluna'} • {quebraBloco ? 'Com quebra por disciplina' : 'Fluxo contínuo'}
+                      </Typography>
+                    </Box>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: '#334155', fontFamily: 'inherit' }}>
+                      TIPO A
+                    </Typography>
+                  </Box>
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: duasColunas ? '1fr 1fr' : '1fr',
+                      gap: 2.5,
+                    }}
+                  >
+                    <Box>
+                      <Typography sx={{ fontWeight: 700, mb: 0.75, fontSize: 'inherit', fontFamily: 'inherit' }}>
+                        BLOCO I — LÍNGUA PORTUGUESA
+                      </Typography>
+                      <Typography sx={{ mb: 0.75, fontSize: 'inherit', fontFamily: 'inherit' }}>
+                        <b>QUESTÃO 01</b> {exibirCodigoCurto ? '[Q-LP001]' : ''} — Assinale a alternativa correta quanto à regência verbal segundo a norma-padrão.
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.88em', color: '#334155', fontFamily: 'inherit' }}>
+                        (A) Alternativa exemplo A {exibirGabaritoMarcado ? '← [GABARITO]' : ''}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.88em', color: '#334155', fontFamily: 'inherit' }}>
+                        (B) Alternativa exemplo B
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography sx={{ fontWeight: 700, mb: 0.75, fontSize: 'inherit', fontFamily: 'inherit' }}>
+                        {quebraBloco ? 'BLOCO II — CONHECIMENTOS ESPECÍFICOS (nova seção)' : 'QUESTÃO 02'}
+                      </Typography>
+                      <Typography sx={{ mb: 0.75, fontSize: 'inherit', fontFamily: 'inherit' }}>
+                        <b>QUESTÃO 02</b> {exibirCodigoCurto ? '[Q-CE002]' : ''} — Julgue os itens subsequentes considerando os princípios da administração pública.
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.88em', color: '#334155', fontFamily: 'inherit' }}>
+                        (A) Alternativa exemplo A • (B) Alternativa exemplo B
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+              </Box>
             )}
           </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setPreviewTemplateOpen(false)} variant="contained">
+              Fechar
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Dialog de preview da prova real */}
+        <Dialog open={previewProvaOpen} onClose={() => setPreviewProvaOpen(false)} maxWidth="lg" fullWidth>
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+            <Box>
+              <Typography variant="h6" fontWeight={700}>
+                Pré-visualização da prova real
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {previewProvaDados
+                  ? `${previewProvaDados.cargo?.codigo_cargo ? previewProvaDados.cargo.codigo_cargo + ' - ' : ''}${previewProvaDados.cargo?.nome_cargo} • ${previewProvaDados.tipo} • ${previewProvaDados.total_paginas} página(s) • idêntica à exportação`
+                  : `Fonte ${fonte} ${tamanhoFonte}pt • ${duasColunas ? '2 colunas' : '1 coluna'}`}
+              </Typography>
+            </Box>
+            {previewProvaDados && previewProvaDados.num_variacoes > 1 && (
+              <ToggleButtonGroup size="small" exclusive value={previewProvaDados.variacao}
+                onChange={(_, v) => v && carregarPreviewProvaReal(previewProvaCargoId, v)}>
+                {Array.from({ length: previewProvaDados.num_variacoes }, (_, i) => (
+                  <ToggleButton key={i + 1} value={i + 1}>Tipo {String.fromCharCode(65 + i)}</ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            )}
+            {cargosFiltrados.filter(c => c.selecionado).length > 1 && (
+              <FormControl size="small" sx={{ minWidth: 240 }}>
+                <InputLabel id="preview-cargo-label">Cargo</InputLabel>
+                <Select
+                  labelId="preview-cargo-label"
+                  value={previewProvaCargoId}
+                  label="Cargo"
+                  onChange={(e) => carregarPreviewProvaReal(String(e.target.value), 1)}
+                >
+                  {cargosFiltrados.filter(c => c.selecionado).map((c) => (
+                    <MenuItem key={c.id_cargo} value={c.id_cargo}>
+                      {c.codigo_cargo ? `${c.codigo_cargo} - ` : ''}{c.nome_cargo}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+          </DialogTitle>
+          <DialogContent dividers sx={{ bgcolor: '#0B1325' }}>
+            {previewProvaLoading ? (
+              <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ minHeight: 320 }}>
+                <CircularProgress size={28} />
+                <Typography variant="body2" color="text.secondary">Gerando a prova exatamente como na exportação…</Typography>
+                <Typography variant="caption" color="text.secondary">Pode levar até 1 minuto (diagramação e PDF reais).</Typography>
+              </Stack>
+            ) : previewProvaErro ? (
+              <Alert severity="error">{typeof previewProvaErro === 'string' ? previewProvaErro : 'Não foi possível gerar a pré-visualização.'}</Alert>
+            ) : previewProvaDados ? (
+              <Stack spacing={2.5} alignItems="center">
+                {(previewProvaDados.bloqueios > 0 || previewProvaDados.avisos > 0) && (
+                  <Alert severity={previewProvaDados.bloqueios > 0 ? 'error' : 'warning'} sx={{ width: '100%', maxWidth: 860 }}>
+                    {previewProvaDados.bloqueios > 0
+                      ? `A checagem encontrou ${previewProvaDados.bloqueios} problema(s) que bloqueiam a exportação. Use "Verificar" para ver quais.`
+                      : `A checagem encontrou ${previewProvaDados.avisos} aviso(s). A exportação é permitida.`}
+                  </Alert>
+                )}
+                {(previewProvaDados.paginas || []).map((src: string, i: number) => (
+                  <Box key={i} sx={{ width: '100%', maxWidth: 860 }}>
+                    <Box component="img" src={src} alt={`Página ${i + 1} da prova`} draggable={false}
+                      onContextMenu={(e: React.MouseEvent) => e.preventDefault()}
+                      sx={{ width: '100%', display: 'block', bgcolor: '#fff', boxShadow: '0 12px 40px rgba(0, 0, 0, 0.45)', userSelect: 'none' }} />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: 0.75 }}>
+                      Página {i + 1} de {previewProvaDados.total_paginas}
+                    </Typography>
+                  </Box>
+                ))}
+              </Stack>
+            ) : null}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setPreviewProvaOpen(false)} variant="contained">
+              Fechar
+            </Button>
+          </DialogActions>
         </Dialog>
 
         {/* Dialog de confirmação da exportação */}

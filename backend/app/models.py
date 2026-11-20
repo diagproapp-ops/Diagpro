@@ -215,6 +215,7 @@ class User(BaseModel):
     agencia: Optional[str] = None         # <--- NOVO
     conta_corrente: Optional[str] = None  # <--- NOVO
     terms_acceptance: Optional[str] = None
+    totp_ativo: Optional[bool] = None  # só o status; o segredo nunca sai da API
     role: str
     tenant_id: Optional[int] = None
 

@@ -28,6 +28,7 @@ import ExportacaoPage from './pages/ExportacaoPage';
 import GabaritoPage from './pages/GabaritoPage';
 import TemplatesPage from './pages/TemplatesPage';
 import PublicRegisterPage from './pages/PublicRegisterPage';
+import MinhaContaPage from './pages/MinhaContaPage';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
@@ -58,6 +59,7 @@ function App() {
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<ConteudoIniciarPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<AdicionarTextoReferenciaPage />} /> {/* <-- NOVA ROTA */}
                     <Route path="/conteudos" element={<ConteudoPage />} />
+                    <Route path="/minha-conta" element={<MinhaContaPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/criar" element={<CriarQuestaoPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/editar" element={<EditarQuestaoPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/editar" element={<EditarTextoReferenciaPage />} />
@@ -71,6 +73,7 @@ function App() {
                     <Route path="/eventos/:eventId/editar" element={<EventoEditPage />} />
                     <Route path="/eventos/:eventId" element={<EventoDetalhesPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/minha-conta" element={<MinhaContaPage />} />
                     <Route path="/eventos/:eventId/cargo" element={<CargoManagerPage />} />
                     <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
                     <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />

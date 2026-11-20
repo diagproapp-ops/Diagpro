@@ -21,7 +21,9 @@ async def test_unauthenticated_endpoints_return_401(async_client):
         ("GET", "/eventos/"),
         ("GET", "/admin/clients"),
         ("GET", "/admin/logs/geracao/"),
-        ("POST", "/api/ia-chat"),
+        ("POST", "/ia/chat"),
+        ("POST", "/ia/questao/gerar"),
+        ("GET", "/ia/status"),
         ("POST", "/api/check-plagio"),
         ("POST", "/api/dicionario"),
         ("POST", "/api/biblioteca"),
@@ -577,6 +579,11 @@ async def test_finished_exam_and_answer_key_require_event_password(async_client)
     assert r.status_code != 403, r.text
     assert (await async_client.post(f"/api/export/eventos/{ev}/validar-senha", headers=h, json={"senha": "1234"})).json() == {"valida": True}
 
+    # detalhes do evento: senha errada = 403 (nunca 401, que o app trata como sessão expirada e desloga)
+    assert (await async_client.get(f"/eventos/{ev}/detalhes?senha=errada", headers=h)).status_code == 403
+    r = await async_client.get(f"/eventos/{ev}/detalhes?senha=1234", headers=h)
+    assert r.status_code == 200 and r.json()["nome_evento"] == "Evento CI Teste", r.text
+
     # outro cliente nunca chega à senha (evento não existe para ele)
     h2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
     assert (await async_client.get(url_gab, headers={**h2, "X-Senha-Evento": "1234"})).status_code == 404
@@ -671,3 +678,176 @@ def test_generator_renders_editor_html_inline_and_answer_lines():
     g._add_linhas_resposta(doc, 7)
     novas = doc.paragraphs[antes:]
     assert sum(1 for q in novas if q._p.pPr is not None and q._p.pPr.find(_qn("w:pBdr")) is not None) == 7
+
+
+@pytest.mark.asyncio
+async def test_two_factor_is_mandatory_for_everyone(async_client):
+    """Senha certa não libera acesso; 2FA obrigatório (cadastro, verificação, reuso, recuperação, bloqueio, reset)."""
+    import pyotp
+    from backend.app.auth import create_access_token as _cat
+    reset_rate_limits()
+    login = lambda: async_client.post("/auth/login", data={"username": "vhugo1234", "password": "TestPassword123!", "recaptcha_token": "x"})
+
+    r = (await login()).json()
+    assert r["etapa"] == "cadastro_2fa" and "access_token" not in r
+    passe = r["token_2fa"]
+    # o passe de 2FA não abre nada
+    assert (await async_client.get("/users/me", headers={"Authorization": f"Bearer {passe}"})).status_code == 401
+    # token antigo (sem a marca de 2FA) também não
+    velho = _cat({"sub": "vhugo1234", "role": "diagramador", "tenant_id": 1})
+    assert (await async_client.get("/users/me", headers={"Authorization": f"Bearer {velho}"})).status_code == 401
+
+    cad = (await async_client.post("/auth/2fa/cadastro/iniciar", json={"token_2fa": passe})).json()
+    assert cad["qr_code"].startswith("data:image/png;base64,")
+    totp = pyotp.TOTP(cad["segredo"])
+    assert (await async_client.post("/auth/2fa/cadastro/confirmar", json={"token_2fa": passe, "codigo": "000000"})).status_code == 400
+    codigo_usado = totp.now()
+    ok = (await async_client.post("/auth/2fa/cadastro/confirmar", json={"token_2fa": passe, "codigo": codigo_usado})).json()
+    assert len(ok["codigos_recuperacao"]) == 10 and ok["access_token"]
+    h = {"Authorization": f"Bearer {ok['access_token']}"}
+    me = (await async_client.get("/users/me", headers=h)).json()
+    assert me["totp_ativo"] is True and "totp_secret" not in me and "codigos_recuperacao" not in me
+
+    # próximo login pede o código; o mesmo código não vale duas vezes
+    r = (await login()).json()
+    assert r["etapa"] == "2fa"
+    reuso = await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": codigo_usado})
+    assert reuso.status_code == 400
+    # código de recuperação: vale uma vez
+    cod = ok["codigos_recuperacao"][0]
+    v = (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": cod})).json()
+    assert v["access_token"] and v["codigos_recuperacao_restantes"] == 9
+    assert (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": cod})).status_code == 400
+
+    # bloqueio depois de erros seguidos
+    reset_rate_limits()
+    r = (await login()).json()
+    for _ in range(5):
+        assert (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": "123456"})).status_code == 400
+    assert (await async_client.post("/auth/2fa/verificar", json={"token_2fa": r["token_2fa"], "codigo": totp.now()})).status_code == 429
+    reset_rate_limits()
+
+    # reset pelo administrador do cliente; ninguém reseta o próprio
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    usuarios = (await async_client.get("/users/", headers=a1)).json()
+    alvo = next(u for u in usuarios if u["username"] == "vhugo1234")
+    eu = next(u for u in usuarios if u["username"] == "admin1")
+    assert (await async_client.post(f"/users/{eu['id']}/2fa/resetar", headers=a1)).status_code == 403
+    assert (await async_client.post(f"/users/{alvo['id']}/2fa/resetar", headers=a1)).status_code == 204
+    assert (await login()).json()["etapa"] == "cadastro_2fa"
+    # admin de outro cliente não alcança o usuário
+    a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    assert (await async_client.post(f"/users/{alvo['id']}/2fa/resetar", headers=a2)).status_code == 404
+    reset_rate_limits()
+
+
+def test_password_policy_rules():
+    from backend.app import politica_senha as ps
+    assert ps.problemas("Curta1!") and ps.problemas("somenteminusculas") and ps.problemas("Senha123!@#")
+    assert ps.problemas("Joaozinho#2026x", username="joaozinho")          # contém o usuário
+    assert ps.problemas("Abc123456789!")                                   # sequência
+    assert not ps.problemas("Verde-Montanha-77", username="maria", email="maria@x.com")
+
+
+@pytest.mark.asyncio
+async def test_forced_password_change_session_renewal_and_recaptcha(async_client, monkeypatch):
+    import pyotp, time
+    from backend.app.auth import create_access_token as _cat
+    from backend.app.routes import auth as rauth
+    reset_rate_limits()
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    base = {"username": "novo_prof", "email": "novo_prof@example.com", "role": "professor", "tenant_id": 1, "status": "ativo"}
+    # senha fraca recusada já na criação
+    r = await async_client.post("/users/", headers=a1, json={**base, "password": "fraca123"})
+    assert r.status_code == 400 and r.json()["detail"]["problemas"]
+    provisoria = "Provisoria-Forte-48"
+    assert (await async_client.post("/users/", headers=a1, json={**base, "password": provisoria})).status_code == 201
+
+    login = lambda s: async_client.post("/auth/login", data={"username": "novo_prof", "password": s, "recaptcha_token": "x"})
+    r = (await login(provisoria)).json()
+    cad = (await async_client.post("/auth/2fa/cadastro/iniciar", json={"token_2fa": r["token_2fa"]})).json()
+    totp = pyotp.TOTP(cad["segredo"])
+    ok = (await async_client.post("/auth/2fa/cadastro/confirmar", json={"token_2fa": r["token_2fa"], "codigo": totp.now()})).json()
+    # 2FA ok, mas a senha é provisória: troca antes de entrar (sem token de acesso ainda)
+    assert ok["etapa"] == "trocar_senha" and "access_token" not in ok and len(ok["codigos_recuperacao"]) == 10
+    passe = ok["token_2fa"]
+    assert (await async_client.get("/users/me", headers={"Authorization": f"Bearer {passe}"})).status_code == 401
+    assert (await async_client.post("/auth/senha/trocar", json={"token_2fa": passe, "nova_senha": "fraca"})).status_code == 400
+    assert (await async_client.post("/auth/senha/trocar", json={"token_2fa": passe, "nova_senha": provisoria})).status_code == 400  # repetida
+    nova = "Nova-Senha-Segura-91"
+    t = (await async_client.post("/auth/senha/trocar", json={"token_2fa": passe, "nova_senha": nova})).json()
+    assert t["access_token"]
+    # senha antiga não entra mais; a nova entra direto no 2FA (sem nova troca)
+    assert (await login(provisoria)).status_code == 401
+    assert "trocar" not in str((await login(nova)).json())
+
+    # trocar a própria senha exige a senha atual E o código do autenticador
+    h = {"Authorization": f"Bearer {t['access_token']}"}
+    r = await async_client.post("/auth/senha/minha", headers=h, json={"senha_atual": "errada", "nova_senha": "Outra-Senha-Boa-55", "codigo": "000000"})
+    assert r.status_code == 400
+
+    # renovação da sessão: mantém o login; passa de 12 h, cai
+    r = await async_client.post("/auth/renovar", headers=h)
+    assert r.status_code == 200 and r.json()["access_token"]
+    velho = _cat({"sub": "novo_prof", "role": "professor", "tenant_id": 1, "mfa": True, "auth_time": int(time.time()) - 13 * 3600})
+    assert (await async_client.post("/auth/renovar", headers={"Authorization": f"Bearer {velho}"})).status_code == 401
+
+    # reCAPTCHA falha fechada: sem chave, login recusado
+    monkeypatch.setattr(rauth, "RECAPTCHA_DESATIVADO", False)
+    monkeypatch.setattr(rauth, "RECAPTCHA_SECRET_KEY", "")
+    assert (await login(nova)).status_code == 400
+    reset_rate_limits()
+
+
+@pytest.mark.asyncio
+async def test_platform_and_bank_settings_take_effect(async_client):
+    import json as _json
+    reset_rate_limits()
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
+    ev = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+
+    # plataforma: só admin geral; limites validados
+    assert (await async_client.get("/config/plataforma", headers=a1)).status_code == 403
+    r = await async_client.put("/config/plataforma", headers=ag, json={"seguranca": {"senha_tamanho_minimo": 4}})
+    assert r.status_code == 400 and r.json()["detail"]["problemas"]
+    r = await async_client.put("/config/plataforma", headers=ag, json={"seguranca": {"senha_tamanho_minimo": 16, "sessao_inatividade_minutos": 20}})
+    assert r.status_code == 200 and r.json()["seguranca"]["senha_tamanho_minimo"] == 16
+    try:
+        assert (await async_client.get("/auth/senha/regras")).json()["tamanho_minimo"] == 16
+        r = await async_client.post("/users/", headers=a1, json={"username": "cfg_u", "email": "cfg_u@example.com", "password": "Doze-Chars-9x",
+                                                                 "role": "professor", "tenant_id": 1, "status": "ativo"})
+        assert r.status_code == 400  # 13 caracteres < 16 configurado
+        # banca: não pode passar do teto da plataforma; pode encurtar
+        assert (await async_client.put("/config/banca", headers=a1, json={"seguranca": {"sessao_inatividade_minutos": 45}})).status_code == 400
+        assert (await async_client.put("/config/banca", headers=a1, json={"seguranca": {"sessao_inatividade_minutos": 10}})).status_code == 200
+        assert (await async_client.get("/config/sessao", headers=a1)).json()["inatividade_minutos"] == 10
+        assert (await async_client.post("/auth/renovar", headers=a1)).json()["inatividade_minutos"] == 10
+        # outro cliente não enxerga nem herda a configuração do cliente 1
+        assert (await async_client.get("/config/sessao", headers=a2)).json()["inatividade_minutos"] == 20
+        assert (await async_client.get("/config/banca", headers=a2)).json()["seguranca"]["sessao_inatividade_minutos"] is None
+        # professor não altera a banca
+        hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+        assert (await async_client.put("/config/banca", headers=hp, json={})).status_code == 403
+
+        # regras: tipo desabilitado é recusado; revisão obrigatória vira bloqueio na checagem
+        assert (await async_client.put("/config/banca", headers=a1, json={"regras_questoes": {"tipos_permitidos": ["MULTIPLA_ESCOLHA"], "revisao_obrigatoria": True}})).status_code == 200
+        assert (await async_client.get("/config/regras-questoes", headers=hp)).json()["tipos_permitidos"] == ["MULTIPLA_ESCOLHA"]
+        base = {"indicacao_conteudo": "1", "enunciado": "<p>e</p>", "alternativas": "[]", "nivel_dificuldade": "MEDIO", "pontuacao": "1",
+                "tags": "", "justificativa_questao": "", "justificativa_anulacao": "", "resposta_correta": "", "texto_referencia_vinculo": "",
+                "texto_referencia_direto": "", "tenant_id": "1", "anulada": "false",
+                "itens_vf": _json.dumps([{"afirmacao": "<p>i</p>", "valor_correto": True}])}
+        r = await async_client.post(f"/eventos/{ev}/conteudos/ci-conteudo-1/questoes", headers=a1, data={**base, "tipo": "CERTO_ERRADO"})
+        assert r.status_code == 400
+
+        # identidade da prova: validação das regras de instrução
+        r = await async_client.put("/config/banca", headers=a1, json={"identidade_prova": {"instrucoes_por_bloco": [{"contem": "", "instrucoes": []}]}})
+        assert r.status_code == 400
+        r = await async_client.put("/config/banca", headers=a1, json={"identidade_prova": {"instrucoes_por_bloco": [{"contem": "português", "instrucoes": ["Leia com atenção."]}], "instrucoes_discursiva": []}})
+        assert r.status_code == 200 and r.json()["identidade_prova"]["instrucoes_por_bloco"][0]["contem"] == "português"
+    finally:
+        await async_client.put("/config/plataforma", headers=ag, json={"seguranca": {"senha_tamanho_minimo": 12, "sessao_inatividade_minutos": 30}})
+        await async_client.put("/config/banca", headers=a1, json={"seguranca": {"sessao_inatividade_minutos": None},
+                                                                  "regras_questoes": {"tipos_permitidos": ["MULTIPLA_ESCOLHA", "CERTO_ERRADO", "DISCURSIVA", "SUBJETIVA"], "revisao_obrigatoria": False}})
+        reset_rate_limits()

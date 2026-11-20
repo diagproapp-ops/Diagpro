@@ -7,7 +7,7 @@ from typing import List
 import uuid
 from datetime import datetime
 
-from backend.app.security import get_tenant_db, is_admin_geral, require_roles
+from backend.app.security import conferir_senha_evento, get_tenant_db, is_admin_geral, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import Evento as DBEvento, Tenant as DBTenant
 from backend.app.models import (
@@ -103,8 +103,11 @@ async def get_evento_details(
     evento = result.scalars().first()
     if not evento:
         raise HTTPException(status_code=404, detail="Evento não encontrado")
-    if not verify_password(senha, evento.senha_evento):
-        raise HTTPException(status_code=401, detail="Senha do evento incorreta")
+    # 403 (não 401): senha errada do evento não é sessão expirada e não deve deslogar o usuário
+    if evento.senha_evento_cripto:
+        conferir_senha_evento(evento, senha, current_user)  # mesma regra da exportação, com bloqueio por falhas
+    elif not verify_password(senha, evento.senha_evento):
+        raise HTTPException(status_code=403, detail="Senha do evento inválida.")
     cargos_out = [CargoOut.from_orm(cargo) for cargo in getattr(evento, "cargos", [])]
     return PydanticEventoOut(
         id_evento=evento.id_evento,

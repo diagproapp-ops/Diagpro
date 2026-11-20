@@ -56,12 +56,12 @@ Classificação adotada:
 
 | Funcionalidade | Classificação | Evidência / Observação |
 | :--- | :--- | :--- |
-| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 16 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
+| PostgreSQL multi-tenant com RLS | **Implementada e verificada** | Banco único da aplicação (sem fallback SQLite). RLS `ENABLE` + `FORCE` em 19 tabelas, **sem cláusula de bypass por variável de sessão**. Testado com a role de runtime: isolamento entre tenants, *fail-closed* sem contexto e tentativa de bypass bloqueada. |
 | Cifra de campos (AES-256-GCM, chave por tenant) | **Implementada e verificada** | `backend/app/field_crypto.py`: 122 colunas sensíveis cifradas, incluindo enunciados, alternativas, gabarito (`correta`, `valor_correto`) e dados pessoais. Varredura no banco real: 4.034 valores, nenhum em texto claro. |
 | Arquivos cifrados e URLs assinadas | **Implementada e verificada** | `backend/app/secure_files.py`: imagens, avatares, logos, capas, templates e CSV de candidatos cifrados por tenant; entrega por URL assinada de 5 min. Pastas públicas `/static` e `/avatars` removidas. |
 | Provas geradas sem armazenamento | **Implementada e verificada** | Saídas criadas em pasta temporária privada por requisição e apagadas ao final; ZIP do lote protegido pela senha do evento. Testado ponta a ponta numa cópia do banco. |
-| Autenticação JWT (`HS256`) + `bcrypt` | **Implementada e verificada** | `backend/app/auth.py`, `routes/auth.py`. Testado: login válido (200), senha errada (401), inativo (403), token adulterado (401), limite de 10 tentativas/60 s (429). |
-| reCAPTCHA no login | **Implementada parcialmente** | Apenas **inspecionado**; com `RECAPTCHA_SECRET_KEY` vazia a verificação é ignorada (*fail-open*). |
+| Autenticação JWT (`HS256`) + `bcrypt` | **Implementada e verificada** | `backend/app/auth.py`, `routes/auth.py`, `dois_fatores.py`. **2FA (TOTP) obrigatório para todos**: senha certa só gera um passe de 5 min; acesso só com token emitido após o código do autenticador (ou código de recuperação de uso único). Testado via API e pela tela (cadastro com QR Code, códigos de recuperação, novo login, reset pelo administrador). Testado: login válido (200), senha errada (401), inativo (403), token adulterado (401), limite de 10 tentativas/60 s (429). |
+| reCAPTCHA no login | **Implementada e verificada** | Falha fechada: sem `RECAPTCHA_SECRET_KEY`, sem resposta do Google (timeout 5 s) ou com erro, o login é recusado. `DIAGPRO_RECAPTCHA_DESATIVADO=1` existe só para testes automatizados e registra um aviso na inicialização. Token falso recusado na API real (400). |
 | Gestão de Tenants e Dashboard (`administrador geral`) | **Implementada e verificada** | `admin_clients.py` sempre via role de plataforma; criação de cliente, duplicidade de domínio (400), listagem e dashboard testados. Visão global ou **cliente em gestão** escolhido no topo da tela (cabeçalho `X-Tenant-Id`, ver [Seção 14](#14-segurança-e-isolamento-multi-tenant)), testado. O admin criado para um cliente recebe senha aleatória, exibida uma única vez. |
 | Gestão de Usuários e Cadastro Público | **Implementada parcialmente** | `routes/users.py`. Testados: bloqueio de perfis administrativos no cadastro público, criação/edição pelo admin do cliente e recusa de e-mail duplicado sem diferenciar maiúsculas (índice cego). Testados também: admin de cliente restrito aos usuários do próprio cliente, listagem de todos os clientes pelo `administrador geral` na visão global e username/e-mail duplicado entre clientes recusado com 400. |
 | CRUD de Eventos, Cargos, Disciplinas e Conteúdos | **Implementada parcialmente** | Fluxos principais testados (criar/editar/listar). O CRUD completo e o isolamento entre tenants de todos os recursos não têm teste automatizado. |
@@ -69,12 +69,12 @@ Classificação adotada:
 | Importação de Questões via DOCX | **Implementada parcialmente** | Imagens extraídas vão direto para o armazenamento cifrado; a confirmação aceita só referências de arquivo do próprio cliente (testado). A extração DOCX em si não tem teste automatizado. |
 | Montagem, Simulação e Geração de Provas/Gabaritos | **Implementada parcialmente** | Ponta a ponta testado num banco de teste com dados sintéticos (19/11/2026): montagem, lote ZIP AES com PDF e DOCX legíveis (acentos, alternativas, texto de referência), gabarito batendo com a ordem impressa da alternativa correta, ZIP de gabaritos. Prova pronta e gabarito só com a senha do evento. Geração das provas reais não executada (exige a senha do evento). Sorteios (ordem das questões, alternativas e letras do gabarito) derivam de uma semente secreta gravada (cifrada) na montagem: cada exportação da mesma montagem sai idêntica e o gabarito não é previsível; montagens anteriores a 19/11/2026 mantêm a fórmula antiga para não mudar provas já exportadas. Checagem antes de exportar (bloqueios e avisos), relatório no ZIP, nomes únicos por variação ("PADRÃO" ou "Tipo A"...), versão com gabarito marcado identificada, auditoria com SHA-256, padrão de exportação por evento (só sugestão) e "Atualizar questões da montagem" sem novo sorteio. Certo/Errado: comando sem número e itens numerados na sequência da prova toda, gabarito C/E por item. Subjetiva: enunciado e a quantidade de linhas definida na questão (padrão 10). Alternativas e itens vindos do editor (HTML) saem com a formatação, sem tags. |
 | Auditoria de Geração (`audit_log_geracao`) | **Implementada parcialmente** | Gravação e filtro por usuário (índice cego) testados; cobre geração, não leitura/edição geral. |
-| Chat com IA (OpenAI) | **Implementada parcialmente** | `ia_chat.py` usa `openai.ChatCompletion`, removido no SDK v1; `requirements.txt` fixa `openai==1.109.1`, então a rota falha. |
+| Assistente de IA (Claude ou OpenAI) | **Implementada e verificada** | Rascunho de questão, revisão, alternativas erradas, justificativa, melhoria de texto e chat no editor. Desligado por padrão; a plataforma e a banca precisam ligar. Testado com provedor falso local pelos dois SDKs; chamada real depende da chave do provedor. |
 | Verificação de Plágio (Bing) | **Implementada parcialmente** | Autenticada, rate limit 20/60 s; chamada externa não testada. |
 | Dicionário (`dicio.com.br`) | **Implementada parcialmente** | Scraping HTML via regex; não testado. |
 | Biblioteca de Questões (`/api/biblioteca`) | **Implementada e verificada** | Busca em conteúdo cifrado (decifra só as questões do próprio cliente na memória); isolamento tenant 1 × tenant 2 testado. |
 | Frontend Web (React/TS) | **Implementada parcialmente** | `frontend/src/` versionado neste repositório. Rotas de montagem, geração, exportação, gabaritos, templates, questões (criar/editar/revisar), textos de referência, "Meus Conteúdos" e cadastro público registradas em `App.tsx`; telas adaptadas ao tema ativo. Verificado por `tsc --noEmit` e pelas chamadas de API de cada tela; os fluxos que gravam dados não foram exercitados pela interface. |
-| Suíte de Testes Automatizados | **Implementada parcialmente** | 27 testes `pytest` (segurança, RBAC, RLS, cifra, arquivos, logs, gestão multi-cliente, tipos de questão, senha do evento, CORS, semente, exportação e renderização), executados por `scripts/run_tests.py` num banco descartável. Cobertura de isolamento ainda parcial. |
+| Suíte de Testes Automatizados | **Implementada parcialmente** | 31 testes `pytest` (2FA, política de senha, sessão, configurações, segurança, RBAC, RLS, cifra, arquivos, logs, gestão multi-cliente, tipos de questão, senha do evento, CORS, semente, exportação e renderização), executados por `scripts/run_tests.py` num banco descartável. Cobertura de isolamento ainda parcial. |
 | Rate Limiting | **Implementada e verificada** | `rate_limit.py` (memória; Redis se `REDIS_URL`). Login 10/60 s; validar senha, lote e ZIP de gabaritos 5/60 s; cadastro 5/60 s; IA/plágio 20/60 s. |
 | CI/CD | **Estruturada, mas não validada** | `.github/workflows/ci.yml` (PostgreSQL 16, chave mestra efêmera, migrações, RLS, roles, `pytest`). Execuções no GitHub Actions não foram verificadas. |
 | Filas assíncronas e Object Storage (S3/MinIO) | **Estruturada, mas não validada** | `jobs.py` (registro em memória) e `storage.py` (backend S3 depende de `boto3`, ausente). A rota de exportação assíncrona foi removida por não funcionar. |
@@ -148,7 +148,7 @@ Fora do projeto e do banco ficam a chave mestra, a chave de backup, a CA/certifi
 
 - **Backend Python** (`backend/requirements.txt`, 30 pacotes, versões fixadas exceto `redis>=5.0`): FastAPI, Starlette, Uvicorn, SQLAlchemy Async (`SQLAlchemy[asyncio]`, `greenlet`, `asyncpg`), `psycopg2-binary` (Alembic e scripts), Alembic, Pydantic, `email_validator`, `python-jose`, `passlib[bcrypt]`/`bcrypt`, `cryptography` (AES-GCM, HKDF), `python-multipart`, `python-docx`, `pypdf`, `pdfrw`, `reportlab`, `pillow`, `beautifulsoup4`, `pyzipper`, `openai`, `requests`, `httpx`, `redis`, `python-dotenv`, `pytest`, `pytest-asyncio`.
   - *Versões verificadas no `.venv` da raiz:* Python `3.11.0`, Uvicorn `0.37.0`, Alembic `1.20.1`, pytest `9.2.0`.
-  - *Divergências conhecidas:* `openai==1.109.1` é incompatível com `ia_chat.py`; `boto3` (backend S3 de `storage.py`) não consta no arquivo; `redis` não está instalado no `.venv` local (o rate limit usa memória).
+  - *Divergências conhecidas:* `boto3` (backend S3 de `storage.py`) não consta no arquivo; `redis` não está instalado no `.venv` local (o rate limit usa memória).
   - `aiosqlite` foi removido: o sistema não usa mais SQLite.
 - **Processamento de Documentos Externo**: LibreOffice (`soffice.exe` para DOCX → PDF, com até 3 tentativas por conversão) e Java + **Apache PDFBox 3.0.5** (`backend/app/pdfbox-app-3.0.5.jar`, `json.jar`).
 - **Frontend (`frontend/package.json`)**: React `18.2.0`, TypeScript `4.9.5`, Material UI v7, TipTap v3, `@dnd-kit`, `axios`, `react-router-dom` v7, `html2pdf.js`, `react-markdown`, `react-google-recaptcha`.
@@ -167,6 +167,9 @@ DiagPro/
 │                                 #   -> a9d4c2e6f0b1 (trava de troca de tenant sem recifra; códigos únicos por cliente)
 │                                 #   -> c5e8f1a3b9d2 (imagem cifrada por item de Certo/Errado)
 │                                 #   -> d8b2f4a6c1e3 (padrão de exportação por evento, cifrado)
+│                                 #   -> e9c3a5b7d2f4 (2FA: segredo TOTP e códigos de recuperação cifrados)
+│                                 #   -> f1a7c3e5b9d2 (política de senha: validade, troca obrigatória, histórico cifrado)
+│                                 #   -> a2b4c6d8e0f1 (configurações da plataforma e de cada banca, cifradas, com RLS)
 ├── alembic.ini
 ├── .env.example                  # Modelo de variáveis (somente placeholders)
 ├── Dockerfile                    # Imagem da API (Python 3.11, Java 17, LibreOffice)
@@ -177,15 +180,19 @@ DiagPro/
 │   │   ├── admin_clients.py      # Gestão de clientes (administrador geral)
 │   │   ├── auth.py               # JWT, bcrypt, get_current_user (runtime por tenant; plataforma só p/ admin geral; X-Tenant-Id)
 │   │   ├── database.py           # Engines runtime/plataforma, TLS obrigatório, set_tenant_context
-│   │   ├── db_models.py          # 17 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
+│   │   ├── db_models.py          # 20 modelos ORM; colunas sensíveis com tipo Ciphertext + índices cegos
 │   │   ├── field_crypto.py       # Cifra de campos AES-256-GCM por tenant, índices cegos, eventos do ORM
 │   │   ├── secure_files.py       # Arquivos cifrados por tenant, URLs assinadas, templates, pasta por requisição
 │   │   ├── log_redaction.py      # Filtro que mascara senhas, assinaturas, tokens e caminhos nos logs
 │   │   ├── security.py           # require_roles, get_tenant_db, evento_autorizado, senha do evento, helpers de caminho
 │   │   ├── verificacao_prova.py  # Checagem da prova montada antes de exportar (bloqueios e avisos)
 │   │   ├── dados_prova.py        # Completa a cópia da montagem (tipo, itens Certo/Errado, linhas)
+│   │   ├── configuracoes.py      # Configurações da plataforma e da banca (padrões, limites, cache)
+│   │   ├── assistente_ia.py      # IA: provedores (Anthropic/OpenAI), pedidos, formatos de resposta, limites e registro de uso
+│   │   ├── notificacoes.py       # Avisos (sino + e-mail): preferências, fila SMTP com novas tentativas
+│   │   ├── politica_senha.py     # Política de senha (valores vindos das configurações)
 │   │   ├── auditoria_exportacao.py  # Registro cifrado de cada exportação (quem, quando, opções, SHA-256)
-│   │   ├── rls_policies.sql      # Políticas RLS (16 tabelas, sem bypass)
+│   │   ├── rls_policies.sql      # Políticas RLS (19 tabelas, sem bypass)
 │   │   ├── rate_limit.py, jobs.py, storage.py, models.py, roles.py, ...
 │   │   ├── utils_crypto.py       # Camada Fernet LEGADA, desativada (funções sem efeito; mask_pii)
 │   │   └── PreencheCapaPDF_JSON_PDFBox.java
@@ -202,7 +209,7 @@ DiagPro/
 │   └── migrate_files_to_secure_store.py  # Move arquivos em claro para o armazenamento cifrado (executado na fase 2a)
 ├── tests/
 │   ├── conftest.py               # Cliente ASGI, tokens e seed sintético (role de plataforma)
-│   └── test_security_rbac_rls.py # 27 testes
+│   └── test_security_rbac_rls.py # 31 testes
 ├── docker-compose.yml            # PostgreSQL, Redis e MinIO (somente 127.0.0.1)
 ├── storage_data/                 # Arquivos cifrados (ignorado pelo Git)
 ├── templates_eventos/            # Templates DOCX cifrados (*.enc, ignorado pelo Git)
@@ -229,9 +236,9 @@ Definido em `backend/app/db_models.py` (**17 tabelas** registradas em `Base.meta
 - **Ficam em claro** apenas: chaves (PK/FK), `tenant_id`, códigos técnicos gerados (`identificador_*`, `codigo_*`), papéis/estados/tipos usados em autorização e fluxo, datas, números, `password_hash` (bcrypt) e `senha_evento` (bcrypt).
 - **Índices cegos** (HMAC-SHA256, colunas `*_bidx`) permitem busca exata e unicidade sem expor o valor: `users.username/email` (escopo global, usado no login), `tenants.name/domain` (global), `users.full_name`, `banco_frases.categoria` e `frase_bidx`, `Disciplinas.nome_disciplina` e `audit_log_geracao.usuario/evento/cargo` (escopo por cliente: o mesmo valor em clientes diferentes gera índices diferentes).
 
-### 17 modelos ORM × 16 tabelas com RLS
+### 20 modelos ORM × 19 tabelas com RLS
 
-`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **16** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
+`rls_policies.sql` (e a revisão `c3f1a9d2b7e4`) aplicam `ENABLE` + `FORCE ROW LEVEL SECURITY` e a política `tenant_id = app.current_tenant_id` em **19** tabelas. A exceção é **`tenants`**, que não tem `tenant_id` porque define os próprios clientes.
 
 - O acesso a `tenants` só ocorre pela role `diagpro_platform`, em rotas exclusivas do `administrador geral`. A camada de cifra também bloqueia sessões de runtime que tentem carregar linhas de `tenants`.
 - Em `users`, linhas com `tenant_id` nulo (administrador geral) só são visíveis pela role `diagpro_platform`, que tem `BYPASSRLS`. Não existe bypass por variável de sessão.
@@ -303,9 +310,9 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 
 ## 13. Integrações Externas
 
-- **OpenAI API** (`ia_chat.py`): modelo por `OPENAI_MODEL` (padrão `gpt-3.5-turbo`), requer `OPENAI_API_KEY` (sem ela, 503). **Inoperante:** usa `openai.ChatCompletion`, removido no SDK `>=1.0`, e `requirements.txt` fixa `openai==1.109.1`.
+- **Assistente de IA** (`assistente_ia.py`, rotas `/ia/*`): Claude pelo SDK `anthropic` (padrão `claude-opus-5-5`, saída em JSON com schema, `effort` médio e *fallback* de recusa do servidor) ou OpenAI pelo SDK `openai` (`json_schema` estrito, `store=false`). Provedor, modelo, chaves e limites ficam em Configurações > Plataforma > Inteligência artificial; a chave salva na tela fica cifrada e nunca volta para a tela (sem ela, usa `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` do servidor). O texto enviado sai para o provedor escolhido.
 - **Bing Web Search API v7** (`plagio.py`): requer `BING_API_KEY`. O texto analisado sai do sistema para um serviço externo.
-- **Google reCAPTCHA** (`routes/auth.py`): requer `RECAPTCHA_SECRET_KEY`; sem a chave, a verificação é ignorada (*fail-open*). Não testado.
+- **Google reCAPTCHA** (`routes/auth.py`): requer `RECAPTCHA_SECRET_KEY`; sem a chave ou sem resposta do Google, o login é recusado (*fail-closed*).
 - **Dicio (`dicio.com.br`)** (`dicionario.py`): requisição HTTP e regex sobre HTML.
 
 ---
@@ -346,7 +353,28 @@ Removidos nas fases de segurança: `/static` e `/avatars` (públicos), `/debug_p
 - Nenhuma prova gerada é armazenada; a pasta temporária da requisição é apagada ao final.
 - `log_redaction.py` mascara `senha=`, `sig=`, tokens `Bearer`, caminhos e nomes de arquivo em todos os logs, inclusive no log de acesso do uvicorn (testado com servidor real). Logs de depuração ficam desligados por padrão.
 
+**Configurações** (`configuracoes.py`, tabela `configuracoes` cifrada e com RLS)
+- Plataforma (só admin geral, visão global): política de senha e sessão para todas as bancas, com limites seguros (ex.: senha mínima de 8 a 64).
+- Banca (administrador do cliente): sessão mais curta que a da plataforma (nunca mais longa), instruções impressas por bloco/disciplina e da discursiva (padrão = textos anteriores, prova idêntica enquanto não editar), tipos de questão usados e revisão obrigatória para exportar (vira bloqueio na checagem).
+- Pessoal (`/minha-conta`, qualquer perfil): trocar a própria senha (senha atual + código do autenticador) e gerar novos códigos de recuperação.
+
+**Assistente de IA** (`assistente_ia.py`, `routes/ia.py`, tabela `uso_ia` cifrada e com RLS)
+- Desligado por padrão. Só funciona se o admin geral ligar na plataforma **e** o administrador da banca ligar na banca; a banca escolhe os recursos e escreve orientações de estilo que vão em todo pedido.
+- A IA recebe só o texto que o usuário mandou naquele clique: nada é lido do banco para a IA (nem prova montada, nem gabaritos de outras questões, nem nomes). HTML vira texto puro e imagens/base64 são removidas antes de sair.
+- O texto enviado e o recebido nunca são gravados nem registrados em log. `uso_ia` guarda só usuário, data, tokens, sucesso e (cifrados) recurso, provedor, modelo e erro; a banca vê o resumo em Configurações > IA da banca.
+- Respostas sempre em JSON com formato fixo e chegam como rascunho: o usuário escolhe o que aplicar e revisa antes de salvar. O conteúdo do usuário vai marcado como material, não como instrução.
+- Limites: por usuário/dia (a banca pode reduzir), por banca/dia e 20 pedidos por minuto. Diagramador não usa.
+
+**Avisos e e-mail** (`notificacoes.py`, `routes/notificacoes.py`, tabela `notificacoes` cifrada e com RLS)
+- Todo aviso aparece no sino do topo da tela; por e-mail, conforme as preferências da pessoa em Minha conta. Avisos de segurança (novo acesso, senha alterada, 2FA resetado) são sempre enviados.
+- Avisos e e-mails nunca levam conteúdo de prova: só o que aconteceu e um link interno para o DiagPro.
+- Servidor SMTP em Configurações > Plataforma > E-mail de avisos; a senha fica cifrada e nunca volta para a tela. TLS obrigatório (STARTTLS ou SSL); sem criptografia só com servidor local. Nome do remetente com quebra de linha é recusado (injeção de cabeçalho).
+- Fila em segundo plano junto com a API (`DIAGPRO_FILA_EMAIL=0` desliga): 5 tentativas com espera crescente; `SKIP LOCKED` evita envio duplicado.
+
 **Autenticação e HTTP**
+- Política de senha (`politica_senha.py`): mínimo de 12 caracteres e 3 de 4 tipos, sem usuário/e-mail, sem senha comum ou sequência, sem repetir as 5 últimas (histórico bcrypt cifrado), validade de 180 dias. Senha definida por administrador é provisória. Troca obrigatória (provisória, vencida ou fora da política) acontece depois do 2FA e antes do acesso. Trocar a própria senha exige a senha atual e um código do autenticador.
+- Sessão: token de 30 min renovado pela tela só enquanto há uso (`/auth/renovar`); 30 min sem uso encerram; limite absoluto de 12 h desde o login (`auth_time`). 401 em qualquer tela leva ao login com aviso.
+- 2FA (TOTP) obrigatório para todos os usuários: o segredo do autenticador e os códigos de recuperação (HMAC) ficam cifrados; o mesmo código não vale duas vezes; 5 erros em 10 min bloqueiam; tokens sem a marca `mfa` (anteriores ao 2FA ou passes) são recusados. O administrador reseta o 2FA de outro usuário (celular perdido), nunca o próprio.
 - JWT `HS256` (30 min), `bcrypt`, bloqueio de inativos, rate limits (ver [Seção 2](#2-estado-atual-das-funcionalidades)). reCAPTCHA em *fail-open* sem chave. Sem refresh token; o frontend guarda o token em `localStorage`.
 - Cabeçalhos: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Request-ID`, `Cache-Control: no-store` em rotas de API. HSTS com `ENABLE_HSTS=true`.
 
@@ -396,8 +424,9 @@ Copie `.env.example` para `.env` e preencha. Nunca versione o `.env`.
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT` | Para o compose | Contêiner PostgreSQL |
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_PLATFORM_POOL_SIZE`, `DB_PLATFORM_MAX_OVERFLOW` | Não | Pools de conexão |
 | `CORS_ORIGINS`, `ENABLE_HSTS`, `RATE_LIMIT_ENABLED` | Não | HTTP e rate limit |
-| `RECAPTCHA_SECRET_KEY` | Recomendada | Sem ela, o reCAPTCHA é ignorado |
-| `OPENAI_API_KEY`, `OPENAI_MODEL`, `BING_API_KEY` | Não | Integrações externas |
+| `RECAPTCHA_SECRET_KEY` | **Obrigatória** | Sem ela, nenhum login é aceito (`DIAGPRO_RECAPTCHA_DESATIVADO=1` só em testes) |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Não | Chave de IA de reserva (a salva em Configurações > Plataforma tem prioridade) |
+| `BING_API_KEY` | Não | Verificação de plágio |
 | `REDIS_URL`, `S3_*`, `LOCAL_STORAGE_DIR` | Não | Rate limit compartilhado e `storage.py` |
 
 ### Preparar um ambiente novo
@@ -421,7 +450,7 @@ docker exec diagpro_postgres sh -c 'cd $PGDATA && chown postgres:postgres server
 docker exec diagpro_postgres psql -U diagpro_admin -d diagpro -c "ALTER SYSTEM SET ssl = 'on'" -c "ALTER SYSTEM SET ssl_min_protocol_version = 'TLSv1.2'" -c "SELECT pg_reload_conf()"
 
 # 4. Schema, RLS e roles (role administrativa em ALEMBIC_DATABASE_URL)
-.\.venv\Scripts\alembic.exe upgrade head          # deve terminar em d8b2f4a6c1e3
+.\.venv\Scripts\alembic.exe upgrade head          # deve terminar em a2b4c6d8e0f1
 Get-Content backend/app/rls_policies.sql -Raw | docker exec -i diagpro_postgres psql -U diagpro_admin -d diagpro
 .\.venv\Scripts\python.exe scripts/setup_postgres_roles.py --rotate   # cria as roles e grava as senhas no .env
 
@@ -448,25 +477,27 @@ O dump já contém os campos cifrados; os arquivos de `storage_data/` e `templat
 
 ## 16. Testes e Validação
 
-### Suíte automatizada (`tests/test_security_rbac_rls.py`, 27 testes)
+### Suíte automatizada (`tests/test_security_rbac_rls.py`, `tests/test_assistente_ia.py` e `tests/test_notificacoes.py`, 34 testes)
 
 Execute com `.\.venv\Scripts\python.exe scripts/run_tests.py` (contêiner `diagpro_postgres` no ar). O script recria o banco descartável `diagpro_test`, aplica migrações, RLS e roles, gera uma chave mestra de teste temporária e apaga tudo ao final; o banco real e a chave real não são tocados.
 
 | Área | Testes |
 | :--- | :--- |
-| Autenticação e RBAC | `test_unauthenticated_endpoints_return_401`, `test_public_register_blocks_admin_escalation_and_bad_uploads`, `test_rbac_matrix_five_roles` |
+| Autenticação e RBAC | `test_two_factor_is_mandatory_for_everyone`, `test_password_policy_rules`, `test_forced_password_change_session_renewal_and_recaptcha`, `test_platform_and_bank_settings_take_effect`, `test_unauthenticated_endpoints_return_401`, `test_public_register_blocks_admin_escalation_and_bad_uploads`, `test_rbac_matrix_five_roles` |
 | Isolamento e RLS | `test_http_tenant_isolation_between_tenant_1_and_tenant_2`, `test_postgres_rls_isolation_and_pool_non_leakage`, `test_runtime_role_cannot_bypass_rls_via_session_variable`, `test_health_request_id_and_biblioteca_tenant_isolation`, `test_storage_path_traversal_and_export_jobs_tenant_isolation` |
 | Cifra de campos | `test_field_crypto_roundtrip_binding_and_blind_index`, `test_database_stores_only_ciphertext_and_orm_returns_plaintext`, `test_plaintext_write_to_encrypted_column_is_blocked`, `test_runtime_session_refuses_rows_of_other_tenant_even_with_tampered_context` |
 | Arquivos | `test_secure_files_store_sign_and_isolation`, `test_upload_returns_signed_url_and_public_folders_are_gone` |
 | Gestão multi-cliente | `test_tenant_change_without_reencryption_is_blocked_by_database`, `test_admin_geral_must_choose_valid_tenant_to_create_event`, `test_admin_geral_global_view_and_managed_client_isolation` |
 | Questões e conteúdos | `test_question_types_create_edit_review_and_professor_contents` |
 | Prova pronta e gabarito | `test_finished_exam_and_answer_key_require_event_password`, `test_generator_refuses_ciphertext`, `test_cors_preflight_allows_app_custom_headers`, `test_exam_seed_is_secret_reproducible_and_legacy_compatible`, `test_export_preferences_and_precheck_endpoints`, `test_generator_renders_editor_html_inline_and_answer_lines` |
+| Assistente de IA | `test_ai_assistant_rules_secrecy_and_limits`, `test_ai_text_is_stripped_of_html_and_images` (provedor falso; nunca chama IA real) |
+| Avisos e e-mail | `test_notifications_queue_preferences_and_isolation` (SMTP falso; nunca envia e-mail real) |
 | HTTP, saídas e logs | `test_security_headers_and_rate_limiting`, `test_log_redaction_masks_secrets_paths_and_exam_file_names`, `test_debug_and_disk_persisting_export_routes_were_removed` |
 
 Os testes rodam contra PostgreSQL com a role de runtime, dados sintéticos (`conftest.py`) e uma chave mestra de teste. Nunca use o banco real nem a chave real nos testes.
 
 ### Verificações executadas (19/11/2026, Windows, `.venv` da raiz)
-- **Suíte:** 27 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
+- **Suíte:** 31 aprovados num banco descartável `diagpro_test` (PostgreSQL 16, TLS `verify-full`, role `diagpro_runtime`).
 - **Migração `a9d4c2e6f0b1` no banco real**, precedida de backup cifrado: 16 gatilhos e 4 restrições únicas por cliente criados; `UPDATE` direto de `tenant_id` recusado.
 - **Migração `c5e8f1a3b9d2` no banco real**, precedida de backup cifrado verificado: coluna `imagem_path_item` criada e incluída na trava de troca de tenant.
 - **Prova mista no banco de teste** (múltipla escolha + Certo/Errado com imagem + Subjetiva de 7 linhas): numeração 1..7 sem saltos, comando sem número, itens em sequência, 7 linhas, gabarito C/E nos números certos, versão marcada com (C)/(E), sem tags HTML, exportações idênticas.
@@ -514,14 +545,14 @@ Verificações de 18/11/2026:
 - **Busca da biblioteca:** decifra as questões do cliente na memória; mais lenta em volumes grandes.
 - **Arquivos órfãos:** imagens de pré-visualizações de importação não confirmadas ficam cifradas no armazenamento sem limpeza automática.
 - **Dependências:** `redis` sem versão fixada; `boto3` ausente; imagem `minio/minio:latest` sem versão fixada.
-- **reCAPTCHA *fail-open***, sem refresh token, token em `localStorage`, `/docs` público.
+- Token em `localStorage` (sessão curta e renovada só com uso), `/docs` público.
 
 ### Próximos Passos Prioritários
 1. **Limpar o histórico do Git** (banco antigo e imagens de prova).
 2. **Testes de isolamento** em todas as rotas de questões, textos, cargos, provas e gabaritos; executar o CI no GitHub.
 3. **Corrigir os bugs conhecidos**.
 4. **Rotação de chaves** (mestra e roles) com script e procedimento documentado; avaliar KMS para a chave mestra.
-5. **Endurecimento de sessão:** refresh token em cookie `HttpOnly`/`SameSite`, reCAPTCHA *fail-closed* em produção, `/docs` restrito.
+5. **Endurecimento de sessão:** token em cookie `HttpOnly`/`SameSite`, `/docs` restrito.
 
 ---
 

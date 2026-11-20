@@ -21,6 +21,12 @@ from pydantic import BaseModel, EmailStr
 
 import os
 from uuid import uuid4
+import logging
+from datetime import datetime
+
+from backend.app import configuracoes, notificacoes, politica_senha
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -135,12 +141,14 @@ async def public_register(
     except secure_files.SecureFileError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # 4. Cria usuário (sempre inativo até aprovação do administrador)
+    # 4. Cria usuário (sempre inativo até aprovação do administrador); senha dentro da política
+    await _exigir_politica(password, username, email)
     hashed_password = get_password_hash(password)
     new_user = DBUser(
         username=username,
         email=email,
         password_hash=hashed_password,
+        senha_alterada_em=datetime.utcnow(),
         role=role,
         tenant_id=tenant_id,
         full_name=full_name,
@@ -194,6 +202,14 @@ def _verificar_role_permitida(admin_user, role) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Apenas o administrador geral pode atribuir esse perfil.",
         )
+
+
+async def _exigir_politica(senha: str, username: str, email: str) -> dict:
+    cfg = (await configuracoes.ler_plataforma())["seguranca"]
+    erros = politica_senha.problemas(senha, username, email, cfg)
+    if erros:
+        raise HTTPException(status_code=400, detail={"mensagem": "A senha não atende à política.", "problemas": erros})
+    return cfg
 
 
 async def _buscar_usuario_gerenciavel(db: AsyncSession, user_id: int, admin_user) -> DBUser:
@@ -267,12 +283,16 @@ async def create_user(
     if tenant_id is None and role_value != UserRole.ADMIN_GERAL.value:
         raise HTTPException(status_code=400, detail="Informe o cliente do usuário.")
 
+    # senha definida pelo administrador é PROVISÓRIA: troca obrigatória no primeiro acesso
+    await _exigir_politica(user_data.password, user_data.username, user_data.email)
     hashed_password = get_password_hash(user_data.password)
 
     new_user = DBUser(
         username=user_data.username,
         email=user_data.email,
         password_hash=hashed_password,
+        senha_alterada_em=datetime.utcnow(),
+        deve_trocar_senha=True,
         role=role_value,
         tenant_id=tenant_id,
         full_name=user_data.full_name,
@@ -326,7 +346,9 @@ async def update_user(
     for key, value in update_data.items():
         if key == "password":
             if value:
-                user.password_hash = get_password_hash(value)
+                # redefinida pelo administrador: provisória (troca no próximo login)
+                cfg = await _exigir_politica(value, user.username, user.email or "")
+                politica_senha.aplicar_nova_senha(user, value, provisoria=True, cfg=cfg)
         elif key == "role":
             if value is not None:
                 _verificar_role_permitida(admin_user, value)
@@ -340,6 +362,30 @@ async def update_user(
     await db.commit()
     await db.refresh(user)
     return _serialize_user(user)
+
+@router.post("/{user_id}/2fa/resetar", status_code=status.HTTP_204_NO_CONTENT)
+async def resetar_2fa(
+    user_id: int = Path(..., description="ID do usuário"),
+    db: AsyncSession = Depends(get_tenant_db),
+    admin_user: DBUser = Depends(get_admin_user),
+):
+    """
+    Celular perdido: apaga o autenticador e os códigos de recuperação do usuário; no próximo login ele
+    cadastra de novo. Ninguém reseta o próprio 2FA (uma sessão roubada não troca o autenticador).
+    """
+    user = await _buscar_usuario_gerenciavel(db, user_id, admin_user)
+    if user.id == admin_user.id:
+        raise HTTPException(status_code=403, detail="Peça a outro administrador para resetar o seu 2FA.")
+    user.totp_secret = None
+    user.totp_ativo = False
+    user.totp_ultimo_passo = None
+    user.codigos_recuperacao = None
+    await db.commit()
+    logger.warning("2FA resetado (usuário %s por administrador %s)", user.id, admin_user.id)
+    await notificacoes.notificar(user.id, "seguranca_2fa_resetado", "Sua verificação em duas etapas foi resetada",
+                                 "Um administrador resetou o autenticador da sua conta. No próximo acesso você vai "
+                                 "cadastrar o autenticador de novo. Se você não pediu isso, avise a sua banca.", "/minha-conta")
+
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(

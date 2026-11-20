@@ -23,6 +23,18 @@ import CompanyDataTab from './SettingsTabs/CompanyDataTab';
 import PhraseBankTab from './SettingsTabs/PhraseBankTab';
 import AuditTab from './SettingsTabs/AuditTab';
 import AdminClientsTab from './AdminClientsTab';
+import PlataformaSegurancaTab from './SettingsTabs/PlataformaSegurancaTab';
+import BancaConfigTab from './SettingsTabs/BancaConfigTab';
+import PlataformaIATab from './SettingsTabs/PlataformaIATab';
+import PlataformaEmailTab from './SettingsTabs/PlataformaEmailTab';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import BancaIATab from './SettingsTabs/BancaIATab';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+import LockClockOutlinedIcon from '@mui/icons-material/LockClockOutlined';
+import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
+import RuleOutlinedIcon from '@mui/icons-material/RuleOutlined';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api';
@@ -34,7 +46,14 @@ type SectionKey =
   | 'company'
   | 'appearance'
   | 'phrases'
-  | 'audit';
+  | 'audit'
+  | 'plataforma_seguranca'
+  | 'banca_seguranca'
+  | 'banca_identidade'
+  | 'banca_regras'
+  | 'banca_ia'
+  | 'plataforma_ia'
+  | 'plataforma_email';
 
 function SettingsPage() {
   const { user } = useAuth();
@@ -150,6 +169,62 @@ function SettingsPage() {
       badge: 'Em uso',
     },
     {
+      key: 'banca_seguranca' as SectionKey,
+      group: 'BANCA',
+      title: 'Segurança da banca',
+      desc: 'Tempo de sessão próprio (mais curto que o da plataforma) e 2FA obrigatório.',
+      icon: <LockClockOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
+    {
+      key: 'banca_identidade' as SectionKey,
+      group: 'BANCA',
+      title: 'Identidade da prova',
+      desc: 'Instruções impressas por bloco/disciplina e da prova discursiva.',
+      icon: <ArticleOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
+    {
+      key: 'banca_regras' as SectionKey,
+      group: 'BANCA',
+      title: 'Regras das questões',
+      desc: 'Tipos de questão usados pela banca e revisão obrigatória para exportar.',
+      icon: <RuleOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
+    {
+      key: 'banca_ia' as SectionKey,
+      group: 'BANCA',
+      title: 'IA da banca',
+      desc: 'Liga o assistente de IA, escolhe os recursos, orienta o estilo e mostra o uso.',
+      icon: <AutoAwesomeOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
+    ...(isAdminGeral
+      ? [{
+        key: 'plataforma_seguranca' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'Segurança da plataforma',
+        desc: 'Política de senha e sessão para todas as bancas.',
+        icon: <ShieldOutlinedIcon fontSize="small" />,
+        badge: 'Novo',
+      }, {
+        key: 'plataforma_ia' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'Inteligência artificial',
+        desc: 'Provedor (Claude ou OpenAI), modelo, chaves cifradas e limites diários.',
+        icon: <SmartToyOutlinedIcon fontSize="small" />,
+        badge: 'Novo',
+      }, {
+        key: 'plataforma_email' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'E-mail de avisos',
+        desc: 'Servidor SMTP para os avisos por e-mail (senha cifrada) e envio de teste.',
+        icon: <MailOutlineIcon fontSize="small" />,
+        badge: 'Novo',
+      }]
+      : []),
+    {
       key: 'audit' as SectionKey,
       group: 'OPERAÇÃO & CONCURSOS',
       title: 'Auditoria de Geração',
@@ -165,7 +240,7 @@ function SettingsPage() {
     { label: 'Concursos / Eventos', value: counts.events, sub: 'Isolados por tenant via PostgreSQL RLS', accent: '#38BDF8' },
     { label: 'Banco de Frases', value: counts.phrases, sub: 'Prontas para sorteio em capas PDF', accent: '#F8FAFC' },
     { label: 'Perfis de Acesso', value: 5, sub: 'Admin Geral, Admin, Prof, Revisor, Diag', accent: '#F59E0B' },
-    { label: 'Camada de Segurança', value: 'RLS', sub: 'Criptografia Fernet + LGPD ativa', accent: '#10B981' },
+    { label: 'Camada de Segurança', value: 'RLS', sub: 'AES-256-GCM por cliente + 2FA obrigatório', accent: '#10B981' },
   ];
 
   return (
@@ -241,6 +316,42 @@ function SettingsPage() {
                 <ListItemIcon><HubOutlinedIcon fontSize="small" /></ListItemIcon>
                 <ListItemText primary="Bancas & Clientes" />
               </ListItemButton>
+            )}
+
+            <Typography sx={groupTitleSx}>BANCA</Typography>
+            <ListItemButton selected={section === 'banca_seguranca'} onClick={() => setSection('banca_seguranca')} sx={subNavSx(section === 'banca_seguranca')}>
+              <ListItemIcon><LockClockOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Segurança da banca" />
+            </ListItemButton>
+            <ListItemButton selected={section === 'banca_identidade'} onClick={() => setSection('banca_identidade')} sx={subNavSx(section === 'banca_identidade')}>
+              <ListItemIcon><ArticleOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Identidade da prova" />
+            </ListItemButton>
+            <ListItemButton selected={section === 'banca_regras'} onClick={() => setSection('banca_regras')} sx={subNavSx(section === 'banca_regras')}>
+              <ListItemIcon><RuleOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Regras das questões" />
+            </ListItemButton>
+            <ListItemButton selected={section === 'banca_ia'} onClick={() => setSection('banca_ia')} sx={subNavSx(section === 'banca_ia')}>
+              <ListItemIcon><AutoAwesomeOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="IA da banca" />
+            </ListItemButton>
+
+            {isAdminGeral && (
+              <>
+                <Typography sx={groupTitleSx}>PLATAFORMA</Typography>
+                <ListItemButton selected={section === 'plataforma_seguranca'} onClick={() => setSection('plataforma_seguranca')} sx={subNavSx(section === 'plataforma_seguranca')}>
+                  <ListItemIcon><ShieldOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Segurança da plataforma" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_ia'} onClick={() => setSection('plataforma_ia')} sx={subNavSx(section === 'plataforma_ia')}>
+                  <ListItemIcon><SmartToyOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Inteligência artificial" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_email'} onClick={() => setSection('plataforma_email')} sx={subNavSx(section === 'plataforma_email')}>
+                  <ListItemIcon><MailOutlineIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="E-mail de avisos" />
+                </ListItemButton>
+              </>
             )}
 
             <Typography sx={groupTitleSx}>OPERAÇÃO & CONCURSOS</Typography>
@@ -388,6 +499,13 @@ function SettingsPage() {
               {section === 'appearance' && <AppearanceTab />}
               {section === 'phrases' && <PhraseBankTab />}
               {section === 'audit' && <AuditTab />}
+              {section === 'banca_seguranca' && <BancaConfigTab key="seg" secao="seguranca" />}
+              {section === 'banca_identidade' && <BancaConfigTab key="ide" secao="identidade" />}
+              {section === 'banca_regras' && <BancaConfigTab key="reg" secao="regras" />}
+              {section === 'plataforma_seguranca' && isAdminGeral && <PlataformaSegurancaTab />}
+              {section === 'banca_ia' && <BancaIATab />}
+              {section === 'plataforma_ia' && isAdminGeral && <PlataformaIATab />}
+              {section === 'plataforma_email' && isAdminGeral && <PlataformaEmailTab />}
             </Box>
           )}
         </Box>

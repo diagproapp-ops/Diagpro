@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReCAPTCHA from 'react-google-recaptcha';
 import { useAuth } from '../contexts/AuthContext';
+import DoisFatoresDialog from '../components/DoisFatoresDialog';
+import TrocarSenhaDialog from '../components/TrocarSenhaDialog';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -238,7 +240,28 @@ export default function LoginPage() {
   const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, concluirLogin } = useAuth();
+  // 2FA obrigatório: depois da senha vem o código do celular (ou o cadastro, no primeiro acesso)
+  const [passe2fa, setPasse2fa] = useState<{ etapa: '2fa' | 'cadastro_2fa'; token_2fa: string } | null>(null);
+  // troca obrigatória de senha (provisória/vencida/fraca), pedida depois do 2FA
+  const [passeTroca, setPasseTroca] = useState<string | null>(null);
+  // aviso de sessão encerrada (inatividade, 12 h ou token vencido)
+  useEffect(() => {
+    const motivo = new URLSearchParams(window.location.search).get('sessao');
+    if (motivo === 'inatividade') setError('Sua sessão foi encerrada após 30 minutos sem uso. Entre novamente.');
+    else if (motivo === 'expirada') setError('Sua sessão expirou. Entre novamente.');
+  }, []);
+  const entrarComAcesso = async (dados: any) => {
+    if (dados?.etapa === 'trocar_senha') {
+      setPasse2fa(null);
+      setPasseTroca(dados.token_2fa);
+      return;
+    }
+    await concluirLogin(dados);
+    setPasse2fa(null);
+    setPasseTroca(null);
+    navigate('/dashboard');
+  };
   const recaptchaRef = useRef<ReCAPTCHA>(null);
   const navigate = useNavigate();
 
@@ -261,8 +284,12 @@ export default function LoginPage() {
       setLoading(true);
     }
     try {
-      await login(username, password, recaptchaToken);
-      if (isMounted.current) navigate('/dashboard');
+      const resultado = await login(username, password, recaptchaToken);
+      if (resultado.etapa === 'ok') {
+        if (isMounted.current) navigate('/dashboard');
+      } else if (isMounted.current) {
+        setPasse2fa({ etapa: resultado.etapa, token_2fa: resultado.token_2fa });
+      }
     } catch (err: any) {
       if (isMounted.current) {
         setError(err?.response?.data?.detail || 'Falha no login.');
@@ -726,6 +753,35 @@ export default function LoginPage() {
           </Button>
         </Box>
       </Box>
+      {passe2fa && (
+        <DoisFatoresDialog
+          open
+          etapa={passe2fa.etapa}
+          token2fa={passe2fa.token_2fa}
+          onConcluido={entrarComAcesso}
+          onCancelar={(mensagem) => {
+            setPasse2fa(null);
+            setPassword('');
+            if (mensagem) setError(mensagem);
+            try { recaptchaRef.current?.reset(); } catch (_) {}
+            setRecaptchaToken(null);
+          }}
+        />
+      )}
+      {passeTroca && (
+        <TrocarSenhaDialog
+          open
+          token2fa={passeTroca}
+          onConcluido={entrarComAcesso}
+          onCancelar={(mensagem) => {
+            setPasseTroca(null);
+            setPassword('');
+            if (mensagem) setError(mensagem);
+            try { recaptchaRef.current?.reset(); } catch (_) {}
+            setRecaptchaToken(null);
+          }}
+        />
+      )}
     </>
   );
 }

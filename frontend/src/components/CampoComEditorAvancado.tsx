@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { Box, Button, Modal, Typography, Stack } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Modal, TextField, Typography, Stack } from "@mui/material";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
+import api from "../api";
+import { erroIA, podeUsar, textoParaHtml, useStatusIA } from "./ia/iaComum";
 import EditIcon from "@mui/icons-material/Edit";
 import ChatIcon from "@mui/icons-material/Chat";
 import BugReportIcon from "@mui/icons-material/BugReport";
@@ -57,6 +60,14 @@ export default function CampoComEditorAvancado({
   placeholder,
   height = 500,
 }: Props) {
+  // Assistente de IA (botões só aparecem se a plataforma e a banca ligarem)
+  const statusIA = useStatusIA();
+  const [openMelhorar, setOpenMelhorar] = useState(false);
+  const [modoMelhorar, setModoMelhorar] = useState("revisar_portugues");
+  const [melhorado, setMelhorado] = useState<{ texto: string; mudancas: string[] } | null>(null);
+  const [loadingMelhorar, setLoadingMelhorar] = useState(false);
+  const [erroMelhorar, setErroMelhorar] = useState<string | null>(null);
+
   // Editor modal states
   const [modalOpen, setModalOpen] = useState(false);
   const [editorValue, setEditorValue] = useState<string>(value);
@@ -103,21 +114,29 @@ export default function CampoComEditorAvancado({
     if (!chatInput.trim()) return;
     setLoadingChat(true);
     try {
-      const resp = await fetch("/api/ia-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatInput, contexto: editorValue }),
-      });
-      const data = await resp.json();
+      const { data } = await api.post("/ia/chat", { mensagem: chatInput, contexto: editorValue });
       setChatHistory([
         ...chatHistory,
-        { user: chatInput, ia: data.reply ?? "Sem resposta" }
+        { user: chatInput, ia: data.resposta ?? "Sem resposta" }
       ]);
       setChatInput("");
     } catch (err) {
-      setChatHistory([...chatHistory, { user: chatInput, ia: "Erro ao acessar IA." }]);
+      setChatHistory([...chatHistory, { user: chatInput, ia: erroIA(err) }]);
     }
     setLoadingChat(false);
+  };
+
+  // Melhorar texto com IA (o resultado substitui o texto só se o usuário confirmar)
+  const handleMelhorar = async () => {
+    setLoadingMelhorar(true);
+    setErroMelhorar(null);
+    try {
+      const { data } = await api.post("/ia/texto/melhorar", { texto: editorValue, modo: modoMelhorar });
+      setMelhorado(data);
+    } catch (err) {
+      setErroMelhorar(erroIA(err));
+    }
+    setLoadingMelhorar(false);
   };
 
   // Plágio handler
@@ -125,12 +144,7 @@ export default function CampoComEditorAvancado({
     setLoadingPlagio(true);
     setOpenPlagio(true);
     try {
-      const resp = await fetch("/api/check-plagio", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texto: editorValue }),
-      });
-      const data = await resp.json();
+      const { data } = await api.post("/api/check-plagio", { texto: editorValue });
       setPlagioResult(data);
     } catch (err) {
       setPlagioResult({
@@ -147,12 +161,7 @@ export default function CampoComEditorAvancado({
   const handleBuscarBib = async () => {
     setLoadingBib(true);
     try {
-      const resp = await fetch("/api/biblioteca", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ busca: buscaBib }),
-      });
-      const data = await resp.json();
+      const { data } = await api.post("/api/biblioteca", { busca: buscaBib });
       setResultBib(data.questoes || []);
     } catch (err) {
       setResultBib([]);
@@ -166,12 +175,7 @@ export default function CampoComEditorAvancado({
     setLoadingDicio(true);
     setDicionarioDef("");
     try {
-      const resp = await fetch("/api/dicionario", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ termo: dicionarioTermo }),
-      });
-      const data = await resp.json();
+      const { data } = await api.post("/api/dicionario", { termo: dicionarioTermo });
       setDicionarioDef(data.definicao ?? "Nenhuma definição encontrada.");
     } catch (err) {
       setDicionarioDef("Erro ao buscar definição.");
@@ -182,9 +186,16 @@ export default function CampoComEditorAvancado({
   // Botões auxiliares para passar para o editor e para o fullscreen
   const renderExtraButtons = () => (
     <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-      <Button size="small" startIcon={<ChatIcon />} onClick={() => setOpenChat(true)} variant="contained" color="info">
-        Chat IA
-      </Button>
+      {podeUsar(statusIA, "chat") && (
+        <Button size="small" startIcon={<ChatIcon />} onClick={() => setOpenChat(true)} variant="contained" color="info">
+          Chat IA
+        </Button>
+      )}
+      {podeUsar(statusIA, "melhorar_texto") && (
+        <Button size="small" startIcon={<AutoFixHighIcon />} onClick={() => { setMelhorado(null); setErroMelhorar(null); setOpenMelhorar(true); }} variant="contained" color="secondary">
+          Melhorar texto
+        </Button>
+      )}
       <Button size="small" startIcon={<BugReportIcon />} onClick={handleCheckPlagio} variant="contained" color="error">
         Plágio
       </Button>
@@ -314,6 +325,44 @@ export default function CampoComEditorAvancado({
         handleSendToChat={handleSendToChat}
         loadingChat={loadingChat}
       />
+
+      <Dialog open={openMelhorar} onClose={() => setOpenMelhorar(false)} maxWidth="md" fullWidth sx={{ zIndex: 1601 }}>
+        <DialogTitle>Melhorar texto com IA</DialogTitle>
+        <DialogContent dividers>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Vai para a IA só o texto deste campo (sem imagens). Negrito, imagens e fórmulas não são mantidos no texto sugerido.
+          </Alert>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+            <TextField select size="small" label="O que fazer" value={modoMelhorar} onChange={e => setModoMelhorar(e.target.value)} sx={{ minWidth: 260 }}>
+              <MenuItem value="revisar_portugues">Corrigir português</MenuItem>
+              <MenuItem value="clareza">Deixar mais claro</MenuItem>
+              <MenuItem value="simplificar">Simplificar</MenuItem>
+              <MenuItem value="formalizar">Linguagem formal de prova</MenuItem>
+            </TextField>
+            <Button variant="contained" onClick={handleMelhorar} disabled={loadingMelhorar || !editorValue || editorValue === "<p></p>"}>
+              {melhorado ? "Gerar de novo" : "Gerar sugestão"}
+            </Button>
+            {loadingMelhorar && <CircularProgress size={22} />}
+          </Stack>
+          {erroMelhorar && <Alert severity="error" sx={{ mb: 2 }}>{erroMelhorar}</Alert>}
+          {melhorado && (
+            <Box>
+              <Typography sx={{ whiteSpace: "pre-wrap", mb: 1.5 }}>{melhorado.texto}</Typography>
+              {!!melhorado.mudancas?.length && (
+                <Typography variant="body2" color="text.secondary">Mudanças: {melhorado.mudancas.join("; ")}</Typography>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenMelhorar(false)}>Fechar</Button>
+          {melhorado && (
+            <Button variant="contained" onClick={() => { setEditorValue(textoParaHtml(melhorado.texto)); setOpenMelhorar(false); }}>
+              Substituir no editor
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
 
       <PlagioModal
         open={openPlagio}

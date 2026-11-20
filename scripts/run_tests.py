@@ -62,6 +62,7 @@ def main() -> int:
         "DIAGPRO_MASTER_KEY_FILE": str(tmp / "test_master.key"),  # chave só de teste
         "DIAGPRO_FILES_DIR": str(tmp / "files"),
         "RECAPTCHA_SECRET_KEY": "",
+        "DIAGPRO_RECAPTCHA_DESATIVADO": "1",  # só no banco de teste; em produção o reCAPTCHA falha fechado
         "PYTHONDONTWRITEBYTECODE": "1",
     })
     try:

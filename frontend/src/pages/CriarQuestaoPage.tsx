@@ -22,6 +22,9 @@ import {
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api";
 import Layout from "../components/Layout";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
+import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
 import CampoComEditorAvancado from "../components/CampoComEditorAvancado";
 import { useAuth } from "../contexts/AuthContext";
 import FileInputMui from "./FileInputMui";
@@ -95,7 +98,23 @@ export default function CriarQuestaoPage() {
     message: "",
     severity: "success" as "success" | "error" | "warning" | "info",
   });
+  // Assistente de IA (só aparece se a plataforma e a banca ligarem)
+  const statusIA = useStatusIA();
+  const [iaAberto, setIaAberto] = useState(false);
   const [sending, setSending] = useState(false);
+
+  // Tipos que a banca usa (Configurações > Regras das questões)
+  const [tiposPermitidos, setTiposPermitidos] = useState<string[]>(TIPO_QUESTAO.map(t => t.value));
+  useEffect(() => {
+    api.get('/config/regras-questoes')
+      .then(({ data }) => {
+        const tipos: string[] = Array.isArray(data?.tipos_permitidos) && data.tipos_permitidos.length ? data.tipos_permitidos : TIPO_QUESTAO.map(t => t.value);
+        setTiposPermitidos(tipos);
+        setForm(prev => tipos.includes(prev.tipo) ? prev : { ...prev, tipo: tipos[0] });
+      })
+      .catch(() => {});
+  }, []);
+  const opcoesTipo = TIPO_QUESTAO.filter(t => tiposPermitidos.includes(t.value));
 
   // Textos de Referência
   const [textosReferencia, setTextosReferencia] = useState<TextoReferenciaType[]>([]);
@@ -331,21 +350,23 @@ export default function CriarQuestaoPage() {
           <Typography variant="h5" fontWeight="bold" gutterBottom>
             Criar Nova Questão
           </Typography>
-          <Button
-            variant="outlined"
-            color="primary"
-            onClick={() => navigate(-1)}
-            tabIndex={-1}
-          >
-            Voltar
-          </Button>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            {statusIA.disponivel && (
+              <Button variant="contained" color="secondary" startIcon={<AutoAwesomeIcon />} onClick={() => setIaAberto(true)}>
+                Assistente de IA
+              </Button>
+            )}
+            <Button variant="outlined" color="primary" onClick={() => navigate(-1)} tabIndex={-1}>
+              Voltar
+            </Button>
+          </Box>
         </Box>
         <Divider sx={{ mb: 2 }} />
 
         {/* Tipo de Questão */}
         <Box sx={{ mb: 3, maxWidth: 320 }}>
           <Autocomplete
-            options={TIPO_QUESTAO}
+            options={opcoesTipo}
             getOptionLabel={opt => opt.label}
             value={TIPO_QUESTAO.find(opt => opt.value === form.tipo) || null}
             onChange={(_, newValue) =>
@@ -772,6 +793,18 @@ export default function CriarQuestaoPage() {
           {snackbar.message}
         </Alert>
       </Snackbar>
+      {iaAberto && (
+        <AssistenteIAQuestao
+          open={iaAberto}
+          onClose={() => setIaAberto(false)}
+          status={statusIA}
+          questao={formParaQuestaoIA(form)}
+          onAplicar={(ap, aviso) => {
+            setForm((prev: any) => aplicarNoForm(prev, ap));
+            setSnackbar({ open: true, message: aviso, severity: "info" });
+          }}
+        />
+      )}
     </Layout>
   );
 }

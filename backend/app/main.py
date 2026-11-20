@@ -16,7 +16,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from backend.app.database import SessionLocal
-from backend.app.routes.ia_chat import router as ia_chat_router
+from backend.app.routes.ia import router as ia_router
+from backend.app.routes.notificacoes import router as notificacoes_router
+from backend.app import notificacoes as _notificacoes
 from backend.app.routes.plagio import router as plagio_router
 from backend.app.routes.biblioteca import router as biblioteca_router
 from backend.app.routes.dicionario import router as dicionario_router
@@ -30,6 +32,7 @@ from backend.app.routes.questoes import router as questoes_router
 from backend.app.routes.provas import router as provas
 from backend.app.routes.provas_geracao import router as provas_geracao_router
 from backend.app.routes import audit_log
+from backend.app.routes import configuracoes as configuracoes_routes
 from backend.app.routes.exportacao import router as export_router
 from backend.app.routes.gabarito import router as gabarito_router
 from backend.app.routes.templates import router as templates_router
@@ -79,7 +82,16 @@ app.include_router(cargos_import_router)
 app.include_router(conteudos_router, prefix="/conteudos")
 app.include_router(textos_referencia.router)
 app.include_router(questoes_router)
-app.include_router(ia_chat_router, prefix="/api")
+app.include_router(ia_router)
+app.include_router(notificacoes_router)
+
+
+@app.on_event("startup")
+async def _iniciar_fila_de_email():
+    """Envia os avisos por e-mail em segundo plano (DIAGPRO_FILA_EMAIL=0 desliga)."""
+    import asyncio
+    if _notificacoes.fila_ligada():
+        app.state.fila_email = asyncio.create_task(_notificacoes.laco_da_fila())
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")
@@ -87,6 +99,7 @@ app.include_router(dicionario_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(provas_geracao_router)
 app.include_router(audit_log.router)
+app.include_router(configuracoes_routes.router)
 app.include_router(export_router, prefix="/api/export")
 app.include_router(gabarito_router, prefix="/api/gabarito")
 app.include_router(templates_router, prefix="/api")

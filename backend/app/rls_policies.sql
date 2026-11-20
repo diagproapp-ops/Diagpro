@@ -30,7 +30,10 @@ DECLARE
         'company_data',
         'conteudos',
         'TextosReferenciaGeral',
-        'HistoricoRevisaoQuestao'
+        'HistoricoRevisaoQuestao',
+        'configuracoes',
+        'uso_ia',
+        'notificacoes'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

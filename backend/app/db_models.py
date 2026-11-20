@@ -48,6 +48,16 @@ class User(Base):
     conta_corrente = Column(Ciphertext, nullable=True)     # <--- NOVO
     is_active = Column(Boolean, default=True)
     terms_acceptance = Column(Ciphertext, nullable=True)
+    # 2FA (TOTP) obrigatório para todos: segredo e códigos de recuperação cifrados
+    totp_secret = Column(Ciphertext, nullable=True)
+    totp_ativo = Column(Boolean, nullable=False, default=False, server_default="false")
+    totp_ultimo_passo = Column(Integer, nullable=True)  # anti-reuso do mesmo código
+    codigos_recuperacao = Column(Ciphertext, nullable=True)  # lista de HMACs (cada código vale uma vez)
+    # Política de senha: validade, troca obrigatória e histórico (bcrypt das últimas senhas, cifrado)
+    senha_alterada_em = Column(DateTime, nullable=True)
+    deve_trocar_senha = Column(Boolean, nullable=False, default=False, server_default="false")
+    senha_historico = Column(Ciphertext, nullable=True)
+    preferencias = Column(Ciphertext, nullable=True)  # avisos por e-mail que a pessoa quer receber
     username_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
     email_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
     full_name_bidx = Column(String(64), nullable=True, index=True)  # índice cego (HMAC)
@@ -57,6 +67,44 @@ class User(Base):
         UniqueConstraint('username_bidx', name='uq_users_username_bidx'),
         UniqueConstraint('email_bidx', name='uq_users_email_bidx'),
     )
+
+class Configuracao(Base):
+    """Configurações: tenant_id nulo = plataforma (só admin geral, via role de plataforma); senão, da banca."""
+    __tablename__ = "configuracoes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    dados = Column(Ciphertext, nullable=False)
+    atualizado_em = Column(DateTime, nullable=True)
+    atualizado_por = Column(Ciphertext, nullable=True)
+
+
+class UsoIA(Base):
+    """Uma chamada ao assistente de IA (sem o texto: só quem, quando, tokens e resultado)."""
+    __tablename__ = "uso_ia"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    usuario_id = Column(Integer, nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    tokens_entrada = Column(Integer, nullable=False, default=0)
+    tokens_saida = Column(Integer, nullable=False, default=0)
+    sucesso = Column(Boolean, nullable=False, default=False)
+    detalhes = Column(Ciphertext, nullable=False)  # {recurso, provedor, modelo, erro}
+
+
+class Notificacao(Base):
+    """Aviso a um usuário (no sistema e, se for o caso, por e-mail). Conteúdo cifrado; fila de e-mail sem conteúdo."""
+    __tablename__ = "notificacoes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tipo = Column(String(40), nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    lida_em = Column(DateTime, nullable=True)
+    conteudo = Column(Ciphertext, nullable=False)  # {titulo, mensagem, link}
+    email_estado = Column(String(12), nullable=False)  # pendente | enviado | falhou | nao_enviar
+    email_tentativas = Column(Integer, nullable=False, default=0)
+    email_proxima_tentativa = Column(DateTime, nullable=True)
+
 
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"

@@ -21,6 +21,9 @@ import {
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../api";
 import Layout from "../components/Layout";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
+import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
 import CampoComEditorAvancado from "../components/CampoComEditorAvancado";
 import { useAuth } from "../contexts/AuthContext";
 import FileInputMui from "./FileInputMui";
@@ -105,6 +108,9 @@ export default function RevisarQuestaoPage() {
     message: "",
     severity: "success" as "success" | "error" | "warning" | "info",
   });
+  // Assistente de IA (só aparece se a plataforma e a banca ligarem)
+  const statusIA = useStatusIA();
+  const [iaAberto, setIaAberto] = useState(false);
   const [sending, setSending] = useState(false);
 
   // Textos de referência para autocomplete
@@ -278,14 +284,16 @@ export default function RevisarQuestaoPage() {
             </Typography>
       )}
           </Box>
-          <Button
-            variant="outlined"
-            color="primary"
-            onClick={() => navigate(-1)}
-            tabIndex={-1}
-          >
-            Voltar
-          </Button>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            {statusIA.disponivel && (
+              <Button variant="contained" color="secondary" startIcon={<AutoAwesomeIcon />} onClick={() => setIaAberto(true)}>
+                Assistente de IA
+              </Button>
+            )}
+            <Button variant="outlined" color="primary" onClick={() => navigate(-1)} tabIndex={-1}>
+              Voltar
+            </Button>
+          </Box>
         </Box>
         <Divider sx={{ mb: 2 }} />
 
@@ -710,6 +718,18 @@ export default function RevisarQuestaoPage() {
           {snackbar.message}
         </Alert>
       </Snackbar>
+      {iaAberto && (
+        <AssistenteIAQuestao
+          open={iaAberto}
+          onClose={() => setIaAberto(false)}
+          status={statusIA}
+          questao={formParaQuestaoIA(form)}
+          abaInicial="revisar" permitirGerar={false} onAplicar={(ap, aviso) => {
+            setForm((prev: any) => aplicarNoForm(prev, ap));
+            setSnackbar({ open: true, message: aviso, severity: "info" });
+          }}
+        />
+      )}
     </Layout>
   );
 }

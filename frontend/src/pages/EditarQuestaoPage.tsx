@@ -29,6 +29,7 @@ import HistoryIcon from "@mui/icons-material/History";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
 import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
+import AvisoIA from "../components/ia/AvisoIA";
 import CampoComEditorAvancado from "../components/CampoComEditorAvancado";
 import { useAuth } from "../contexts/AuthContext";
 import FileInputMui from "./FileInputMui";
@@ -434,6 +435,7 @@ export default function EditarQuestaoPage() {
                 Assistente de IA
               </Button>
             )}
+            <AvisoIA status={statusIA} />
             <Button variant="outlined" color="primary" onClick={() => navigate(-1)} tabIndex={-1}>
               Voltar
             </Button>

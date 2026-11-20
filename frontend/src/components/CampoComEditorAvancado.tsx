@@ -3,6 +3,7 @@ import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogCont
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import api from "../api";
 import { erroIA, podeUsar, textoParaHtml, useStatusIA } from "./ia/iaComum";
+import AvisoIA from "./ia/AvisoIA";
 import EditIcon from "@mui/icons-material/Edit";
 import ChatIcon from "@mui/icons-material/Chat";
 import BugReportIcon from "@mui/icons-material/BugReport";
@@ -188,7 +189,7 @@ export default function CampoComEditorAvancado({
 
   // Botões auxiliares para passar para o editor e para o fullscreen
   const renderExtraButtons = () => (
-    <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
       {podeUsar(statusIA, "chat") && (
         <Button size="small" startIcon={<ChatIcon />} onClick={() => setOpenChat(true)} variant="contained" color="info">
           Chat IA
@@ -208,6 +209,7 @@ export default function CampoComEditorAvancado({
       <Button size="small" startIcon={<MenuBookIcon />} onClick={() => setOpenDicionario(true)} variant="contained" color="secondary">
         Dicionário
       </Button>
+      <AvisoIA status={statusIA} compacto />
     </Stack>
   );
 

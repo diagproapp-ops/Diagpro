@@ -21,6 +21,7 @@ import contextlib
 import copy
 import hashlib
 import hmac
+import json
 import os
 import re
 import shutil
@@ -28,6 +29,7 @@ import struct
 import tempfile
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -347,7 +349,8 @@ def materialize(obj: Any, tenant_id: int | None) -> Iterator[tuple[Any, str]]:
 
 
 # --------------------------------------------------------------------------- arquivos nomeados (templates)
-TEMPLATES_ROOT = PROJECT_ROOT / "templates_eventos"
+# Testes e API de teste apontam DIAGPRO_TEMPLATES_DIR para uma pasta própria: nunca mexem nos templates reais.
+TEMPLATES_ROOT = Path(os.getenv("DIAGPRO_TEMPLATES_DIR") or PROJECT_ROOT / "templates_eventos")
 
 
 def _named_fid(label: str) -> str:
@@ -362,7 +365,12 @@ def _template_path(evento_id: str, nome: str) -> Path:
     return Path(caminho_dentro_de(str(pasta), nome + ".enc"))
 
 
-def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int) -> None:
+def _template_meta_path(path: Path) -> Path:
+    """Informações do template (quem enviou, quando, tamanho) num arquivo cifrado ao lado: X.docx.meta.enc."""
+    return path.with_name(path.name[:-len(".enc")] + ".meta.enc")
+
+
+def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int, enviado_por_id: int | None = None) -> None:
     path = _template_path(evento_id, nome)
     _check_magic(data, os.path.splitext(nome)[1])
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -370,6 +378,31 @@ def write_template(evento_id: str, nome: str, data: bytes, tenant_id: int) -> No
     with open(tmp, "wb") as f:
         _encrypt_to(f, data, _scope(tenant_id), _named_fid(f"template|{evento_id}|{os.path.basename(path)}"))
     os.replace(tmp, path)
+    # só o id de quem enviou (o nome é lido do cadastro ao listar: anonimização LGPD vale aqui também)
+    meta = json.dumps({"enviado_por_id": enviado_por_id, "enviado_em": datetime.now().isoformat(timespec="seconds"),
+                       "tamanho": len(data)}).encode("utf-8")
+    mpath = _template_meta_path(path)
+    mtmp = mpath.with_suffix(".tmp")
+    with open(mtmp, "wb") as f:
+        _encrypt_to(f, meta, _scope(tenant_id), _named_fid(f"template-meta|{evento_id}|{os.path.basename(path)}"))
+    os.replace(mtmp, mpath)
+
+
+def info_template(evento_id: str, nome: str, tenant_id: int) -> dict:
+    """{enviado_por_id, enviado_em, tamanho}; templates antigos (sem informações) usam a data do arquivo."""
+    path = _template_path(evento_id, nome)
+    if not path.is_file():
+        raise SecureFileError("Template não encontrado.")
+    mpath = _template_meta_path(path)
+    if mpath.is_file():
+        try:
+            with open(mpath, "rb") as f:
+                return json.loads(_decrypt_from(f, _scope(tenant_id), _named_fid(f"template-meta|{evento_id}|{os.path.basename(path)}")))
+        except (SecureFileError, ValueError):
+            pass
+    st = path.stat()
+    return {"enviado_por_id": None, "enviado_em": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+            "tamanho": None}
 
 
 def read_template(evento_id: str, nome: str, tenant_id: int) -> bytes:
@@ -386,13 +419,15 @@ def list_templates(evento_id: str) -> list[str]:
     pasta = Path(caminho_dentro_de(str(TEMPLATES_ROOT), str(evento_id)))
     if not pasta.is_dir():
         return []
-    return sorted(p.name[:-4] for p in pasta.iterdir() if p.is_file() and p.name.endswith(".enc"))
+    return sorted(p.name[:-4] for p in pasta.iterdir()
+                  if p.is_file() and p.name.endswith(".enc") and not p.name.endswith(".meta.enc"))
 
 
 def delete_template(evento_id: str, nome: str) -> bool:
     path = _template_path(evento_id, nome)
     if path.is_file():
         path.unlink()
+        _template_meta_path(path).unlink(missing_ok=True)
         return True
     return False
 

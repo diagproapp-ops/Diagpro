@@ -25,6 +25,7 @@ import Layout from "../components/Layout";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import AssistenteIAQuestao from "../components/ia/AssistenteIAQuestao";
 import { aplicarNoForm, formParaQuestaoIA, useStatusIA } from "../components/ia/iaComum";
+import AvisoIA from "../components/ia/AvisoIA";
 import { confirmarSeHouverParecida } from "../components/HistoricoVersoesDialog";
 import CampoComEditorAvancado from "../components/CampoComEditorAvancado";
 import { useAuth } from "../contexts/AuthContext";
@@ -361,6 +362,7 @@ export default function CriarQuestaoPage() {
                 Assistente de IA
               </Button>
             )}
+            <AvisoIA status={statusIA} />
             <Button variant="outlined" color="primary" onClick={() => navigate(-1)} tabIndex={-1}>
               Voltar
             </Button>

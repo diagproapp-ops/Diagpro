@@ -98,6 +98,18 @@ const PlataformaIATab: React.FC = () => {
           control={<Switch checked={ia.habilitada} onChange={e => setIa({ ...ia, habilitada: e.target.checked })} />}
           label={ia.habilitada ? 'IA ligada na plataforma' : 'IA desligada na plataforma'}
         />
+        {(() => {
+          const temChave = (p: Provedor) => ia.chaves[p].definida || ia.chaves[p].no_ambiente;
+          if (temChave(ia.provedor)) return null;
+          const outro = (Object.keys(NOMES) as Provedor[]).find((p) => p !== ia.provedor && temChave(p));
+          return (
+            <Alert severity="warning" sx={{ mt: 1.5 }}
+              action={outro ? <Button color="inherit" size="small" sx={{ whiteSpace: 'nowrap' }} onClick={() => setIa({ ...ia, provedor: outro })}>Usar {NOMES[outro]}</Button> : undefined}>
+              O provedor em uso ({NOMES[ia.provedor]}) não tem chave: a IA não aparece para ninguém.
+              {outro ? ` Já existe chave para ${NOMES[outro]}.` : ' Cole a chave dele abaixo.'}
+            </Alert>
+          );
+        })()}
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, mt: 2 }}>
           <TextField select label="Provedor em uso" value={ia.provedor}
             onChange={e => setIa({ ...ia, provedor: e.target.value as Provedor })}

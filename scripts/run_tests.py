@@ -61,6 +61,7 @@ def main() -> int:
         "DB_SSL_ROOT_CERT": cfg["DB_SSL_ROOT_CERT"],
         "DIAGPRO_MASTER_KEY_FILE": str(tmp / "test_master.key"),  # chave só de teste
         "DIAGPRO_FILES_DIR": str(tmp / "files"),
+        "DIAGPRO_TEMPLATES_DIR": str(tmp / "templates"),  # nunca a pasta real de templates
         "RECAPTCHA_SECRET_KEY": "",
         "DIAGPRO_RECAPTCHA_DESATIVADO": "1",  # só no banco de teste; em produção o reCAPTCHA falha fechado
         "PYTHONDONTWRITEBYTECODE": "1",

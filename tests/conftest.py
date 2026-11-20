@@ -10,6 +10,12 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+# Os testes NUNCA gravam/apagam templates na pasta real do sistema (o evento de teste tem o mesmo id de um evento
+# real): usam uma pasta temporária, definida antes de importar o app.
+if not os.environ.get("DIAGPRO_TEMPLATES_DIR"):
+    import tempfile as _tempfile
+    os.environ["DIAGPRO_TEMPLATES_DIR"] = _tempfile.mkdtemp(prefix="diagpro_templates_teste_")
+
 from backend.app.auth import create_access_token, get_password_hash  # noqa: E402
 from backend.app.database import PlatformSessionLocal  # noqa: E402
 from backend.app.db_models import Company, Conteudo, Evento, QuestoesBanco, Tenant, User  # noqa: E402

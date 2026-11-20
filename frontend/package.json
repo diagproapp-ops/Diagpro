@@ -59,6 +59,7 @@
     "katex": "^0.16.22",
     "lowlight": "^3.3.0",
     "markdown-it": "^15.0.3",
+    "mathlive": "0.111.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-google-recaptcha": "^3.1.0",
@@ -69,6 +70,9 @@
     "yjs": "^13.6.27"
   },
   "scripts": {
+    "postinstall": "node scripts/copiar-fontes-mathlive.js",
+    "prestart": "node scripts/copiar-fontes-mathlive.js",
+    "prebuild": "node scripts/copiar-fontes-mathlive.js",
     "start": "react-app-rewired start",
     "build": "react-app-rewired build",
     "test": "react-app-rewired test",

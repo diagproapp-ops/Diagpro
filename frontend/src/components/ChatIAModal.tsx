@@ -38,12 +38,12 @@ export default function ChatIAModal({
   useEffect(() => { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [chatHistory, loadingChat]);
 
   return (
-    <Modal open={open} onClose={onClose} sx={{ zIndex: 1601 }}>
+    <Modal open={open} onClose={onClose} sx={{ zIndex: 1700 }}>
       <Box
         sx={{
           position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
           bgcolor: "background.paper", borderRadius: 3, boxShadow: 8, width: { xs: "98vw", sm: 500 }, minHeight: 540,
-          display: "block", zIndex: 1601
+          display: "block", zIndex: 1700
         }}>
         {/* Header */}
         <Box sx={{ background: "linear-gradient(90deg, #0284C7 0%, #2563EB 100%)", color: "#fff", p: 2, borderRadius: "12px 12px 0 0", display: "flex", alignItems: "center" }}>

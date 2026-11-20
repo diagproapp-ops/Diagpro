@@ -92,7 +92,7 @@ _HOST_OK = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
 _URL_OK = re.compile(r"^https?://[A-Za-z0-9.:\-]{1,200}(/[A-Za-z0-9._~/\-]*)?$")
 
 PROVEDORES_IA = ("anthropic", "openai")
-RECURSOS_IA = ("gerar_questao", "revisar_questao", "alternativas", "justificativa", "melhorar_texto", "chat")
+RECURSOS_IA = ("gerar_questao", "revisar_questao", "alternativas", "justificativa", "melhorar_texto", "chat", "equacao", "equacao_imagem")
 _VAR_AMBIENTE = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 PADRAO_BANCA = {

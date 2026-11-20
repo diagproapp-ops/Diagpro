@@ -28,11 +28,11 @@ interface PlagioModalProps {
 export default function PlagioModal({ open, onClose, plagioResult, loadingPlagio }: PlagioModalProps) {
   const riskColor = (p: number) => p > 60 ? "error" : p > 30 ? "warning" : "success";
   return (
-    <Modal open={open} onClose={onClose} sx={{ zIndex: 1601 }}>
+    <Modal open={open} onClose={onClose} sx={{ zIndex: 1700 }}>
       <Box sx={{
         position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
         bgcolor: "#0B1325", borderRadius: 3, boxShadow: 8, width: { xs: "98vw", sm: 480 }, minHeight: 380,
-        display: "block", zIndex: 1601
+        display: "block", zIndex: 1700
       }}>
         <Box sx={{ bgcolor: "#f44336", color: "#fff", p: 2, borderRadius: "12px 12px 0 0", display: "flex", alignItems: "center" }}>
           <BugReportIcon sx={{ mr: 1 }} /> <Typography fontWeight={700}>Verificação de Plágio</Typography>

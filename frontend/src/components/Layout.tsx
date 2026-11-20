@@ -99,6 +99,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const tenantId = user?.tenant_id ?? localStorage.getItem('tenantId');
   const isAdminGeral = user?.role === 'administrador geral';
   const [clientes, setClientes] = useState<{ id: number; name: string }[]>([]);
+  const [menuClienteAberto, setMenuClienteAberto] = useState(false);
+  const [dicaClienteAberta, setDicaClienteAberta] = useState(false);
   const clienteEmGestao = (() => {
     try { return localStorage.getItem(CLIENTE_EM_GESTAO_KEY) || ''; } catch { return ''; }
   })();
@@ -324,11 +326,20 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             >
               <BusinessOutlinedIcon sx={{ fontSize: 15 }} />
               {isAdminGeral ? (
-                <Tooltip title="Cliente em gestão: tudo o que você vê e cria fica só nesse cliente. Visão global = todos os clientes.">
+                <Tooltip
+                  title="Cliente em gestão: tudo o que você vê e cria fica só nesse cliente. Visão global = todos os clientes."
+                  placement="bottom"
+                  // a dica some quando a lista abre (antes ela cobria "Governança Global" e impedia o clique)
+                  open={dicaClienteAberta && !menuClienteAberto}
+                  onOpen={() => setDicaClienteAberta(true)}
+                  onClose={() => setDicaClienteAberta(false)}
+                >
                   <Select
                     variant="standard"
                     disableUnderline
                     value={clientes.some((c) => String(c.id) === clienteEmGestao) ? clienteEmGestao : VISAO_GLOBAL}
+                    onOpen={() => { setMenuClienteAberto(true); setDicaClienteAberta(false); }}
+                    onClose={() => setMenuClienteAberto(false)}
                     onChange={(e) => trocarCliente(String(e.target.value))}
                     sx={{
                       color: '#FBBF24',

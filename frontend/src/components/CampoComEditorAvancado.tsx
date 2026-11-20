@@ -9,6 +9,7 @@ import BugReportIcon from "@mui/icons-material/BugReport";
 import LibraryBooksIcon from "@mui/icons-material/LibraryBooks";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import FullTiptapEditor from "./FullTiptapEditor";
+import { estiloConteudoEditor } from "./BarraFormatacao";
 import ChatIAModal, { ChatMessage } from "./ChatIAModal";
 import PlagioModal, { PlagioResult } from "./PlagioModal";
 import BibliotecaModal, { BibliotecaQuestao } from "./BibliotecaModal";
@@ -30,11 +31,13 @@ function VisualizacaoComMath({ value }: { value: string }) {
   const contentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (contentRef.current) {
-      const mathSpans = contentRef.current.querySelectorAll('span[data-type="math"]');
-      mathSpans.forEach((el) => {
+      // equações do editor: formato atual (inline-math / block-math) e o antigo (math)
+      const equacoes = contentRef.current.querySelectorAll('[data-type="math"], [data-type="inline-math"], [data-type="block-math"]');
+      equacoes.forEach((el) => {
         const latex = el.getAttribute("data-latex") || "";
+        const bloco = el.getAttribute("data-type") === "block-math";
         try {
-          el.innerHTML = katex.renderToString(latex, { throwOnError: false, displayMode: false });
+          el.innerHTML = katex.renderToString(latex, { throwOnError: false, displayMode: bloco });
           el.classList.add("math-tiptap");
         } catch {
           el.textContent = latex;
@@ -245,6 +248,7 @@ export default function CampoComEditorAvancado({
           maxHeight: 240,
           overflowY: "auto",
           overflowX: "auto",
+          ...estiloConteudoEditor,
           "& img": {
             maxWidth: "100%",
             maxHeight: "180px",
@@ -326,14 +330,16 @@ export default function CampoComEditorAvancado({
         loadingChat={loadingChat}
       />
 
-      <Dialog open={openMelhorar} onClose={() => setOpenMelhorar(false)} maxWidth="md" fullWidth sx={{ zIndex: 1601 }}>
+      <Dialog open={openMelhorar} onClose={() => setOpenMelhorar(false)} maxWidth="md" fullWidth sx={{ zIndex: 1700 }}>
         <DialogTitle>Melhorar texto com IA</DialogTitle>
         <DialogContent dividers>
           <Alert severity="info" sx={{ mb: 2 }}>
             Vai para a IA só o texto deste campo (sem imagens). Negrito, imagens e fórmulas não são mantidos no texto sugerido.
           </Alert>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
-            <TextField select size="small" label="O que fazer" value={modoMelhorar} onChange={e => setModoMelhorar(e.target.value)} sx={{ minWidth: 260 }}>
+            <TextField select size="small" label="O que fazer" value={modoMelhorar} onChange={e => setModoMelhorar(e.target.value)} sx={{ minWidth: 260 }}
+              // a lista precisa ficar acima desta janela (zIndex 1700); no padrão (1300) ela abria por trás e travava a tela
+              SelectProps={{ MenuProps: { sx: { zIndex: 1800 } } }}>
               <MenuItem value="revisar_portugues">Corrigir português</MenuItem>
               <MenuItem value="clareza">Deixar mais claro</MenuItem>
               <MenuItem value="simplificar">Simplificar</MenuItem>

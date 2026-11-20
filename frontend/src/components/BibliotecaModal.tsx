@@ -55,7 +55,7 @@ export default function BibliotecaModal({
   usarQuestao,
 }: BibliotecaModalProps) {
   return (
-    <Modal open={open} onClose={onClose} sx={{ zIndex: 1601 }}>
+    <Modal open={open} onClose={onClose} sx={{ zIndex: 1700 }}>
       <Box
         sx={{
           position: "absolute",
@@ -70,7 +70,7 @@ export default function BibliotecaModal({
           maxHeight: "92vh",
           overflowY: "auto",
           display: "block",
-          zIndex: 1601,
+          zIndex: 1700,
         }}
       >
         {/* Header */}

@@ -41,7 +41,11 @@ function EventoDetalhesPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // `senhaDigitada` é o campo; `senha` só muda ao confirmar (Enter/Desbloquear). Antes cada tecla ia para o
+  // servidor ("1", "12", "123"...) e as tentativas parciais contavam como senha errada até bloquear (429).
   const [senha, setSenha] = useState<string>(query.get('senha') || '');
+  const [senhaDigitada, setSenhaDigitada] = useState<string>(senha);
+  const [tentativa, setTentativa] = useState(0);
   const [senhaModalOpen, setSenhaModalOpen] = useState(!senha);
   const [senhaError, setSenhaError] = useState<string | null>(null);
 
@@ -64,22 +68,33 @@ function EventoDetalhesPage() {
           setEvento(response.data);
           setError(null);
         } catch (err: any) {
-          setError(err.response?.data?.detail || 'Falha ao buscar detalhes do evento.');
+          const status = err.response?.status;
+          const detalhe = err.response?.data?.detail;
+          if (status === 403 || status === 429) {
+            // senha errada ou bloqueio temporário: volta para a janela da senha para tentar de novo
+            setEvento(null);
+            setSenhaError(detalhe || (status === 429 ? 'Muitas tentativas. Aguarde alguns minutos.' : 'Senha do evento inválida.'));
+            setSenhaModalOpen(true);
+          } else {
+            setError(detalhe || 'Falha ao buscar detalhes do evento.');
+          }
         } finally {
           setLoading(false);
         }
       };
       fetchEvento();
     }
-  }, [eventId, senha, user]);
+  }, [eventId, senha, tentativa, user]);
 
   const handleSenhaSubmit = () => {
-    if (!senha) {
+    if (!senhaDigitada) {
       setSenhaError('Digite a senha do evento');
       return;
     }
     setSenhaModalOpen(false);
     setSenhaError(null);
+    setSenha(senhaDigitada);
+    setTentativa((t) => t + 1); // mesma senha de novo também confere de novo
   };
 
   function formatDateBR(dateStr: string | null): string {
@@ -377,8 +392,8 @@ function EventoDetalhesPage() {
           <TextField
             type="password"
             label="Senha do Evento"
-            value={senha}
-            onChange={(e) => setSenha(e.target.value)}
+            value={senhaDigitada}
+            onChange={(e) => setSenhaDigitada(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSenhaSubmit()}
             fullWidth
             autoFocus

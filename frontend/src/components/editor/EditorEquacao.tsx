@@ -12,6 +12,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate';
 import api from '../../api';
 import { erroIA, podeUsar, useStatusIA } from '../ia/iaComum';
+import AvisoIA from '../ia/AvisoIA';
 import { CATEGORIAS_EQUACAO, paraVisualizar } from './modelosEquacao';
 
 export type EquacaoEmEdicao = { latex: string; bloco: boolean; pos?: number };
@@ -250,6 +251,9 @@ export default function EditorEquacao({ aberta, onFechar, onConfirmar, onRemover
         </List>
 
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', p: 2, gap: 1.5, overflowY: 'auto' }}>
+          {!statusIA.disponivel && (
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}><AvisoIA status={statusIA} /></Box>
+          )}
           {(podeUsar(statusIA, 'equacao') || podeUsar(statusIA, 'equacao_imagem')) && (
             <Box
               sx={{ p: 1.5, borderRadius: 2, border: '1px dashed', borderColor: arrastando ? 'primary.main' : 'secondary.main',

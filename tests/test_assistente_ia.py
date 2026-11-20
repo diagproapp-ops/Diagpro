@@ -148,3 +148,37 @@ def test_ai_text_is_stripped_of_html_and_images():
     # textos longos são cortados por campo antes de sair
     pedido, _ = assistente_ia.montar_pedido("chat", {"mensagem": "a", "contexto": "b" * 50000})
     assert pedido.count("b") <= 8100
+
+
+@pytest.mark.asyncio
+async def test_ai_status_explains_every_reason_it_is_unavailable(async_client):
+    reset_rate_limits()
+    ag = auth_headers("Victor Hugo", UserRole.ADMIN_GERAL)
+    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
+    hd = auth_headers("vhugo1234", UserRole.DIAGRAMADOR, tenant_id=1)
+    chave = "sk-teste-" + "q" * 30
+    codigos = lambda r: [c["codigo"] for c in r.json()["causas"]]
+    try:
+        # o caso real: IA desligada na plataforma E provedor escolhido sem chave (a chave é do outro) -> as duas causas
+        assert (await async_client.put("/config/plataforma", headers=ag, json={"ia": {"habilitada": False, "provedor": "anthropic",
+                "chaves": {"openai": chave}}})).status_code == 200
+        r = await async_client.get("/ia/status", headers=hp)
+        assert r.json()["disponivel"] is False and codigos(r)[:2] == ["plataforma_desligada", "sem_chave"]
+        assert "Anthropic" in r.json()["causas"][1]["texto"] and "Já existe chave para OpenAI" in r.json()["causas"][1]["texto"]
+        assert chave not in r.text and "qqqq" not in r.text
+        assert "banca_desligada" in codigos(r)
+        # diagramador não usa IA: uma causa só, sem pedir para ninguém ligar nada
+        assert codigos(await async_client.get("/ia/status", headers=hd)) == ["perfil"]
+        # admin geral na visão global: precisa escolher um cliente
+        assert "sem_cliente" in codigos(await async_client.get("/ia/status", headers=ag))
+        # resolve tudo -> disponível, sem causas
+        assert (await async_client.put("/config/plataforma", headers=ag, json={"ia": {"habilitada": True, "provedor": "openai"}})).status_code == 200
+        assert codigos(await async_client.get("/ia/status", headers=hp)) == ["banca_desligada"]
+        assert (await async_client.put("/config/banca", headers=a1, json={"ia": {"habilitada": True}})).status_code == 200
+        r = await async_client.get("/ia/status", headers=hp)
+        assert r.json()["disponivel"] is True and r.json()["causas"] == [] and r.json()["motivo"] == ""
+    finally:
+        await async_client.put("/config/plataforma", headers=ag, json={"ia": {"habilitada": False, "provedor": "anthropic", "chaves": {"openai": None}}})
+        await async_client.put("/config/banca", headers=a1, json={"ia": {"habilitada": False}})
+        reset_rate_limits()

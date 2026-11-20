@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import api from '../../api';
 
-export type StatusIA = { disponivel: boolean; recursos: Record<string, boolean>; motivo: string; provedor: string };
+export type CausaIA = { codigo: 'plataforma_desligada' | 'sem_chave' | 'sem_cliente' | 'banca_desligada' | 'perfil' | string; texto: string };
+export type StatusIA = { disponivel: boolean; recursos: Record<string, boolean>; motivo: string; provedor: string; causas?: CausaIA[] };
 
-const VAZIO: StatusIA = { disponivel: false, recursos: {}, motivo: '', provedor: '' };
+const VAZIO: StatusIA = { disponivel: false, recursos: {}, motivo: '', provedor: '', causas: [] };
 let cache: { em: number; chave: string; status: StatusIA } | null = null;
 
 // Status da IA para quem está logado (cache de 60 s; muda de cliente = nova consulta)

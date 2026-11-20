@@ -81,24 +81,35 @@ class ChatIn(BaseModel):
 
 @router.get("/status")
 async def status_ia(db: AsyncSession = Depends(get_tenant_db), current_user=Depends(get_current_user)):
-    """O que a tela precisa para mostrar (ou esconder) os botões de IA. Não revela chaves."""
+    """
+    O que a tela precisa para mostrar (ou esconder) os botões de IA. Não revela chaves.
+    `causas` lista TODOS os impedimentos (códigos estáveis para a tela explicar como resolver); `motivo` é o primeiro.
+    """
     plataforma = await configuracoes.ler_plataforma()
     ia_p = plataforma["ia"]
     role = current_user.role.value if isinstance(current_user.role, UserRole) else current_user.role
     base = {"disponivel": False, "recursos": dict.fromkeys(configuracoes.RECURSOS_IA, False),
-            "provedor": ia_p["provedor"], "motivo": ""}
-    if not ia_p["habilitada"]:
-        return {**base, "motivo": "O assistente de IA está desligado na plataforma."}
-    if current_user.tenant_id is None:
-        return {**base, "motivo": "Escolha um cliente para usar a IA."}
+            "provedor": ia_p["provedor"], "motivo": "", "causas": []}
     if role == UserRole.DIAGRAMADOR.value:
-        return {**base, "motivo": "O perfil diagramador não usa o assistente de IA."}
-    ia_b = (await configuracoes.ler_banca(db, current_user.tenant_id))["ia"]
-    if not ia_b["habilitada"]:
-        return {**base, "motivo": "O assistente de IA não está ligado para esta banca."}
+        motivo = "O perfil diagramador não usa o assistente de IA."
+        return {**base, "motivo": motivo, "causas": [{"codigo": "perfil", "texto": motivo}]}
+    nomes = {"anthropic": "Claude (Anthropic)", "openai": "OpenAI"}  # mesmos nomes da tela de configuração
+    causas: list[tuple[str, str]] = []
+    if not ia_p["habilitada"]:
+        causas.append(("plataforma_desligada", "O assistente de IA está desligado na plataforma."))
     if not configuracoes.chave_do_provedor(plataforma, ia_p["provedor"]):
-        return {**base, "motivo": "A chave do provedor de IA não foi configurada."}
-    return {**base, "disponivel": True, "recursos": ia_b["recursos"]}
+        outros = [p for p in nomes if p != ia_p["provedor"] and configuracoes.chave_do_provedor(plataforma, p)]
+        extra = f" Já existe chave para {nomes[outros[0]]}." if outros else ""
+        causas.append(("sem_chave", f"O provedor escolhido ({nomes.get(ia_p['provedor'], ia_p['provedor'])}) não tem chave configurada.{extra}"))
+    if current_user.tenant_id is None:
+        causas.append(("sem_cliente", "Escolha um cliente no topo da tela para usar a IA."))
+    else:
+        ia_b = (await configuracoes.ler_banca(db, current_user.tenant_id))["ia"]
+        if not ia_b["habilitada"]:
+            causas.append(("banca_desligada", "O assistente de IA não está ligado para esta banca."))
+        elif not causas:
+            return {**base, "disponivel": True, "recursos": ia_b["recursos"]}
+    return {**base, "motivo": causas[0][1], "causas": [{"codigo": c, "texto": t} for c, t in causas]}
 
 
 @router.post("/questao/gerar", dependencies=[_LIMITE_MINUTO])

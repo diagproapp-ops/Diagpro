@@ -45,7 +45,23 @@ PADRAO_PLATAFORMA = {
         "limite_diario_banca": 1500,
         "chaves": {"anthropic": "", "openai": ""},  # segredo: nunca sai do servidor
     },
+    "email": {
+        "habilitado": False,
+        "host": "",
+        "porta": 587,
+        "seguranca": "starttls",  # starttls | ssl | nenhuma (só servidor local)
+        "usuario": "",
+        "senha": "",              # segredo: nunca sai do servidor
+        "remetente_nome": "DiagPro",
+        "remetente_email": "",
+        "url_sistema": "http://localhost:3000",  # base dos links nos e-mails
+    },
 }
+
+SEGURANCA_EMAIL = ("starttls", "ssl", "nenhuma")
+_EMAIL_OK = re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+_HOST_OK = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+_URL_OK = re.compile(r"^https?://[A-Za-z0-9.:\-]{1,200}(/[A-Za-z0-9._~/\-]*)?$")
 
 PROVEDORES_IA = ("anthropic", "openai")
 RECURSOS_IA = ("gerar_questao", "revisar_questao", "alternativas", "justificativa", "melhorar_texto", "chat")
@@ -154,8 +170,63 @@ def validar_plataforma(dados: dict) -> dict:
             erros.append("ia: formato inválido.")
         else:
             out["ia"] = _validar_ia_plataforma(ia, erros)
+    em = (dados or {}).get("email")
+    if em is not None:
+        if not isinstance(em, dict):
+            erros.append("email: formato inválido.")
+        else:
+            out["email"] = _validar_email_plataforma(em, erros)
     if erros:
         raise HTTPException(status_code=400, detail={"mensagem": "Configuração inválida.", "problemas": erros})
+    return out
+
+
+def _validar_email_plataforma(em: dict, erros: list) -> dict:
+    out = {}
+    if "habilitado" in em:
+        if not isinstance(em["habilitado"], bool):
+            erros.append("email.habilitado: use sim ou não.")
+        out["habilitado"] = bool(em["habilitado"])
+    if "host" in em:
+        host = str(em["host"] or "").strip()
+        if host and not _HOST_OK.match(host):
+            erros.append("email.host: servidor inválido.")
+        out["host"] = host
+    if "porta" in em:
+        _int(em["porta"], "email.porta", 1, 65535, erros)
+        out["porta"] = em["porta"]
+    if "seguranca" in em:
+        if em["seguranca"] not in SEGURANCA_EMAIL:
+            erros.append("email.seguranca: use starttls, ssl ou nenhuma.")
+        out["seguranca"] = em["seguranca"]
+    if "usuario" in em:
+        usuario = str(em["usuario"] or "").strip()
+        if len(usuario) > 254 or any(c.isspace() for c in usuario):
+            erros.append("email.usuario: usuário inválido.")
+        out["usuario"] = usuario
+    if "senha" in em:  # None/"" = remover; ausente = manter
+        senha = em["senha"]
+        if senha in (None, ""):
+            out["senha"] = ""
+        elif not isinstance(senha, str) or len(senha) > 512:
+            erros.append("email.senha: senha inválida.")
+        else:
+            out["senha"] = senha
+    if "remetente_nome" in em:
+        nome = str(em["remetente_nome"] or "").strip()
+        if len(nome) > 80 or any(c in nome for c in "\r\n<>\""):
+            erros.append("email.remetente_nome: até 80 caracteres, sem quebras de linha.")
+        out["remetente_nome"] = nome
+    if "remetente_email" in em:
+        rem = str(em["remetente_email"] or "").strip()
+        if rem and not _EMAIL_OK.match(rem):
+            erros.append("email.remetente_email: e-mail inválido.")
+        out["remetente_email"] = rem
+    if "url_sistema" in em:
+        url = str(em["url_sistema"] or "").strip().rstrip("/")
+        if not _URL_OK.match(url):
+            erros.append("email.url_sistema: informe o endereço do DiagPro (http:// ou https://).")
+        out["url_sistema"] = url
     return out
 
 
@@ -170,6 +241,8 @@ def plataforma_publica(dados: dict) -> dict:
                "no_ambiente": bool(os.getenv(_VAR_AMBIENTE[prov], "").strip())}
         for prov in PROVEDORES_IA
     }
+    em = out.get("email") or {}
+    em["senha_definida"] = bool(em.pop("senha", ""))
     return out
 
 

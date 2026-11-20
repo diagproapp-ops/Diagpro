@@ -3,6 +3,7 @@ import {
   Alert, Box, Button, Chip, Paper, Stack, TextField, Typography, List, ListItem, ListItemText,
 } from '@mui/material';
 import Layout from '../components/Layout';
+import PreferenciasAvisos from '../components/PreferenciasAvisos';
 import api from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { mensagemErro } from './SettingsTabs/configComum';
@@ -136,6 +137,8 @@ const MinhaContaPage: React.FC = () => {
         )}
         {msgRec && <Alert severity="error" sx={{ mt: 2 }}>{msgRec}</Alert>}
       </Paper>
+
+      <PreferenciasAvisos sx={card} />
     </Layout>
   );
 };

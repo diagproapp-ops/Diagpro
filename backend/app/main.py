@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from backend.app.database import SessionLocal
 from backend.app.routes.ia import router as ia_router
+from backend.app.routes.notificacoes import router as notificacoes_router
+from backend.app import notificacoes as _notificacoes
 from backend.app.routes.plagio import router as plagio_router
 from backend.app.routes.biblioteca import router as biblioteca_router
 from backend.app.routes.dicionario import router as dicionario_router
@@ -81,6 +83,15 @@ app.include_router(conteudos_router, prefix="/conteudos")
 app.include_router(textos_referencia.router)
 app.include_router(questoes_router)
 app.include_router(ia_router)
+app.include_router(notificacoes_router)
+
+
+@app.on_event("startup")
+async def _iniciar_fila_de_email():
+    """Envia os avisos por e-mail em segundo plano (DIAGPRO_FILA_EMAIL=0 desliga)."""
+    import asyncio
+    if _notificacoes.fila_ligada():
+        app.state.fila_email = asyncio.create_task(_notificacoes.laco_da_fila())
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")

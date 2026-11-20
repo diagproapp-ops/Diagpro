@@ -19,7 +19,7 @@ from backend.app.auth import get_current_user, verify_password
 from backend.app.roles import UserRole
 from backend.app import dois_fatores as df
 from backend.app import politica_senha
-from backend.app import configuracoes
+from backend.app import configuracoes, notificacoes
 from backend.app.auth import oauth2_scheme, decode_token_payload
 from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
@@ -260,6 +260,8 @@ async def trocar_senha_obrigatoria(body: TrocaSenhaBody, db: AsyncSession = Depe
     politica_senha.aplicar_nova_senha(user, body.nova_senha, cfg=cfg)
     await db.commit()
     logger.warning("Senha trocada no login (usuário %s)", user.id)
+    await notificacoes.notificar(user.id, "seguranca_senha_alterada", "Sua senha foi alterada",
+                                 "A senha da sua conta no DiagPro acabou de ser alterada. Se não foi você, avise o administrador da sua banca imediatamente.", "/minha-conta")
     return await _resposta_acesso(user)
 
 
@@ -284,6 +286,8 @@ async def trocar_minha_senha(
     user.totp_ultimo_passo = passo
     politica_senha.aplicar_nova_senha(user, body.nova_senha, cfg=cfg)
     await db.commit()
+    await notificacoes.notificar(user.id, "seguranca_senha_alterada", "Sua senha foi alterada",
+                                 "A senha da sua conta no DiagPro acabou de ser alterada. Se não foi você, avise o administrador da sua banca imediatamente.", "/minha-conta")
     return {"ok": True}
 
 

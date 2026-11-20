@@ -32,6 +32,7 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import SearchIcon from '@mui/icons-material/Search';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
+import SinoNotificacoes from './SinoNotificacoes';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
 import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
 import { useAuth } from '../contexts/AuthContext';
@@ -336,6 +337,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 <span>{tenantName}</span>
               )}
             </Box>
+
+            <SinoNotificacoes />
 
             <Box
               sx={{

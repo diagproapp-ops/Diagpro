@@ -26,6 +26,8 @@ import AdminClientsTab from './AdminClientsTab';
 import PlataformaSegurancaTab from './SettingsTabs/PlataformaSegurancaTab';
 import BancaConfigTab from './SettingsTabs/BancaConfigTab';
 import PlataformaIATab from './SettingsTabs/PlataformaIATab';
+import PlataformaEmailTab from './SettingsTabs/PlataformaEmailTab';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import BancaIATab from './SettingsTabs/BancaIATab';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
@@ -50,7 +52,8 @@ type SectionKey =
   | 'banca_identidade'
   | 'banca_regras'
   | 'banca_ia'
-  | 'plataforma_ia';
+  | 'plataforma_ia'
+  | 'plataforma_email';
 
 function SettingsPage() {
   const { user } = useAuth();
@@ -212,6 +215,13 @@ function SettingsPage() {
         desc: 'Provedor (Claude ou OpenAI), modelo, chaves cifradas e limites diários.',
         icon: <SmartToyOutlinedIcon fontSize="small" />,
         badge: 'Novo',
+      }, {
+        key: 'plataforma_email' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'E-mail de avisos',
+        desc: 'Servidor SMTP para os avisos por e-mail (senha cifrada) e envio de teste.',
+        icon: <MailOutlineIcon fontSize="small" />,
+        badge: 'Novo',
       }]
       : []),
     {
@@ -336,6 +346,10 @@ function SettingsPage() {
                 <ListItemButton selected={section === 'plataforma_ia'} onClick={() => setSection('plataforma_ia')} sx={subNavSx(section === 'plataforma_ia')}>
                   <ListItemIcon><SmartToyOutlinedIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="Inteligência artificial" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_email'} onClick={() => setSection('plataforma_email')} sx={subNavSx(section === 'plataforma_email')}>
+                  <ListItemIcon><MailOutlineIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="E-mail de avisos" />
                 </ListItemButton>
               </>
             )}
@@ -491,6 +505,7 @@ function SettingsPage() {
               {section === 'plataforma_seguranca' && isAdminGeral && <PlataformaSegurancaTab />}
               {section === 'banca_ia' && <BancaIATab />}
               {section === 'plataforma_ia' && isAdminGeral && <PlataformaIATab />}
+              {section === 'plataforma_email' && isAdminGeral && <PlataformaEmailTab />}
             </Box>
           )}
         </Box>

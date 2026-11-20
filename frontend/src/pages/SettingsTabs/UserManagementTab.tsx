@@ -3,7 +3,7 @@ import {
   Box, Button, Typography, Table, TableBody, TableCell, TableHead, TableRow, Paper, Stack, Alert,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, IconButton, TableContainer
 } from '@mui/material';
-import { Edit, Delete, PhonelinkLock, Logout } from '@mui/icons-material';
+import { Edit, Delete, PhonelinkLock, Logout, PersonOff } from '@mui/icons-material';
 import { Chip, Tooltip } from '@mui/material';
 import api from '../../api';
 import { Switch } from '@mui/material';
@@ -169,6 +169,19 @@ export default function UserManagementTab() {
       ));
   }
 
+  function handleAnonimizar(u: UserForm) {
+    if (!u.id) return;
+    const digitado = window.prompt(
+      `ANONIMIZAR ${u.username} (LGPD)\n\nApaga para sempre nome, e-mail, CPF, telefone, endereço e dados bancários, ` +
+      `desativa a conta e encerra os acessos. As questões que a pessoa elaborou continuam da banca.\n\n` +
+      `Para confirmar, digite o usuário: ${u.username}`);
+    if (digitado === null) return;
+    if (digitado.trim() !== u.username) { setError('Confirmação não confere: nada foi alterado.'); return; }
+    api.post(`/lgpd/usuarios/${u.id}/anonimizar`)
+      .then(() => setMessage(`Dados pessoais de ${u.username} eliminados (LGPD).`))
+      .catch(err => setError(typeof err?.response?.data?.detail === "string" ? err.response.data.detail : "Erro ao anonimizar."));
+  }
+
   function handleDelete(id?: number) {
     if (!id) return;
     if (window.confirm("Tem certeza que deseja excluir este usuário?")) {
@@ -242,6 +255,9 @@ export default function UserManagementTab() {
                     <span>
                       <IconButton onClick={() => handleResetar2fa(u)} disabled={!(u as any).totp_ativo}><PhonelinkLock /></IconButton>
                     </span>
+                  </Tooltip>
+                  <Tooltip title="Anonimizar (LGPD): eliminar dados pessoais">
+                    <IconButton onClick={() => handleAnonimizar(u)}><PersonOff /></IconButton>
                   </Tooltip>
                   <Tooltip title="Desconectar de todos os aparelhos">
                     <IconButton onClick={() => handleDesconectar(u)}><Logout /></IconButton>

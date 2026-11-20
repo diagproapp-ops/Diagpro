@@ -31,6 +31,8 @@ import PublicRegisterPage from './pages/PublicRegisterPage';
 import MinhaContaPage from './pages/MinhaContaPage';
 import FilaRevisaoPage from './pages/FilaRevisaoPage';
 import AvisoManutencao from './components/AvisoManutencao';
+import AceiteTermos from './components/AceiteTermos';
+import DocumentoLegalPage from './pages/DocumentoLegalPage';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
@@ -38,6 +40,7 @@ function App() {
   return (
     <CustomThemeProvider>
       <AvisoManutencao />
+      {isAuthenticated && !loading && <AceiteTermos />}
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
           <CircularProgress />
@@ -45,6 +48,9 @@ function App() {
       ) : (
         <Router>
           <Routes>
+            {/* públicas para todos (LGPD) */}
+            <Route path="/privacidade" element={<DocumentoLegalPage tipo="politica" />} />
+            <Route path="/termos" element={<DocumentoLegalPage tipo="termos" />} />
             {!isAuthenticated ? (
               <>
                 <Route path="/login" element={<LoginPage />} />

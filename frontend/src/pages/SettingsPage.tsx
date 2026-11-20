@@ -28,6 +28,8 @@ import BancaConfigTab from './SettingsTabs/BancaConfigTab';
 import PlataformaIATab from './SettingsTabs/PlataformaIATab';
 import PlataformaEmailTab from './SettingsTabs/PlataformaEmailTab';
 import PlataformaSaudeTab from './SettingsTabs/PlataformaSaudeTab';
+import { BancaLgpdTab, PlataformaLgpdTab } from './SettingsTabs/LgpdTabs';
+import PrivacyTipOutlinedIcon from '@mui/icons-material/PrivacyTipOutlined';
 import MonitorHeartOutlinedIcon from '@mui/icons-material/MonitorHeartOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import BancaIATab from './SettingsTabs/BancaIATab';
@@ -56,7 +58,9 @@ type SectionKey =
   | 'banca_ia'
   | 'plataforma_ia'
   | 'plataforma_email'
-  | 'plataforma_saude';
+  | 'plataforma_saude'
+  | 'plataforma_lgpd'
+  | 'banca_lgpd';
 
 function SettingsPage() {
   const { user } = useAuth();
@@ -203,6 +207,14 @@ function SettingsPage() {
       icon: <AutoAwesomeOutlinedIcon fontSize="small" />,
       badge: 'Novo',
     },
+    {
+      key: 'banca_lgpd' as SectionKey,
+      group: 'BANCA',
+      title: 'Registros de LGPD',
+      desc: 'Exportações, anonimizações e aceites de termos feitos na banca.',
+      icon: <PrivacyTipOutlinedIcon fontSize="small" />,
+      badge: 'Novo',
+    },
     ...(isAdminGeral
       ? [{
         key: 'plataforma_seguranca' as SectionKey,
@@ -231,6 +243,13 @@ function SettingsPage() {
         title: 'Saúde e backups',
         desc: 'Conferências do sistema, backups cifrados agendados e modo manutenção.',
         icon: <MonitorHeartOutlinedIcon fontSize="small" />,
+        badge: 'Novo',
+      }, {
+        key: 'plataforma_lgpd' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'Privacidade (LGPD)',
+        desc: 'Termos e política com versão (novo aceite de todos) e prazos de retenção.',
+        icon: <PrivacyTipOutlinedIcon fontSize="small" />,
         badge: 'Novo',
       }]
       : []),
@@ -345,6 +364,10 @@ function SettingsPage() {
               <ListItemIcon><AutoAwesomeOutlinedIcon fontSize="small" /></ListItemIcon>
               <ListItemText primary="IA da banca" />
             </ListItemButton>
+            <ListItemButton selected={section === 'banca_lgpd'} onClick={() => setSection('banca_lgpd')} sx={subNavSx(section === 'banca_lgpd')}>
+              <ListItemIcon><PrivacyTipOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemText primary="Registros de LGPD" />
+            </ListItemButton>
 
             {isAdminGeral && (
               <>
@@ -364,6 +387,10 @@ function SettingsPage() {
                 <ListItemButton selected={section === 'plataforma_saude'} onClick={() => setSection('plataforma_saude')} sx={subNavSx(section === 'plataforma_saude')}>
                   <ListItemIcon><MonitorHeartOutlinedIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="Saúde e backups" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_lgpd'} onClick={() => setSection('plataforma_lgpd')} sx={subNavSx(section === 'plataforma_lgpd')}>
+                  <ListItemIcon><PrivacyTipOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Privacidade (LGPD)" />
                 </ListItemButton>
               </>
             )}
@@ -521,6 +548,8 @@ function SettingsPage() {
               {section === 'plataforma_ia' && isAdminGeral && <PlataformaIATab />}
               {section === 'plataforma_email' && isAdminGeral && <PlataformaEmailTab />}
               {section === 'plataforma_saude' && isAdminGeral && <PlataformaSaudeTab />}
+              {section === 'plataforma_lgpd' && isAdminGeral && <PlataformaLgpdTab />}
+              {section === 'banca_lgpd' && <BancaLgpdTab />}
             </Box>
           )}
         </Box>

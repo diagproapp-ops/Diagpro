@@ -21,6 +21,8 @@ from backend.app.routes.notificacoes import router as notificacoes_router
 from backend.app.routes.revisao import router as revisao_router
 from backend.app.routes.versoes import router as versoes_router
 from backend.app.routes.sistema import router as sistema_router
+from backend.app.routes.lgpd import router as lgpd_router
+from backend.app import lgpd as _lgpd
 from backend.app import backups as _backups
 from backend.app import notificacoes as _notificacoes
 from backend.app.routes.plagio import router as plagio_router
@@ -46,7 +48,7 @@ from backend.app.routes.files import router as files_router
 app = FastAPI(multipart_params={"max_part_size": 50 * 1024 * 1024})  # 50 MB por parte
 
 # Modo manutenção: registrado ANTES do CORS para que o 503 saia com os cabeçalhos CORS (a tela lê a mensagem).
-_LIVRES_NA_MANUTENCAO = ("/auth/", "/status/", "/docs", "/openapi.json")
+_LIVRES_NA_MANUTENCAO = ("/auth/", "/status/", "/lgpd/documentos", "/docs", "/openapi.json")
 
 
 @app.middleware("http")
@@ -119,6 +121,7 @@ app.include_router(notificacoes_router)
 app.include_router(revisao_router)
 app.include_router(versoes_router)
 app.include_router(sistema_router)
+app.include_router(lgpd_router)
 
 
 @app.on_event("startup")
@@ -129,6 +132,7 @@ async def _iniciar_fila_de_email():
         app.state.fila_email = asyncio.create_task(_notificacoes.laco_da_fila())
     if _backups.agendador_ligado():
         app.state.backup_agendado = asyncio.create_task(_backups.laco_agendado())
+        app.state.retencao_lgpd = asyncio.create_task(_lgpd.laco_retencao())
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")

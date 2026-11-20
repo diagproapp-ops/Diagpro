@@ -27,6 +27,18 @@ from core.instrucoes_padrao import INSTRUCOES_DISCURSIVA, INSTRUCOES_POR_BLOCO
 
 TIPOS_QUESTAO = ["MULTIPLA_ESCOLHA", "CERTO_ERRADO", "DISCURSIVA", "SUBJETIVA"]
 
+TERMOS_PADRAO = (
+    "Ao usar o DiagPro você concorda em utilizá-lo somente para as atividades da sua banca, manter em sigilo "
+    "todo conteúdo de prova a que tiver acesso, não compartilhar sua senha nem seu autenticador e avisar a banca "
+    "imediatamente sobre qualquer acesso indevido. Todas as ações ficam registradas para auditoria."
+)
+POLITICA_PADRAO = (
+    "O DiagPro trata dados pessoais (nome, usuário, e-mail, telefone e dados de acesso como IP e navegador) "
+    "somente para identificar quem usa o sistema, proteger as contas e cumprir as obrigações da banca. Os dados "
+    "ficam cifrados, separados por banca, e não são vendidos nem compartilhados. Você pode baixar seus dados em "
+    "Minha conta e pedir à sua banca a correção ou a eliminação deles (LGPD, art. 18)."
+)
+
 PADRAO_PLATAFORMA = {
     "seguranca": {
         "senha_tamanho_minimo": 12,
@@ -64,6 +76,13 @@ PADRAO_PLATAFORMA = {
     "manutencao": {
         "ativa": False,
         "mensagem": "O DiagPro está em manutenção. Volte em alguns minutos.",
+    },
+    "lgpd": {
+        "versao_termos": "1",
+        "termos": TERMOS_PADRAO,
+        "politica": POLITICA_PADRAO,
+        "encarregado": "",  # contato do encarregado (DPO) mostrado na política
+        "retencao_dias": {"notificacoes": 180, "sessoes": 90, "uso_ia": 365},
     },
 }
 
@@ -202,6 +221,27 @@ def validar_plataforma(dados: dict) -> dict:
             if not msg or len(msg) > 300:
                 erros.append("manutencao.mensagem: de 1 a 300 caracteres.")
             out["manutencao"]["mensagem"] = msg
+    lg = (dados or {}).get("lgpd")
+    if lg is not None:
+        out["lgpd"] = {}
+        if "versao_termos" in lg:
+            v = str(lg["versao_termos"] or "").strip()
+            if not re.fullmatch(r"[0-9A-Za-z.\-]{1,20}", v):
+                erros.append("lgpd.versao_termos: use até 20 letras, números, ponto ou hífen.")
+            out["lgpd"]["versao_termos"] = v
+        for campo, limite in (("termos", 20000), ("politica", 20000), ("encarregado", 300)):
+            if campo in lg:
+                texto = str(lg[campo] or "").strip()
+                if len(texto) > limite or (campo != "encarregado" and not texto):
+                    erros.append(f"lgpd.{campo}: até {limite} caracteres" + ("" if campo == "encarregado" else ", não pode ficar vazio") + ".")
+                out["lgpd"][campo] = texto
+        if "retencao_dias" in lg:
+            rd = lg["retencao_dias"] or {}
+            out["lgpd"]["retencao_dias"] = {}
+            for campo, (mi, ma) in {"notificacoes": (30, 3650), "sessoes": (30, 3650), "uso_ia": (90, 3650)}.items():
+                if campo in rd:
+                    _int(rd[campo], f"lgpd.retencao_dias.{campo}", mi, ma, erros)
+                    out["lgpd"]["retencao_dias"][campo] = rd[campo]
     em = (dados or {}).get("email")
     if em is not None:
         if not isinstance(em, dict):

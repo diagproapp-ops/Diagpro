@@ -133,6 +133,18 @@ class VersaoQuestao(Base):
     snapshot = Column(Ciphertext, nullable=False)
 
 
+class RegistroLGPD(Base):
+    """Prestação de contas LGPD: exportação de dados, anonimização, aceite de termos, limpezas por retenção."""
+    __tablename__ = "registros_lgpd"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    titular_id = Column(Integer, nullable=True)
+    autor_id = Column(Integer, nullable=True)
+    acao = Column(String(30), nullable=False)
+    criado_em = Column(DateTime, nullable=False)
+    detalhes = Column(Ciphertext, nullable=True)
+
+
 class AuditLogGeracao(Base):
     __tablename__ = "audit_log_geracao"
     id = Column(Integer, primary_key=True, autoincrement=True)

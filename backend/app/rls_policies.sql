@@ -35,7 +35,8 @@ DECLARE
         'uso_ia',
         'notificacoes',
         'sessoes',
-        'versoes_questao'
+        'versoes_questao',
+        'registros_lgpd'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

@@ -5,6 +5,7 @@ import {
 import Layout from '../components/Layout';
 import PreferenciasAvisos from '../components/PreferenciasAvisos';
 import SessoesAtivas from '../components/SessoesAtivas';
+import PrivacidadeMinhaConta from '../components/PrivacidadeMinhaConta';
 import api from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { mensagemErro } from './SettingsTabs/configComum';
@@ -142,6 +143,8 @@ const MinhaContaPage: React.FC = () => {
       <SessoesAtivas sx={card} />
 
       <PreferenciasAvisos sx={card} />
+
+      <PrivacidadeMinhaConta sx={card} />
     </Layout>
   );
 };

@@ -74,7 +74,7 @@ function SettingsPage() {
   // ?secao=banca_templates|users abre direto uma seção (ex.: link da tela do evento ou do aviso de cadastro pendente)
   const [section, setSection] = useState<SectionKey>(() => {
     const pedida = new URLSearchParams(window.location.search).get('secao');
-    return (pedida === 'banca_templates' || pedida === 'users' ? pedida : 'overview') as SectionKey;
+    return (['banca_templates', 'users', 'clients'].includes(pedida || '') ? pedida : 'overview') as SectionKey;
   });
   const [counts, setCounts] = useState({
     users: 0,

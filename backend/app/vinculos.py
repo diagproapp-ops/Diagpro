@@ -73,8 +73,11 @@ async def bancas_da_pessoa(user) -> list[Banca]:
             papeis.setdefault(v.tenant_id, (v.role, False))
         if not papeis:
             return []
-        nomes = {t.id: t.name for t in (await db.execute(select(Tenant).where(Tenant.id.in_(list(papeis))))).scalars()}
-    return sorted((Banca(tid, nomes.get(tid) or f"Banca {tid}", role, origem) for tid, (role, origem) in papeis.items()),
+        # cliente bloqueado/inativo: ninguém entra nele (o bloqueio também encerra os acessos abertos)
+        nomes = {t.id: t.name for t in (await db.execute(select(Tenant).where(
+            Tenant.id.in_(list(papeis)), Tenant.status == "ativo"))).scalars()}
+    return sorted((Banca(tid, nomes[tid] or f"Banca {tid}", role, origem) for tid, (role, origem) in papeis.items()
+                   if tid in nomes),
                   key=lambda b: (not b.origem, b.nome.lower()))
 
 

@@ -57,6 +57,7 @@ class TenantDashboard(BaseModel):
     frases_total: int
     admins_total: int
     blocked_users_total: int
+    pending_users_total: int = 0
     accesses_total_month: int
     last_access: Optional[str]
     percent_users_active: float

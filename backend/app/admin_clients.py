@@ -4,12 +4,17 @@ from sqlalchemy.future import select
 from sqlalchemy import func
 from backend.app.field_crypto import blind_eq
 from backend.app.database import get_platform_db
-from backend.app.db_models import Tenant, User, ProvaMontada, BancoFrases, Evento, Cargo
+from backend.app.db_models import (
+    AuditLogGeracao, BancoFrases, Cargo, Evento, ProvaMontada, QuestoesBanco, Sessao, Tenant, User, VinculoBanca,
+)
+from backend.app import vinculos
 from backend.app.models import Tenant as PydanticTenant, TenantCreate, TenantDashboard
 from backend.app.auth import get_password_hash, get_current_user
 from backend.app.roles import UserRole
-from datetime import datetime
-import secrets
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -81,156 +86,173 @@ async def list_admin_clients_dashboard(
     db: AsyncSession = Depends(get_platform_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
-    tenants = (await db.execute(select(Tenant))).scalars().all()
+    """Visão do administrador geral: números REAIS de cada cliente (sem conteúdo de prova)."""
+    desde = datetime.utcnow() - timedelta(days=30)
     dashboards = []
-    for tenant in tenants:
-        users = (await db.execute(
-            select(User).where(User.tenant_id == tenant.id)
-        )).scalars().all()
-        users_total = len(users)
-        users_by_role = {}
-        admins_total = 0
-        blocked_users_total = 0
-        active_users = 0
-        inactive_users = 0
+    for tenant in (await db.execute(select(Tenant).order_by(Tenant.id))).scalars().all():
+        t = tenant.id
+        # pessoas da banca: as da origem + quem tem vínculo (professores/revisores de outras bancas)
+        vinc = {v.user_id: v for v in (await db.execute(select(VinculoBanca).where(VinculoBanca.tenant_id == t))).scalars()}
+        users = (await db.execute(select(User).where(
+            (User.tenant_id == t) | (User.id.in_(list(vinc) or [0]))))).scalars().all()
+        users_by_role: dict[str, int] = {}
+        ativos = pendentes = inativos = admins = 0
+        for u in users:
+            role, situacao, _origem = vinculos.papel_e_status(u, vinc, t)
+            if not u.is_active:
+                situacao = "inativo"
+            users_by_role[role] = users_by_role.get(role, 0) + 1
+            admins += role == "administrador"
+            ativos += situacao == "ativo"
+            pendentes += situacao == "pendente"
+            inativos += situacao == "inativo"
+        total = len(users)
 
-        for user in users:
-            users_by_role[user.role] = users_by_role.get(user.role, 0) + 1
-            if user.role == "administrador":
-                admins_total += 1
-            if user.status == "bloqueado":
-                blocked_users_total += 1
-            if user.status == "ativo":
-                active_users += 1
-            if user.status == "inativo":
-                inactive_users += 1
+        def contar(coluna, *filtros):
+            return select(func.count(coluna)).where(*filtros)
 
-        percent_users_active = (active_users / users_total) * 100 if users_total else 0
-        percent_users_inactive = (inactive_users / users_total) * 100 if users_total else 0
-
-        frases_total = (await db.execute(
-            select(func.count(BancoFrases.id)).where(BancoFrases.tenant_id == tenant.id)
-        )).scalar_one()
-
-        questions_total = (await db.execute(
-            select(func.count(BancoFrases.id)).where(BancoFrases.tenant_id == tenant.id)
-        )).scalar_one()
-
-        exams = (await db.execute(
-            select(ProvaMontada).where(ProvaMontada.tenant_id == tenant.id)
-        )).scalars().all()
-        exams_total = len(exams)
-        avg_questions_per_exam = questions_total / exams_total if exams_total else 0
-
-        events = (await db.execute(
-            select(Evento).where(Evento.tenant_id == tenant.id)
-        )).scalars().all()
-        events_total = len(events)
-
-        cargos_total = (await db.execute(
-            select(func.count(Cargo.id_cargo)).where(Cargo.tenant_id == tenant.id)
-        )).scalar_one()
-
-        accesses_total_month = 42  # Simulação
-        last_access = "2025-08-20T14:32:00"  # Simulação
-        avg_access_time_per_user = 7.2  # Simulação
-
-        recent_activities = [
-            {"type": "login", "user": "admin1", "timestamp": "2025-08-19T09:00:00"},
-            {"type": "criação_prova", "user": "prof1", "timestamp": "2025-08-18T15:40:00"},
-        ]
+        questions_total = (await db.execute(contar(QuestoesBanco.id_questao, QuestoesBanco.tenant_id == t))).scalar_one()
+        exams_total = (await db.execute(contar(ProvaMontada.id_prova_montada, ProvaMontada.tenant_id == t))).scalar_one()
+        events_total = (await db.execute(contar(Evento.id_evento, Evento.tenant_id == t))).scalar_one()
+        cargos_total = (await db.execute(contar(Cargo.id_cargo, Cargo.tenant_id == t))).scalar_one()
+        frases_total = (await db.execute(contar(BancoFrases.id, BancoFrases.tenant_id == t))).scalar_one()
+        acessos_mes = (await db.execute(contar(Sessao.id, Sessao.tenant_id == t, Sessao.criada_em >= desde))).scalar_one()
+        ultimo = (await db.execute(select(func.max(Sessao.ultimo_uso_em)).where(Sessao.tenant_id == t))).scalar_one()
+        recentes = (await db.execute(select(AuditLogGeracao).where(AuditLogGeracao.tenant_id == t)
+                                     .order_by(AuditLogGeracao.timestamp.desc()).limit(3))).scalars().all()
 
         dashboards.append(TenantDashboard(
-            id=tenant.id,
+            id=t,
             name=tenant.name,
             domain=tenant.domain,
             status=tenant.status,
-            tenant_type=tenant.tenant_type,    # <-- Adicionado!
-            created_at=str(tenant.created_at) if tenant.created_at else None,
+            tenant_type=tenant.tenant_type,
+            created_at=tenant.created_at.isoformat() if tenant.created_at else None,
             responsible_name=tenant.responsible_name,
             responsible_email=tenant.responsible_email,
             responsible_phone=tenant.responsible_phone,
             plan_type=tenant.plan_type,
-            plan_expires_at=str(tenant.plan_expires_at) if tenant.plan_expires_at else None,
-            users_total=users_total,
+            plan_expires_at=tenant.plan_expires_at.date().isoformat() if tenant.plan_expires_at else None,
+            users_total=total,
             users_by_role=users_by_role,
             questions_total=questions_total,
             exams_total=exams_total,
             events_total=events_total,
             cargos_total=cargos_total,
             frases_total=frases_total,
-            admins_total=admins_total,
-            blocked_users_total=blocked_users_total,
-            accesses_total_month=accesses_total_month,
-            last_access=last_access,
-            percent_users_active=percent_users_active,
-            percent_users_inactive=percent_users_inactive,
-            avg_questions_per_exam=avg_questions_per_exam,
-            avg_access_time_per_user=avg_access_time_per_user,
-            recent_activities=recent_activities
+            admins_total=admins,
+            blocked_users_total=inativos,
+            pending_users_total=pendentes,
+            accesses_total_month=acessos_mes,
+            last_access=(ultimo.isoformat() + "Z") if ultimo else None,
+            percent_users_active=(ativos / total) * 100 if total else 0,
+            percent_users_inactive=(inativos / total) * 100 if total else 0,
+            avg_questions_per_exam=(questions_total / exams_total) if exams_total else 0,
+            avg_access_time_per_user=0,
+            recent_activities=[{"type": a.acao, "user": a.usuario, "timestamp": a.timestamp.isoformat() + "Z"} for a in recentes],
         ))
-
     return dashboards
 
-# POST: cria um admin para o cliente - apenas admin geral
-@router.post("/admin/clients/{client_id}/create-admin")
-async def create_admin_for_client(
+
+@router.put("/admin/clients/{client_id}", response_model=PydanticTenant)
+async def update_client(
     client_id: int,
+    dados: TenantCreate,
     db: AsyncSession = Depends(get_platform_db),
     admin_geral: User = Depends(get_admin_geral_user)
 ):
-    # Busca o cliente
     tenant = await db.get(Tenant, client_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
-
-    # Crie dados do admin (customize conforme desejar)
-    username = f"admin{client_id}"
-    email = f"admin{client_id}@{tenant.domain}.com"
-    # senha forte e aleatória, exibida uma única vez ao administrador geral (nunca uma senha fixa)
-    from backend.app import configuracoes, politica_senha
-    cfg = (await configuracoes.ler_plataforma())["seguranca"]
-    password = secrets.token_urlsafe(max(14, cfg["senha_tamanho_minimo"]))
-    while politica_senha.problemas(password, username, email, cfg):
-        password = secrets.token_urlsafe(14)
-    password_hash = get_password_hash(password)
-
-    # Verifica se já existe admin para esse cliente
-    existing_admin = await db.execute(
-        select(User)
-        .where(User.tenant_id == client_id)
-        .where(User.role == "administrador")
-    )
-    if existing_admin.scalars().first():
-        raise HTTPException(status_code=400, detail="Já existe admin para esse cliente.")
-
-    # Cria o usuário admin (sem client_id)
-    new_admin = User(
-        username=username,
-        email=email,
-        password_hash=password_hash,
-        senha_alterada_em=datetime.utcnow(),
-        deve_trocar_senha=True,  # senha provisória: troca obrigatória no primeiro acesso
-        role="administrador",
-        full_name=f"Administrador {tenant.name}",
-        tenant_id=client_id,          # <-- só tenant_id!
-        status="ativo",
-        is_active=True,
-        institution=tenant.name
-    )
-    db.add(new_admin)
+    nome, dominio = dados.name.strip(), dados.domain.lower().strip()
+    if not nome or not dominio:
+        raise HTTPException(status_code=400, detail="Nome e domínio são obrigatórios.")
+    if dados.status not in STATUS_CLIENTE:
+        raise HTTPException(status_code=400, detail="Situação inválida.")
+    outro = (await db.execute(select(Tenant).where(blind_eq(Tenant.domain, dominio), Tenant.id != client_id))).scalars().first()
+    if outro:
+        raise HTTPException(status_code=400, detail="Domínio já registrado.")
+    outro = (await db.execute(select(Tenant).where(blind_eq(Tenant.name, nome), Tenant.id != client_id))).scalars().first()
+    if outro:
+        raise HTTPException(status_code=400, detail="Nome de cliente já registrado.")
+    bloqueando = dados.status != "ativo" and tenant.status == "ativo"
+    tenant.name, tenant.domain, tenant.status, tenant.tenant_type = nome, dominio, dados.status, dados.tenant_type
+    tenant.responsible_name = dados.responsible_name or None
+    tenant.responsible_email = dados.responsible_email or None
+    tenant.responsible_phone = dados.responsible_phone or None
+    tenant.plan_type = dados.plan_type or None
+    tenant.plan_expires_at = _data(dados.plan_expires_at)
     await db.commit()
-    await db.refresh(new_admin)
-    # Retorne a senha apenas em ambiente seguro!
-    return {
-        "msg": "Admin criado!",
-        "admin": {
-            "id": new_admin.id,
-            "username": new_admin.username,
-            "email": new_admin.email,
-            "password": password  # Retorne a senha só se for seguro!
-        }
-    }
+    await db.refresh(tenant)
+    if bloqueando:
+        await _derrubar_acessos(client_id, "cliente_bloqueado")
+    logger.warning("Cliente %s alterado pelo administrador geral %s", client_id, admin_geral.id)
+    return tenant
+
+
+@router.post("/admin/clients/{client_id}/bloquear")
+async def bloquear_cliente(client_id: int, db: AsyncSession = Depends(get_platform_db),
+                           admin_geral: User = Depends(get_admin_geral_user)):
+    """Bloqueia o cliente: ninguém entra nele e quem está dentro sai na hora."""
+    tenant = await db.get(Tenant, client_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    tenant.status = "bloqueado"
+    await db.commit()
+    n = await _derrubar_acessos(client_id, "cliente_bloqueado")
+    logger.warning("Cliente %s bloqueado pelo administrador geral %s (%s acesso(s) encerrado(s))", client_id, admin_geral.id, n)
+    return {"ok": True, "status": "bloqueado", "acessos_encerrados": n}
+
+
+@router.post("/admin/clients/{client_id}/desbloquear")
+async def desbloquear_cliente(client_id: int, db: AsyncSession = Depends(get_platform_db),
+                              admin_geral: User = Depends(get_admin_geral_user)):
+    tenant = await db.get(Tenant, client_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    tenant.status = "ativo"
+    await db.commit()
+    logger.warning("Cliente %s desbloqueado pelo administrador geral %s", client_id, admin_geral.id)
+    return {"ok": True, "status": "ativo"}
+
+
+@router.get("/admin/clients/{client_id}/logs")
+async def atividade_do_cliente(client_id: int, db: AsyncSession = Depends(get_platform_db),
+                               admin_geral: User = Depends(get_admin_geral_user)):
+    """Últimas ações registradas na auditoria do cliente (quem, o quê, quando). Sem conteúdo de prova."""
+    linhas = (await db.execute(select(AuditLogGeracao).where(AuditLogGeracao.tenant_id == client_id)
+                               .order_by(AuditLogGeracao.timestamp.desc()).limit(100))).scalars().all()
+    return [{"type": a.acao, "user": a.usuario, "timestamp": a.timestamp.isoformat() + "Z"} for a in linhas]
+
+
+# O administrador do cliente entra por CONVITE (cria a própria senha e envia a foto): POST /convites com o
+# cliente escolhido (X-Tenant-Id). Este atalho antigo inventava uma senha e a mostrava na tela.
+@router.post("/admin/clients/{client_id}/create-admin")
+async def create_admin_for_client(client_id: int, admin_geral: User = Depends(get_admin_geral_user)):
+    raise HTTPException(status_code=410, detail="Use \"Convidar administrador\": a pessoa cria a própria senha e envia a foto.")
+
+
+STATUS_CLIENTE = {"ativo", "inativo", "bloqueado"}
+
+
+def _data(valor):
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(str(valor)[:19])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data de vencimento inválida.")
+
+
+async def _derrubar_acessos(tenant_id: int, motivo: str) -> int:
+    from sqlalchemy import update
+    from backend.app.database import PlatformSessionLocal
+    async with PlatformSessionLocal() as s:
+        r = await s.execute(update(Sessao).where(Sessao.tenant_id == tenant_id, Sessao.encerrada_em.is_(None))
+                            .values(encerrada_em=datetime.utcnow(), motivo_encerramento=motivo))
+        await s.commit()
+    return r.rowcount
+
 
 @router.get("/admin/clients/{client_id}", response_model=PydanticTenant)
 async def get_client(

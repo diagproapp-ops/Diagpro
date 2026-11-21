@@ -38,6 +38,17 @@ const Professores: React.FC = () => {
   const [novo, setNovo] = useState<{ professor?: number } | null>(null);
   const [aberto, setAberto] = useState<any>(null);
   const [editar, setEditar] = useState<any>(null);
+  const [msgLote, setMsgLote] = useState<string | null>(null);
+  const gerarLote = async () => {
+    if (!evento) return;
+    if (!window.confirm('Criar um rascunho de contrato para cada professor com conteúdo neste evento (quem já tem contrato fica de fora)?\n\nPreços, parcelas e bônus vêm do padrão da banca; as quantidades, dos conteúdos. Nada é enviado: revise e envie cada um.')) return;
+    try {
+      const { data } = await api.post('/financeiro/contratos/lote', { evento_id: evento });
+      setMsgLote(data.criados ? `${data.criados} rascunho(s) criado(s)${data.ja_tinham_contrato ? `; ${data.ja_tinham_contrato} professor(es) já tinham contrato` : ''}. Revise e envie cada um.`
+        : 'Nenhum contrato novo: todos os professores com conteúdo neste evento já têm contrato.');
+      carregar();
+    } catch (e: any) { setErro(erroApi(e, 'Não foi possível gerar os contratos.')); }
+  };
 
   const carregar = useCallback(() => {
     api.get('/financeiro/visao', { params: evento ? { evento_id: evento } : {} }).then(({ data }) => setV(data))
@@ -62,9 +73,14 @@ const Professores: React.FC = () => {
           <MenuItem value="">Todos os eventos</MenuItem>
           {v.eventos.map((e: any) => <MenuItem key={e.id} value={e.id}>{e.nome}</MenuItem>)}
         </TextField>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setNovo({})}>Novo contrato</Button>
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" disabled={!evento} onClick={gerarLote}>Gerar contratos do evento</Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setNovo({})}>Novo contrato</Button>
+        </Stack>
       </Stack>
       {erro && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErro(null)}>{erro}</Alert>}
+      {msgLote && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMsgLote(null)}>{msgLote}</Alert>}
+      {!evento && <Alert severity="info" sx={{ mb: 2 }}>Escolha um evento para gerar de uma vez os contratos de todos os professores dele.</Alert>}
       {v.sem_contrato.length > 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Com produção neste evento e sem contrato: {v.sem_contrato.map((s: any) => (

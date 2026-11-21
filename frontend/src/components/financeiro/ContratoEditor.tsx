@@ -26,6 +26,8 @@ const ContratoEditor: React.FC<{
   const [f, setF] = useState<any>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  const [sug, setSug] = useState<any>(null);
+  const [qtdEditada, setQtdEditada] = useState(false);
 
   useEffect(() => {
     if (!aberto) return;
@@ -47,6 +49,22 @@ const ContratoEditor: React.FC<{
       });
     }).catch((e) => setErro(erroApi(e, 'Não foi possível carregar a configuração.')));
   }, [aberto, inicial, eventoPadrao, professorPadrao]);
+
+  // quantidades sem digitar: pedidas nos conteúdos do professor no evento + o que ele já elaborou
+  const profSel = f?.professor_id;
+  const evSel = f?.evento_id;
+  useEffect(() => {
+    if (!aberto || !profSel || !evSel) { setSug(null); return; }
+    api.get('/financeiro/sugestao', { params: { professor_id: profSel, evento_id: evSel } })
+      .then(({ data }) => {
+        setSug(data);
+        if (!inicial && !qtdEditada) setF((x: any) => (x ? { ...x, quantidades: { ...data.quantidades } } : x));
+      })
+      .catch(() => setSug(null));
+    // só quando muda o professor/evento (não a cada digitação)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aberto, profSel, evSel]);
+  useEffect(() => { if (aberto) setQtdEditada(false); }, [aberto]);
 
   const previsto = useMemo(() => {
     if (!f || !cfg) return 0;
@@ -102,6 +120,20 @@ const ContratoEditor: React.FC<{
                 <ToggleButton value="valor_fechado">Valor fechado</ToggleButton>
               </ToggleButtonGroup>
             </Box>
+            {sug && (
+              <Alert severity="info" action={f.modalidade === 'por_questao' ? (
+                <Stack direction="row" spacing={0.5}>
+                  <Button size="small" onClick={() => { setQtdEditada(false); set('quantidades', { ...sug.quantidades }); }}>Usar sugestão</Button>
+                  <Button size="small" onClick={() => { setQtdEditada(true); set('quantidades', { ...sug.por_tipo_elaborado }); }}>Só o elaborado</Button>
+                </Stack>
+              ) : undefined}>
+                {sug.pedidas
+                  ? `Pedidas nos conteúdos deste professor: ${sug.pedidas} questão(ões) em ${sug.conteudos.length} conteúdo(s).`
+                  : 'Os conteúdos deste professor não têm quantidade definida.'}
+                {` Elaboradas até agora: ${sug.elaboradas}.`}
+                {f.modalidade === 'por_questao' && !inicial && !qtdEditada ? ' As quantidades abaixo já foram preenchidas com isso.' : ''}
+              </Alert>
+            )}
             {f.modalidade === 'valor_fechado' ? (
               <TextField label="Valor fechado (R$)" type="number" value={f.valor_fechado} onChange={(e) => set('valor_fechado', e.target.value)} sx={{ maxWidth: 260 }} />
             ) : (
@@ -115,7 +147,7 @@ const ContratoEditor: React.FC<{
                     <Typography variant="body2">{rot}</Typography>
                     <TextField size="small" type="number" value={f.precos[k] ?? 0} onChange={(e) => set('precos', { ...f.precos, [k]: e.target.value })} />
                     <TextField size="small" type="number" value={f.quantidades[k] ?? ''} placeholder="0"
-                      onChange={(e) => set('quantidades', { ...f.quantidades, [k]: e.target.value })} />
+                      onChange={(e) => { setQtdEditada(true); set('quantidades', { ...f.quantidades, [k]: e.target.value }); }} />
                     <Typography variant="body2" textAlign="right">{moeda((Number(f.precos[k]) || 0) * (Number(f.quantidades[k]) || 0))}</Typography>
                   </React.Fragment>
                 ))}

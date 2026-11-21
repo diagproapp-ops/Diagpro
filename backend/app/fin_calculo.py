@@ -109,10 +109,14 @@ async def producao(db: AsyncSession, tenant_id: int, evento_id: str, professor_i
             HistoricoRevisaoQuestao.status_revisao.in_(["AJUSTES", "REPROVADA"])))).scalars()}
     primeira = [x for x in aprovadas if x.id_questao not in devolvidas]
     ids_ce = [x.id_questao for x in aprovadas if (x.tipo or "").upper() == "CERTO_ERRADO"]
-    itens_ce = 0
-    if ids_ce:
-        itens_ce = (await db.execute(select(func.count(ItensVerdadeiroFalso.id_item_vf)).where(
-            ItensVerdadeiroFalso.id_questao_fk.in_(ids_ce)))).scalar_one()
+    ids_ce_todas = [x.id_questao for x in questoes if (x.tipo or "").upper() == "CERTO_ERRADO"]
+    itens_ce = itens_ce_total = 0
+    if ids_ce_todas:
+        por_questao = dict((await db.execute(select(ItensVerdadeiroFalso.id_questao_fk, func.count(ItensVerdadeiroFalso.id_item_vf))
+                                              .where(ItensVerdadeiroFalso.id_questao_fk.in_(ids_ce_todas))
+                                              .group_by(ItensVerdadeiroFalso.id_questao_fk))).all())
+        itens_ce_total = int(sum(por_questao.values()))
+        itens_ce = int(sum(por_questao.get(i, 0) for i in ids_ce))
     return {
         "total": len(questoes),
         "aprovadas": len(aprovadas),
@@ -120,6 +124,7 @@ async def producao(db: AsyncSession, tenant_id: int, evento_id: str, professor_i
         "pendentes": len(questoes) - len(aprovadas),
         "por_tipo": por_tipo,
         "itens_ce_aprovados": int(itens_ce),
+        "itens_ce_total": int(itens_ce_total),
         "anuladas": [x.codigo_curto_questao or x.id_questao for x in questoes if x.anulada],
         "ids": [x.id_questao for x in questoes],
     }
@@ -134,6 +139,38 @@ def unidades_aprovadas(prod: dict) -> dict[str, int]:
         "DISCURSIVA": pt.get("DISCURSIVA", {}).get("aprovadas", 0),
         "SUBJETIVA": pt.get("SUBJETIVA", {}).get("aprovadas", 0),
     }
+
+
+async def sugestao_quantidades(db: AsyncSession, tenant_id: int, evento_id: str, professor_id: int) -> dict:
+    """
+    Quantidades do contrato SEM digitar: o que foi pedido nos conteúdos do professor no evento (campo "quantidade" de cada
+    conteúdo) e o que ele já elaborou, por tipo. Regra da sugestão: o que já foi elaborado, por tipo, mais o que ainda falta
+    para chegar ao pedido nos conteúdos (no tipo mais usado por ele; sem nada elaborado, múltipla escolha).
+    """
+    conteudos = (await db.execute(select(Conteudo).where(
+        Conteudo.tenant_id == tenant_id, Conteudo.evento_id == evento_id, Conteudo.professor_id == str(professor_id),
+        Conteudo.is_deleted.isnot(True)))).scalars().all()
+    pedidas = int(sum(c.quantidade or 0 for c in conteudos))
+    prod = await producao(db, tenant_id, evento_id, professor_id)
+    pt = prod["por_tipo"]
+    elaboradas = {"MULTIPLA_ESCOLHA": pt.get("MULTIPLA_ESCOLHA", {}).get("total", 0),
+                  "CERTO_ERRADO_BASE": pt.get("CERTO_ERRADO", {}).get("total", 0),
+                  "CERTO_ERRADO_ITEM": prod.get("itens_ce_total", 0),
+                  "DISCURSIVA": pt.get("DISCURSIVA", {}).get("total", 0),
+                  "SUBJETIVA": pt.get("SUBJETIVA", {}).get("total", 0)}
+    sugeridas = dict(elaboradas)
+    questoes_feitas = prod["total"]
+    falta = max(0, pedidas - questoes_feitas)
+    if falta:
+        tipos_q = {k: v for k, v in elaboradas.items() if k != "CERTO_ERRADO_ITEM"}
+        alvo = max(tipos_q, key=lambda k: tipos_q[k]) if questoes_feitas else "MULTIPLA_ESCOLHA"
+        sugeridas[alvo] += falta
+        if alvo == "CERTO_ERRADO_BASE" and pt.get("CERTO_ERRADO", {}).get("total"):
+            media = prod.get("itens_ce_total", 0) / pt["CERTO_ERRADO"]["total"]  # itens por questão-base já feitos
+            sugeridas["CERTO_ERRADO_ITEM"] += round(falta * media)
+    return {"pedidas": pedidas, "elaboradas": questoes_feitas,
+            "conteudos": [{"nome": c.nome_conteudo, "quantidade": c.quantidade or 0} for c in conteudos],
+            "por_tipo_elaborado": elaboradas, "quantidades": {k: v for k, v in sugeridas.items() if v}}
 
 
 def total_previsto(modalidade: str, dados: dict) -> float:

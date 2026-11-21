@@ -8,6 +8,7 @@ def print(*args, **kwargs):  # noqa: A001
 
 
 from backend.app import liberacao_evento
+from backend.app import limites_plano
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Body, Request
 from sqlalchemy import select
 from backend.app import secure_files
@@ -45,7 +46,7 @@ def safe_decrypt(text):
 
 
 @router.post(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor), Depends(limites_plano.dependencia("questoes"))],
     response_model=QuestaoOut,
     summary="Criar uma nova questão (múltipla escolha, VF, discursiva ou subjetiva)"
 )
@@ -1012,7 +1013,7 @@ async def revisar_questao(
 
 
 @router.post(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/importar-docx",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/importar-docx", dependencies=[Depends(limites_plano.dependencia("questoes"))],
     summary="Importa questões e textos de referência de um DOCX para este conteúdo"
 )
 async def importar_questoes_docx(

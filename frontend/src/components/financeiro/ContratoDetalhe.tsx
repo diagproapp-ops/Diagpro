@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, MenuItem, Paper, Stack,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
@@ -26,7 +26,19 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
   const [liberar, setLiberar] = useState<any>(null);
   const [pagar, setPagar] = useState<any>(null);
   const [ajuste, setAjuste] = useState<any>(null);
+  const [previa, setPrevia] = useState<any>(null);
   const banca = modo === 'banca';
+  const pf = (c.dados?.tipo_pessoa || 'pf_rpa') === 'pf_rpa';
+
+  // retenções do RPA calculadas pelo servidor enquanto o valor é digitado (pessoa física)
+  useEffect(() => {
+    if (!pagar || !pf || !Number(pagar.valor)) { setPrevia(null); return undefined; }
+    const t = setTimeout(() => {
+      api.get(`/financeiro/parcelas/${pagar.id}/retencoes`, { params: { valor: Number(pagar.valor), dependentes: Number(pagar.dependentes) || 0 } })
+        .then(({ data }) => setPrevia(data.aplica ? data : null)).catch(() => setPrevia(null));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [pagar, pf]);
 
   const acao = async (fn: () => Promise<any>, ok: string) => {
     setErro(null); setMsg(null);
@@ -58,6 +70,8 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
           <Typography variant="body2" color="text.secondary">
             {banca ? `${c.professor} · ` : ''}{c.evento} · {c.modalidade === 'valor_fechado' ? `valor fechado ${moeda(c.dados?.valor_fechado)}` : 'por questão elaborada'}
             {c.dados?.prazo_entrega ? ` · entrega até ${c.dados.prazo_entrega}` : ''}
+            {` · ${pf ? 'pessoa física (RPA)' : 'nota fiscal'}`}
+            {c.dados?.bonus && c.dados.bonus.tipo !== 'nenhum' ? ` · bônus ${c.dados.bonus.tipo === 'percentual' ? `${c.dados.bonus.valor}%` : moeda(c.dados.bonus.valor)} por questão aprovada de primeira` : ''}
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
@@ -88,7 +102,7 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0,1fr))', md: 'repeat(4, minmax(0,1fr))' }, gap: 1.5, mb: 2 }}>
         <Indicador rotulo="Previsto no contrato" valor={moeda(t.previsto)} />
-        <Indicador rotulo="Apurado (questões aprovadas)" valor={moeda(t.apurado)} />
+        <Indicador rotulo="Apurado (questões aprovadas)" valor={moeda(t.apurado)} detalhe={t.bonus ? `inclui ${moeda(t.bonus)} de bônus por qualidade` : undefined} />
         <Indicador rotulo="Liberado" valor={moeda(t.liberado)} cor="#f59e0b" detalhe={t.a_receber ? `${moeda(t.a_receber)} a pagar` : undefined} />
         <Indicador rotulo="Pago" valor={moeda(t.pago)} cor="#10b981" />
       </Box>
@@ -97,6 +111,7 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
         <Typography fontWeight={800} sx={{ mb: 1 }}>Produção no evento</Typography>
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
           <Chip label={`${c.producao.aprovadas} aprovada(s) de ${c.producao.total}`} color={c.producao.pendentes ? 'warning' : 'success'} variant="outlined" />
+          {c.producao.aprovadas > 0 && <Chip size="small" color="success" variant="outlined" label={`${c.producao.aprovadas_primeira ?? 0} aprovada(s) de primeira`} />}
           {Object.entries(c.producao.por_tipo || {}).map(([k, v]: any) => (
             <Chip key={k} size="small" variant="outlined" label={`${TIPOS_PRECO[k] || k}: ${v.aprovadas}/${v.total}`} />
           ))}
@@ -129,7 +144,8 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
                     <Typography variant="body2">{p.gatilho_rotulo}{p.data_prevista ? ` (${dataBR(p.data_prevista)})` : ''}</Typography>
                     {p.status === 'prevista' && <Typography variant="caption" color={p.gatilho_cumprido ? 'success.main' : 'text.secondary'}>{p.explicacao}</Typography>}
                     {p.liberacao && p.status !== 'prevista' && <Typography variant="caption" color="text.secondary" display="block">Liberada {dataBR(p.liberada_em)} — {p.liberacao}</Typography>}
-                    {p.pagamento && <Typography variant="caption" color="text.secondary" display="block">Pago em {dataBR(p.pagamento.data)}{p.pagamento.forma ? ` (${p.pagamento.forma})` : ''}</Typography>}
+                    {p.pagamento && <Typography variant="caption" color="text.secondary" display="block">Pago em {dataBR(p.pagamento.data)}{p.pagamento.forma ? ` (${p.pagamento.forma})` : ''}
+                      {p.retencoes ? ` · líquido ${moeda(p.retencoes.liquido)} (INSS ${moeda(p.retencoes.inss)}, IRRF ${moeda(p.retencoes.irrf)}${p.retencoes.iss ? `, ISS ${moeda(p.retencoes.iss)}` : ''})` : ''}</Typography>}
                   </TableCell>
                   <TableCell align="right">
                     <Typography variant="body2" fontWeight={800}>{moeda(p.a_pagar)}</Typography>
@@ -216,14 +232,25 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
         <DialogTitle>Registrar pagamento da parcela {pagar?.ordem}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField label="Valor pago (R$)" type="number" value={pagar?.valor ?? ''} onChange={(e) => setPagar({ ...pagar, valor: e.target.value })} />
+            <TextField label={pf ? 'Valor bruto (R$)' : 'Valor pago (R$)'} type="number" value={pagar?.valor ?? ''} onChange={(e) => setPagar({ ...pagar, valor: e.target.value })} />
+            {pf && <TextField label="Dependentes (IRRF)" type="number" value={pagar?.dependentes ?? 0} onChange={(e) => setPagar({ ...pagar, dependentes: e.target.value })} />}
+            {pf && previa && (
+              <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+                <Typography variant="caption" color="text.secondary" fontWeight={700}>RETENÇÕES (RPA)</Typography>
+                {[['INSS', previa.inss], ['IRRF', previa.irrf], ['ISS', previa.iss]].map(([r, v]: any) => (
+                  <Stack key={r} direction="row" justifyContent="space-between"><Typography variant="body2">{r}</Typography><Typography variant="body2">− {moeda(v)}</Typography></Stack>
+                ))}
+                <Divider sx={{ my: 0.75 }} />
+                <Stack direction="row" justifyContent="space-between"><Typography fontWeight={800}>Líquido ao professor</Typography><Typography fontWeight={800}>{moeda(previa.liquido)}</Typography></Stack>
+              </Paper>
+            )}
             <TextField label="Data do pagamento" type="date" InputLabelProps={{ shrink: true }} value={pagar?.data || ''} onChange={(e) => setPagar({ ...pagar, data: e.target.value })} />
             <TextField label="Forma (PIX, TED...)" value={pagar?.forma || ''} onChange={(e) => setPagar({ ...pagar, forma: e.target.value })} />
             <Button component="label" variant="outlined" startIcon={<UploadFileIcon />}>
               {pagar?.arquivo ? pagar.arquivo.name : 'Comprovante (opcional)'}
               <input hidden type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={(e) => setPagar({ ...pagar, arquivo: e.target.files?.[0] || null })} />
             </Button>
-            <Typography variant="caption" color="text.secondary">O recibo é gerado na hora e fica com o professor, que confirma o recebimento.</Typography>
+            <Typography variant="caption" color="text.secondary">{pf ? 'O RPA e o recibo são gerados na hora' : 'O recibo é gerado na hora'} e ficam com o professor, que confirma o recebimento.</Typography>
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -232,6 +259,7 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
             const p = pagar; setPagar(null);
             const fd = new FormData();
             fd.append('valor_pago', String(Number(p.valor))); fd.append('data_pagamento', p.data); fd.append('forma', p.forma || '');
+            fd.append('dependentes', String(Number(p.dependentes) || 0));
             if (p.arquivo) fd.append('comprovante', p.arquivo);
             acao(() => api.post(`/financeiro/parcelas/${p.id}/pagar`, fd), 'Pagamento registrado e recibo gerado.');
           }}>Registrar</Button>

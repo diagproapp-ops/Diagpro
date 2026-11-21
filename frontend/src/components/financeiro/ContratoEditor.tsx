@@ -9,7 +9,10 @@ import api from '../../api';
 import { erroApi, moeda } from './comum';
 
 export type Parcela = { descricao: string; percentual: number | null; valor_fixo: number | null; gatilho: string; data_prevista: string | null };
-type Config = { precos: Record<string, number>; cronograma: Parcela[]; rotulos_precos: Record<string, string>; gatilhos: Record<string, string> };
+type Config = {
+  precos: Record<string, number>; cronograma: Parcela[]; rotulos_precos: Record<string, string>; gatilhos: Record<string, string>;
+  tipos_bonus: Record<string, string>; tipos_pessoa: Record<string, string>; bonus_padrao: { tipo: string; valor: number }; tipo_pessoa_padrao: string;
+};
 
 const numero = (v: any) => (v === '' || v === null || v === undefined ? null : Number(v));
 
@@ -34,11 +37,13 @@ const ContratoEditor: React.FC<{
         precos: { ...data.precos, ...(inicial.dados?.precos || {}) }, quantidades: { ...(inicial.dados?.quantidades || {}) },
         valor_fechado: inicial.dados?.valor_fechado ?? '', prazo_entrega: inicial.dados?.prazo_entrega || '',
         observacoes: inicial.dados?.observacoes || '',
+        tipo_pessoa: inicial.dados?.tipo_pessoa || 'pf_rpa', bonus: inicial.dados?.bonus || { tipo: 'nenhum', valor: 0 },
         parcelas: inicial.parcelas.map((p: any) => ({ descricao: p.descricao, percentual: p.percentual, valor_fixo: p.valor_fixo,
           gatilho: p.gatilho, data_prevista: p.data_prevista })),
       } : {
         professor_id: professorPadrao || '', evento_id: eventoPadrao || '', modalidade: 'por_questao', precos: { ...data.precos },
         quantidades: {}, valor_fechado: '', prazo_entrega: '', observacoes: '', parcelas: data.cronograma.map((p: Parcela) => ({ ...p })),
+        tipo_pessoa: data.tipo_pessoa_padrao || 'pf_rpa', bonus: { ...(data.bonus_padrao || { tipo: 'nenhum', valor: 0 }) },
       });
     }).catch((e) => setErro(erroApi(e, 'Não foi possível carregar a configuração.')));
   }, [aberto, inicial, eventoPadrao, professorPadrao]);
@@ -62,7 +67,8 @@ const ContratoEditor: React.FC<{
         precos: Object.fromEntries(Object.entries(f.precos).map(([k, v]) => [k, Number(v) || 0])),
         quantidades: Object.fromEntries(Object.entries(f.quantidades).map(([k, v]) => [k, Number(v) || 0])),
         valor_fechado: f.modalidade === 'valor_fechado' ? Number(f.valor_fechado) || 0 : null,
-        prazo_entrega: f.prazo_entrega || null, observacoes: f.observacoes,
+        prazo_entrega: f.prazo_entrega || null, observacoes: f.observacoes, tipo_pessoa: f.tipo_pessoa,
+        bonus: { tipo: f.bonus.tipo, valor: Number(f.bonus.valor) || 0 },
         parcelas: f.parcelas.map((p: any) => ({ descricao: p.descricao, gatilho: p.gatilho, data_prevista: p.data_prevista || null,
           percentual: numero(p.percentual), valor_fixo: numero(p.valor_fixo) })),
       };
@@ -118,7 +124,24 @@ const ContratoEditor: React.FC<{
             <Typography fontWeight={800}>Total estimado: {moeda(previsto)}
               {f.modalidade === 'por_questao' && <Typography component="span" variant="caption" color="text.secondary"> — o valor final é calculado sobre as questões aprovadas</Typography>}
             </Typography>
-            <TextField label="Prazo de entrega" placeholder="ex.: 15/12/2026" value={f.prazo_entrega} onChange={(e) => set('prazo_entrega', e.target.value)} sx={{ maxWidth: 260 }} />
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1.4fr 0.8fr' }, gap: 1.5 }}>
+              <TextField label="Prazo de entrega" placeholder="ex.: 15/12/2026" value={f.prazo_entrega} onChange={(e) => set('prazo_entrega', e.target.value)} />
+              <TextField select label="Bônus por qualidade" value={f.bonus.tipo} onChange={(e) => set('bonus', { ...f.bonus, tipo: e.target.value })}
+                helperText="Questões aprovadas na primeira revisão (sem devolução)">
+                {Object.entries(cfg.tipos_bonus).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+              </TextField>
+              <TextField label={f.bonus.tipo === 'percentual' ? 'Bônus (%)' : 'Bônus (R$)'} type="number" disabled={f.bonus.tipo === 'nenhum'}
+                value={f.bonus.valor} onChange={(e) => set('bonus', { ...f.bonus, valor: e.target.value })} />
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>Como o professor recebe</Typography>
+              <ToggleButtonGroup exclusive size="small" value={f.tipo_pessoa} onChange={(_, v) => v && set('tipo_pessoa', v)}>
+                {Object.entries(cfg.tipos_pessoa).map(([k, v]) => <ToggleButton key={k} value={k}>{v}</ToggleButton>)}
+              </ToggleButtonGroup>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                {f.tipo_pessoa === 'pf_rpa' ? 'No pagamento o DiagPro calcula INSS, IRRF e ISS e gera o RPA.' : 'O professor envia a nota fiscal; sem retenção automática.'}
+              </Typography>
+            </Box>
             <Divider />
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="subtitle2" fontWeight={800}>Parcelas e condições</Typography>

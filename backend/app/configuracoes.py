@@ -77,6 +77,12 @@ PADRAO_PLATAFORMA = {
         "ativa": False,
         "mensagem": "O DiagPro está em manutenção. Volte em alguns minutos.",
     },
+    "financeiro": {
+        "lembrete_fatura_dias": 3,     # avisa a banca N dias antes do vencimento
+        "aviso_atraso_cada_dias": 7,   # repete o aviso de atraso a cada N dias
+        "suspender_apos_dias": 0,      # 0 = nunca suspende sozinho; N = bloqueia a banca N dias após o vencimento
+        "lembrete_aceite_dias": 3,     # lembra o professor do contrato não aceito a cada N dias
+    },
     "lgpd": {
         "versao_termos": "1",
         "termos": TERMOS_PADRAO,
@@ -242,6 +248,14 @@ def validar_plataforma(dados: dict) -> dict:
                 if campo in rd:
                     _int(rd[campo], f"lgpd.retencao_dias.{campo}", mi, ma, erros)
                     out["lgpd"]["retencao_dias"][campo] = rd[campo]
+    fi = (dados or {}).get("financeiro")
+    if fi is not None:
+        out["financeiro"] = {}
+        for campo, (mi, ma) in {"lembrete_fatura_dias": (0, 30), "aviso_atraso_cada_dias": (1, 60),
+                                "suspender_apos_dias": (0, 365), "lembrete_aceite_dias": (1, 30)}.items():
+            if campo in fi:
+                _int(fi[campo], f"financeiro.{campo}", mi, ma, erros)
+                out["financeiro"][campo] = fi[campo]
     em = (dados or {}).get("email")
     if em is not None:
         if not isinstance(em, dict):

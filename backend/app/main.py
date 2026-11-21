@@ -149,6 +149,8 @@ async def _iniciar_fila_de_email():
         app.state.backup_agendado = asyncio.create_task(_backups.laco_agendado())
         app.state.retencao_lgpd = asyncio.create_task(_lgpd.laco_retencao())
         app.state.limpeza_entregas = asyncio.create_task(_entregas.laco_limpeza())
+        from backend.app import fin_rotinas as _fin_rotinas  # lembretes, atrasos, suspensão e liberação de parcelas
+        app.state.rotinas_financeiro = asyncio.create_task(_fin_rotinas.laco())
 app.include_router(plagio_router, prefix="/api")
 app.include_router(biblioteca_router, prefix="/api")
 app.include_router(dicionario_router, prefix="/api")

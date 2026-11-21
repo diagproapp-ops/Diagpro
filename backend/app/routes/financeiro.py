@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app import fin_calculo as fc
-from backend.app import fin_pdf, notificacoes, secure_files, vinculos
+from backend.app import fin_pdf, fin_retencoes, notificacoes, secure_files, vinculos
 from backend.app.auth import get_current_user, verify_password
 from backend.app.database import PlatformSessionLocal
 from backend.app.db_models import (
@@ -38,7 +38,7 @@ from backend.app.utils_crypto import safe_decrypt_pii
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/financeiro", tags=["Financeiro da banca"])
 
-TIPOS_DOC_PROFESSOR = {"nota_fiscal": "Nota fiscal", "rpa": "RPA", "comprovante": "Comprovante de pagamento",
+TIPOS_DOC_PROFESSOR = {"nota_fiscal": "Nota fiscal", "rpa": "RPA (retenções)", "comprovante": "Comprovante de pagamento",
                        "recibo": "Recibo", "outro": "Outro documento"}
 MAX_ARQUIVO = 15 * 1024 * 1024
 
@@ -161,6 +161,11 @@ def _validar_cronograma(itens: list[ItemCronograma], exigir_100: bool) -> None:
         raise HTTPException(status_code=400, detail=f"Os percentuais somam {sum(pct):g}%: precisam somar 100%.")
 
 
+class BonusIn(BaseModel):
+    tipo: str = "nenhum"
+    valor: float = Field(0, ge=0)
+
+
 class ConfigIn(BaseModel):
     precos: dict[str, float]
     cronograma: list[ItemCronograma]
@@ -168,11 +173,24 @@ class ConfigIn(BaseModel):
     clausulas_cessao: str = Field(..., max_length=20000)
     contratante: dict[str, str] = {}
     observacoes_padrao: str = Field("", max_length=5000)
+    bonus_padrao: BonusIn = BonusIn()
+    tipo_pessoa_padrao: str = "pf_rpa"
+    retencoes: dict = {}
+
+
+def _validar_bonus(b: BonusIn) -> dict:
+    if b.tipo not in fc.TIPOS_BONUS:
+        raise HTTPException(status_code=400, detail="Tipo de bônus inválido.")
+    if b.tipo == "percentual" and b.valor > 100:
+        raise HTTPException(status_code=400, detail="O bônus percentual vai até 100%.")
+    return {"tipo": b.tipo, "valor": round(b.valor, 2)}
 
 
 @router.get("/config")
 async def obter_config(db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
-    return {**(await ler_config(db, u.tenant_id)), "rotulos_precos": fc.PRECOS, "gatilhos": fc.GATILHOS,
+    cfg = await ler_config(db, u.tenant_id)
+    return {**cfg, "retencoes": fin_retencoes.config(cfg), "rotulos_precos": fc.PRECOS, "gatilhos": fc.GATILHOS,
+            "tipos_bonus": fc.TIPOS_BONUS, "tipos_pessoa": fc.TIPOS_PESSOA,
             "variaveis": ["BANCA", "PROFESSOR", "CPF", "EVENTO", "VALOR_TOTAL", "PRAZO_ENTREGA", "DATA"]}
 
 
@@ -183,7 +201,9 @@ async def salvar_config(body: ConfigIn, db: AsyncSession = Depends(get_tenant_db
     dados = {"precos": precos, "cronograma": [it.model_dump(mode="json") for it in body.cronograma],
              "clausulas_contrato": body.clausulas_contrato, "clausulas_cessao": body.clausulas_cessao,
              "contratante": {k: str(v)[:300] for k, v in (body.contratante or {}).items()},
-             "observacoes_padrao": body.observacoes_padrao}
+             "observacoes_padrao": body.observacoes_padrao, "bonus_padrao": _validar_bonus(body.bonus_padrao),
+             "tipo_pessoa_padrao": body.tipo_pessoa_padrao if body.tipo_pessoa_padrao in fc.TIPOS_PESSOA else "pf_rpa",
+             "retencoes": fin_retencoes.config({"retencoes": body.retencoes})}
     cfg = (await db.execute(select(FinConfig).where(FinConfig.tenant_id == u.tenant_id))).scalars().first()
     if cfg is None:
         db.add(FinConfig(tenant_id=u.tenant_id, dados=dados, atualizado_em=datetime.utcnow(), atualizado_por=u.id))
@@ -224,6 +244,8 @@ class ContratoIn(BaseModel):
     prazo_entrega: Optional[str] = Field(None, max_length=60)
     observacoes: str = Field("", max_length=5000)
     parcelas: list[ItemCronograma] = []
+    bonus: Optional[BonusIn] = None
+    tipo_pessoa: Optional[str] = None
 
 
 def _dados_contrato(body: ContratoIn) -> dict:
@@ -234,7 +256,9 @@ def _dados_contrato(body: ContratoIn) -> dict:
     return {"precos": {k: max(0.0, fc.num(body.precos.get(k))) for k in fc.PRECOS},
             "quantidades": {k: max(0.0, fc.num(body.quantidades.get(k))) for k in fc.PRECOS},
             "valor_fechado": fc.num(body.valor_fechado) if body.valor_fechado is not None else None,
-            "prazo_entrega": body.prazo_entrega or "", "observacoes": body.observacoes}
+            "prazo_entrega": body.prazo_entrega or "", "observacoes": body.observacoes,
+            "bonus": _validar_bonus(body.bonus or BonusIn()),
+            "tipo_pessoa": body.tipo_pessoa if body.tipo_pessoa in fc.TIPOS_PESSOA else "pf_rpa"}
 
 
 async def _gravar_parcelas(db: AsyncSession, c: FinContrato, itens: list[ItemCronograma]) -> None:
@@ -294,6 +318,10 @@ async def criar_contrato(body: ContratoIn, db: AsyncSession = Depends(get_tenant
     _validar_cronograma(parcelas, exigir_100=False)
     if not body.precos:
         body.precos = cfg["precos"]
+    if body.bonus is None:
+        body.bonus = BonusIn(**(cfg.get("bonus_padrao") or {}))
+    if body.tipo_pessoa is None:
+        body.tipo_pessoa = cfg.get("tipo_pessoa_padrao") or "pf_rpa"
     dados = _dados_contrato(body)
     if not dados["observacoes"]:
         dados["observacoes"] = cfg.get("observacoes_padrao", "")
@@ -515,11 +543,22 @@ async def liberar_parcela(body: LiberarIn, parcela_id: int = Path(...), db: Asyn
     return {"ok": True}
 
 
+@router.get("/parcelas/{parcela_id}/retencoes")
+async def previa_retencoes(parcela_id: int = Path(...), valor: float = 0, dependentes: int = 0,
+                           db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
+    p, c = await _parcela(db, parcela_id, u.tenant_id)
+    if (c.dados or {}).get("tipo_pessoa", "pf_rpa") != "pf_rpa":
+        return {"aplica": False}
+    return {"aplica": True, **fin_retencoes.calcular(valor, fin_retencoes.config(await ler_config(db, u.tenant_id)), max(0, dependentes))}
+
+
 @router.post("/parcelas/{parcela_id}/pagar")
 async def pagar_parcela(parcela_id: int = Path(...), valor_pago: float = Form(..., gt=0), data_pagamento: date = Form(...),
-                        forma: str = Form("", max_length=60), comprovante: UploadFile | None = File(None),
+                        forma: str = Form("", max_length=60), dependentes: int = Form(0, ge=0, le=20),
+                        comprovante: UploadFile | None = File(None),
                         db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
-    """Registra o pagamento (com o comprovante) e gera o recibo; o professor confirma o recebimento."""
+    """Registra o pagamento (valor BRUTO; com o comprovante) e gera o recibo — e o RPA com as retenções quando o
+    professor é pessoa física; o professor confirma o recebimento."""
     p, c = await _parcela(db, parcela_id, u.tenant_id)
     if p.status != "liberada":
         raise HTTPException(status_code=409, detail="Só uma parcela liberada pode ser paga.")
@@ -532,25 +571,41 @@ async def pagar_parcela(parcela_id: int = Path(...), valor_pago: float = Form(..
     prof = await _professor_da_banca(db, c.tenant_id, c.professor_id)
     pessoas, eventos = await _nomes(db, c.tenant_id)
     codigo = secrets.token_hex(5).upper()
+    cpf = safe_decrypt_pii(prof.cpf) if (prof.tenant_id == c.tenant_id and prof.cpf) else ""
+    retencoes = None
+    if (c.dados or {}).get("tipo_pessoa", "pf_rpa") == "pf_rpa":
+        cfg = await ler_config(db, c.tenant_id)
+        retencoes = fin_retencoes.calcular(valor_pago, fin_retencoes.config(cfg), dependentes)
+        documento_rpa = fin_pdf.rpa({
+            "banca": await _nome_banca(db, c.tenant_id), "contratante": cfg.get("contratante") or {}, "codigo": codigo,
+            "professor": {"nome": prof.full_name or prof.username, "cpf": cpf, "email": prof.email or ""},
+            "servico": f"Elaboração de questões — contrato {c.numero}, parcela {p.ordem} ({(p.dados or {}).get('descricao', '')}), "
+                       f"evento {eventos.get(c.evento_id, '')}.",
+            "competencia": data_pagamento.strftime("%m/%Y"), "data": data_pagamento.strftime("%d/%m/%Y"), "retencoes": retencoes})
+        db.add(FinDocumento(tenant_id=c.tenant_id, escopo="professor", tipo="rpa", contrato_id=c.id, parcela_id=p.id,
+                            professor_id=c.professor_id, dados={"nome": f"rpa-{c.numero}-parcela-{p.ordem}.pdf"},
+                            arquivo_ref=_guardar(documento_rpa, c.tenant_id, "pdf"), sha256=hashlib.sha256(documento_rpa).hexdigest(),
+                            enviado_por=u.id, enviado_em=agora))
     recibo = fin_pdf.recibo({
         "banca": await _nome_banca(db, c.tenant_id), "codigo": codigo, "numero_contrato": c.numero, "evento": eventos.get(c.evento_id, ""),
-        "professor": {"nome": prof.full_name or prof.username,
-                      "cpf": safe_decrypt_pii(prof.cpf) if (prof.tenant_id == c.tenant_id and prof.cpf) else ""},
+        "professor": {"nome": prof.full_name or prof.username, "cpf": cpf},
         "parcela": {"ordem": p.ordem, "descricao": (p.dados or {}).get("descricao", "")}, "valor": valor_pago,
-        "data": data_pagamento.strftime("%d/%m/%Y"), "forma": forma})
+        "data": data_pagamento.strftime("%d/%m/%Y"), "forma": forma, "retencoes": retencoes})
     db.add(FinDocumento(tenant_id=c.tenant_id, escopo="professor", tipo="recibo", contrato_id=c.id, parcela_id=p.id,
                         professor_id=c.professor_id, dados={"nome": f"recibo-{c.numero}-parcela-{p.ordem}.pdf"},
                         arquivo_ref=_guardar(recibo, c.tenant_id, "pdf"), sha256=hashlib.sha256(recibo).hexdigest(),
                         enviado_por=u.id, enviado_em=agora))
     dp = dict(p.dados or {})
     dp["valor_pago"] = round(valor_pago, 2)
+    dp["retencoes"] = retencoes
     dp["pagamento"] = {"data": data_pagamento.isoformat(), "forma": forma, "registrado_por": u.full_name or u.username,
-                       "codigo_recibo": codigo}
+                       "codigo_recibo": codigo, "liquido": retencoes["liquido"] if retencoes else round(valor_pago, 2)}
     p.dados, p.status, p.paga_em = dp, "paga", agora
     await db.commit()
     await notificacoes.notificar(c.professor_id, "sistema", f"Pagamento da parcela {p.ordem}",
-                                 f"A banca registrou o pagamento de {fc.moeda(valor_pago)} (contrato {c.numero}). Confira e "
-                                 "confirme o recebimento em Financeiro.", "/financeiro", tenant_id=c.tenant_id)
+                                 f"A banca registrou o pagamento da parcela {p.ordem} (contrato {c.numero}): "
+                                 f"{fc.moeda(retencoes['liquido'] if retencoes else valor_pago)} líquido. Confira e confirme o "
+                                 "recebimento em Financeiro.", "/financeiro", tenant_id=c.tenant_id)
     return {"ok": True}
 
 
@@ -723,7 +778,9 @@ async def minha_relacao_com_a_plataforma(db: AsyncSession = Depends(get_tenant_d
                                 .order_by(FinFatura.vencimento.desc()))).scalars().all()
     docs = (await db.execute(select(FinDocumento).where(FinDocumento.tenant_id == t, FinDocumento.escopo == "plataforma")
                              .order_by(FinDocumento.id.desc()))).scalars().all()
-    return {"plano": await _plano_atual(t), "propostas": [saida_proposta(p) for p in propostas if p.status != "cancelada"],
+    from backend.app import limites_plano
+    return {"plano": await _plano_atual(t), "uso": await limites_plano.situacao(db, t),
+            "propostas": [saida_proposta(p) for p in propostas if p.status != "cancelada"],
             "termos": [saida_termo(x) for x in termos], "faturas": [saida_fatura(f) for f in faturas],
             "documentos": [saida_doc_plataforma(d) for d in docs]}
 
@@ -832,3 +889,92 @@ async def baixar_da_plataforma(tipo: str, item_id: int, db: AsyncSession = Depen
         if x:
             return _baixar(secure_files.read_bytes(x.arquivo_ref, x.tenant_id), (x.dados or {}).get("nome") or "documento.pdf")
     raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
+
+
+
+# =========================================================================================== relatórios (banca)
+def _csv(linhas: list[list], nome: str) -> Response:
+    """CSV para Excel em português: separador ';', vírgula decimal, UTF-8 com BOM."""
+    import csv
+    import io
+
+    def celula(v):
+        if isinstance(v, float):
+            return f"{v:.2f}".replace(".", ",")
+        return "" if v is None else str(v)
+
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    for linha in linhas:
+        w.writerow([celula(v) for v in linha])
+    return Response(content=("\ufeff" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="{nome}"', "Cache-Control": "private, no-store"})
+
+
+async def _contratos_completos(db: AsyncSession, tenant_id: int, evento_id: Optional[str]) -> list[dict]:
+    q = select(FinContrato).where(FinContrato.tenant_id == tenant_id, FinContrato.status.in_(["enviado", "aceito", "encerrado"]))
+    if evento_id:
+        q = q.where(FinContrato.evento_id == evento_id)
+    return [await fc.contrato_completo(db, c, persistir=False) for c in (await db.execute(q)).scalars().all()]
+
+
+@router.get("/relatorios/resumo")
+async def relatorio_resumo(evento_id: Optional[str] = None, db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
+    """Custo de elaboração por evento: previsto, apurado, bônus, liberado, pago, retido e custo por questão aprovada."""
+    pessoas, eventos = await _nomes(db, u.tenant_id)
+    por_evento: dict[str, dict] = {}
+    for c in await _contratos_completos(db, u.tenant_id, evento_id):
+        e = por_evento.setdefault(c["evento_id"], {"evento_id": c["evento_id"], "evento": eventos.get(c["evento_id"], "—"),
+                                                   "professores": 0, "aprovadas": 0, "previsto": 0.0, "apurado": 0.0, "bonus": 0.0,
+                                                   "liberado": 0.0, "pago": 0.0, "retido": 0.0})
+        e["professores"] += 1
+        e["aprovadas"] += c["producao"]["aprovadas"]
+        for k in ("previsto", "apurado", "bonus", "liberado", "pago"):
+            e[k] = round(e[k] + c["totais"][k], 2)
+        e["retido"] = round(e["retido"] + sum(fc.num((p.get("retencoes") or {}).get("total_retido")) for p in c["parcelas"]), 2)
+    linhas = sorted(por_evento.values(), key=lambda x: x["evento"])
+    for e in linhas:
+        e["custo_por_questao"] = round(e["apurado"] / e["aprovadas"], 2) if e["aprovadas"] else None
+    return {"eventos": linhas}
+
+
+@router.get("/relatorios/contratos.csv")
+async def exportar_contratos(evento_id: Optional[str] = None, db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
+    pessoas, eventos = await _nomes(db, u.tenant_id)
+    linhas = [["Contrato", "Professor", "Evento", "Situação", "Modalidade", "Pessoa", "Questões aprovadas", "Aprovadas de primeira",
+               "Previsto", "Apurado", "Bônus", "Liberado", "Pago", "A pagar"]]
+    for c in await _contratos_completos(db, u.tenant_id, evento_id):
+        t = c["totais"]
+        linhas.append([c["numero"], pessoas.get(c["professor_id"], ""), eventos.get(c["evento_id"], ""), c["status"],
+                       fc.MODALIDADES.get(c["modalidade"], c["modalidade"]), fc.TIPOS_PESSOA.get(c["dados"].get("tipo_pessoa", "pf_rpa"), ""),
+                       c["producao"]["aprovadas"], c["producao"].get("aprovadas_primeira", 0), t["previsto"], t["apurado"], t["bonus"],
+                       t["liberado"], t["pago"], t["a_receber"]])
+    return _csv(linhas, "contratos-professores.csv")
+
+
+@router.get("/relatorios/pagamentos.csv")
+async def exportar_pagamentos(inicio: Optional[date] = None, fim: Optional[date] = None, db: AsyncSession = Depends(get_tenant_db),
+                              u=Depends(admin_da_banca)):
+    """Para a contabilidade: cada pagamento com bruto, retenções (INSS, IRRF, ISS) e líquido."""
+    pessoas, eventos = await _nomes(db, u.tenant_id)
+    cpfs = {x.id: (safe_decrypt_pii(x.cpf) if x.cpf and x.tenant_id == u.tenant_id else "")
+            for x in (await db.execute(select(User).where(vinculos.membros_da_banca(u.tenant_id)))).scalars()}
+    contratos = {c.id: c for c in (await db.execute(select(FinContrato).where(FinContrato.tenant_id == u.tenant_id))).scalars()}
+    linhas = [["Data do pagamento", "Professor", "CPF", "Contrato", "Evento", "Parcela", "Pessoa", "Bruto", "INSS", "IRRF", "ISS",
+               "Líquido", "Forma", "Código do recibo"]]
+    parcelas = (await db.execute(select(FinParcela).where(FinParcela.tenant_id == u.tenant_id,
+                                                          FinParcela.status.in_(["paga", "confirmada"])).order_by(FinParcela.paga_em))).scalars().all()
+    for p in parcelas:
+        dp, c = p.dados or {}, contratos.get(p.contrato_id)
+        pg = dp.get("pagamento") or {}
+        dia = date.fromisoformat(pg["data"]) if pg.get("data") else (p.paga_em.date() if p.paga_em else None)
+        if c is None or (inicio and dia and dia < inicio) or (fim and dia and dia > fim):
+            continue
+        r = dp.get("retencoes") or {}
+        bruto = fc.num(dp.get("valor_pago"))
+        linhas.append([dia.strftime("%d/%m/%Y") if dia else "", pessoas.get(c.professor_id, ""), cpfs.get(c.professor_id, ""), c.numero,
+                       eventos.get(c.evento_id, ""), f"{p.ordem} - {dp.get('descricao', '')}",
+                       fc.TIPOS_PESSOA.get((c.dados or {}).get("tipo_pessoa", "pf_rpa"), ""), bruto, fc.num(r.get("inss")),
+                       fc.num(r.get("irrf")), fc.num(r.get("iss")), fc.num(r.get("liquido"), bruto), pg.get("forma", ""),
+                       pg.get("codigo_recibo", "")])
+    return _csv(linhas, "pagamentos-professores.csv")

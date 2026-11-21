@@ -5,7 +5,7 @@ import {
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import api from '../../api';
-import { DialogoAceite, DialogoTexto, Indicador, StatusChip, baixar, dataBR, dataHoraBR, erroApi, moeda } from './comum';
+import { BarraUso, DialogoAceite, DialogoTexto, Indicador, StatusChip, baixar, dataBR, dataHoraBR, erroApi, moeda } from './comum';
 
 // A banca e a plataforma: plano, propostas e documentos para aceitar, faturas (com envio do comprovante).
 const PlataformaDaBanca: React.FC = () => {
@@ -45,6 +45,15 @@ const PlataformaDaBanca: React.FC = () => {
       </Box>
       {erro && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErro(null)}>{erro}</Alert>}
       {msg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMsg(null)}>{msg}</Alert>}
+
+      {d.uso && (
+        <Secao titulo={`Uso do plano${d.uso.plano ? ` ${d.uso.plano}` : ''}`}>
+          <Box sx={{ py: 1 }}>
+            {d.uso.itens.map((i: any) => <BarraUso key={i.recurso} rotulo={i.rotulo.charAt(0).toUpperCase() + i.rotulo.slice(1)} uso={i.uso} limite={i.limite} />)}
+            {!d.uso.plano && <Typography variant="caption" color="text.secondary">Sem plano contratado: sem limites por enquanto.</Typography>}
+          </Box>
+        </Secao>
+      )}
 
       <Secao titulo="Propostas">
         {d.propostas.length === 0 ? <Vazio /> : d.propostas.map((p: any) => (

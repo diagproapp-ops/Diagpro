@@ -27,6 +27,11 @@ api.interceptors.response.use(
   (resposta) => resposta,
   (erro) => {
     const url = String(erro?.config?.url || '');
+    // Limite do plano: vira texto, para qualquer tela mostrar a mensagem (uso, limite e como mudar de plano)
+    const det = erro?.response?.data?.detail;
+    if (det && typeof det === 'object' && det.codigo === 'limite_plano' && det.mensagem) {
+      erro.response.data.detail = det.mensagem;
+    }
     // Modo manutenção: a faixa do topo (AvisoManutencao) mostra a mensagem
     if (erro?.response?.status === 503 && erro?.response?.data?.manutencao) {
       window.dispatchEvent(new CustomEvent('diagpro:manutencao', { detail: erro.response.data.detail }));

@@ -16,7 +16,9 @@ from datetime import date, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.db_models import Conteudo, FinAjuste, FinContrato, FinParcela, ItensVerdadeiroFalso, QuestoesBanco, Recurso
+from backend.app.db_models import (
+    Conteudo, FinAjuste, FinContrato, FinParcela, HistoricoRevisaoQuestao, ItensVerdadeiroFalso, QuestoesBanco, Recurso,
+)
 
 PRECOS = {
     "MULTIPLA_ESCOLHA": "Múltipla escolha (por questão)",
@@ -57,7 +59,13 @@ CONFIG_PADRAO = {
     "clausulas_cessao": CLAUSULAS_CESSAO,
     "contratante": {"razao_social": "", "cnpj": "", "endereco": "", "cidade": ""},
     "observacoes_padrao": "",
+    # bônus por qualidade: questões aprovadas na PRIMEIRA revisão (sem devolução com ajustes nem reprovação)
+    "bonus_padrao": {"tipo": "nenhum", "valor": 0.0},
+    "tipo_pessoa_padrao": "pf_rpa",
 }
+TIPOS_BONUS = {"nenhum": "Sem bônus", "por_questao": "R$ por questão aprovada de primeira",
+               "percentual": "% sobre o valor das questões aprovadas de primeira"}
+TIPOS_PESSOA = {"pf_rpa": "Pessoa física (RPA, com retenções)", "pj_nf": "Pessoa jurídica / MEI (nota fiscal)"}
 
 
 def moeda(v: float) -> str:
@@ -94,6 +102,12 @@ async def producao(db: AsyncSession, tenant_id: int, evento_id: str, professor_i
         d = por_tipo.setdefault(t, {"total": 0, "aprovadas": 0})
         d["total"] += 1
         d["aprovadas"] += (x in aprovadas)
+    devolvidas = set()
+    if aprovadas:
+        devolvidas = {h for h in (await db.execute(select(HistoricoRevisaoQuestao.id_questao_fk).where(
+            HistoricoRevisaoQuestao.id_questao_fk.in_([x.id_questao for x in aprovadas]),
+            HistoricoRevisaoQuestao.status_revisao.in_(["AJUSTES", "REPROVADA"])))).scalars()}
+    primeira = [x for x in aprovadas if x.id_questao not in devolvidas]
     ids_ce = [x.id_questao for x in aprovadas if (x.tipo or "").upper() == "CERTO_ERRADO"]
     itens_ce = 0
     if ids_ce:
@@ -102,6 +116,7 @@ async def producao(db: AsyncSession, tenant_id: int, evento_id: str, professor_i
     return {
         "total": len(questoes),
         "aprovadas": len(aprovadas),
+        "aprovadas_primeira": len(primeira),
         "pendentes": len(questoes) - len(aprovadas),
         "por_tipo": por_tipo,
         "itens_ce_aprovados": int(itens_ce),
@@ -133,6 +148,18 @@ def total_apurado(modalidade: str, dados: dict, prod: dict) -> float:
         return round(num(dados.get("valor_fechado")), 2)
     precos, uni = dados.get("precos", {}), unidades_aprovadas(prod)
     return round(sum(num(precos.get(k)) * uni.get(k, 0) for k in PRECOS), 2)
+
+
+def bonus(dados: dict, prod: dict, apurado: float) -> float:
+    """Bônus por qualidade (questões aprovadas de primeira). Percentual: sobre a parte do apurado dessas questões."""
+    b = dados.get("bonus") or {}
+    tipo, valor = b.get("tipo", "nenhum"), num(b.get("valor"))
+    primeira, aprovadas = prod.get("aprovadas_primeira", 0), prod.get("aprovadas", 0)
+    if tipo == "por_questao":
+        return round(valor * primeira, 2)
+    if tipo == "percentual" and aprovadas:
+        return round(apurado * (primeira / aprovadas) * valor / 100.0, 2)
+    return 0.0
 
 
 async def recursos(db: AsyncSession, tenant_id: int, evento_id: str, ids_questoes: list[str]) -> dict:
@@ -189,8 +216,11 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
     prod = await producao(db, c.tenant_id, c.evento_id, c.professor_id)
     rec = await recursos(db, c.tenant_id, c.evento_id, prod["ids"])
     previsto = total_previsto(c.modalidade, dados)
-    apurado = total_apurado(c.modalidade, dados, prod)
+    apurado_base = total_apurado(c.modalidade, dados, prod)
+    valor_bonus = bonus(dados, prod, apurado_base)
+    apurado = round(apurado_base + valor_bonus, 2)
     referencia = apurado if apurado > 0 else previsto
+    liberadas_agora = []
     parcelas = (await db.execute(select(FinParcela).where(FinParcela.contrato_id == c.id).order_by(FinParcela.ordem))).scalars().all()
     ajustes = (await db.execute(select(FinAjuste).where(FinAjuste.contrato_id == c.id).order_by(FinAjuste.id))).scalars().all()
     hoje, mudou = date.today(), False
@@ -202,6 +232,7 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
             dp["valor_liberado"] = valor_base_parcela(dp, apurado if apurado > 0 else previsto)
             dp["liberacao"] = "automática: " + explicacao
             p.status, p.liberada_em, p.dados, mudou = "liberada", datetime.utcnow(), dp, True
+            liberadas_agora.append((p.ordem, dp["valor_liberado"]))
         base = num(dp["valor_liberado"]) if dp.get("valor_liberado") is not None else valor_base_parcela(dp, referencia)
         meus = [a for a in ajustes if a.parcela_id == p.id]
         a_pagar = round(base + sum(efeito_ajuste(a) for a in meus), 2)
@@ -215,13 +246,14 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
             "valor_fixo": dp.get("valor_fixo"), "data_prevista": p.data_prevista.isoformat() if p.data_prevista else None,
             "status": p.status, "valor_base": base, "estimado": dp.get("valor_liberado") is None, "a_pagar": a_pagar,
             "valor_pago": dp.get("valor_pago"), "gatilho_cumprido": cumprido, "explicacao": explicacao,
-            "liberacao": dp.get("liberacao"), "pagamento": dp.get("pagamento"),
+            "liberacao": dp.get("liberacao"), "pagamento": dp.get("pagamento"), "retencoes": dp.get("retencoes"),
             "liberada_em": _iso(p.liberada_em), "paga_em": _iso(p.paga_em), "confirmada_em": _iso(p.confirmada_em),
             "ajustes": [{"id": a.id, "tipo": a.tipo, "valor": num((a.dados or {}).get("valor")),
                          "motivo": (a.dados or {}).get("motivo", ""), "criado_em": _iso(a.criado_em)} for a in meus],
         })
     if mudou:
         await db.commit()
+        await _avisar_liberacao(db, c, liberadas_agora)
     return {
         "id": c.id, "numero": c.numero, "status": c.status, "modalidade": c.modalidade, "evento_id": c.evento_id,
         "professor_id": c.professor_id, "dados": dados, "codigo_verificacao": c.codigo_verificacao,
@@ -229,11 +261,27 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
         "criado_em": _iso(c.criado_em), "enviado_em": _iso(c.enviado_em), "respondido_em": _iso(c.respondido_em),
         "encerrado_em": _iso(c.encerrado_em),
         "producao": {k: v for k, v in prod.items() if k != "ids"}, "recursos": rec,
-        "totais": {"previsto": previsto, "apurado": apurado, "liberado": round(liberado, 2), "pago": round(pago, 2),
+        "totais": {"previsto": previsto, "apurado": apurado, "apurado_base": apurado_base, "bonus": valor_bonus,
+                   "liberado": round(liberado, 2), "pago": round(pago, 2),
                    "a_receber": round(liberado - pago, 2),
                    "ajustes": round(sum(efeito_ajuste(a) for a in ajustes), 2)},
         "parcelas": saida_parcelas,
     }
+
+
+async def _avisar_liberacao(db: AsyncSession, c: FinContrato, liberadas: list) -> None:
+    """Parcela liberada sozinha (gatilho cumprido): avisa o professor e os administradores da banca."""
+    from backend.app import notificacoes
+    from backend.app.db_models import User
+    for ordem, valor in liberadas:
+        await notificacoes.notificar(c.professor_id, "sistema", f"Parcela {ordem} liberada",
+                                     f"A parcela {ordem} do contrato {c.numero} ({moeda(valor)}) foi liberada: a condição foi cumprida.",
+                                     "/financeiro", tenant_id=c.tenant_id)
+    admins = [u.id for u in (await db.execute(select(User).where(User.tenant_id == c.tenant_id, User.role == "administrador",
+                                                                 User.is_active.is_(True)))).scalars()]
+    for ordem, valor in liberadas:
+        await notificacoes.notificar_varios(admins, "sistema", f"Parcela {ordem} do contrato {c.numero} liberada",
+                                            f"Condição cumprida: {moeda(valor)} a pagar.", "/financeiro", tenant_id=c.tenant_id)
 
 
 def _iso(d) -> str | None:

@@ -12,7 +12,7 @@ import { DialogoTexto, Indicador, StatusChip, baixar, dataBR, dataHoraBR, erroAp
 // Financeiro da PLATAFORMA (administrador geral): planos, propostas, contratos/termos, faturas e documentos de cada banca.
 // A negociação das bancas com os professores não aparece aqui (é só da banca).
 const FinanceiroPlataforma: React.FC = () => {
-  const [aba, setAba] = useState<'bancas' | 'planos'>('bancas');
+  const [aba, setAba] = useState<'bancas' | 'planos' | 'cobranca'>('bancas');
   const [banca, setBanca] = useState<number | null>(null);
   return (
     <Box>
@@ -22,8 +22,11 @@ const FinanceiroPlataforma: React.FC = () => {
           <Tabs value={aba} onChange={(_, v) => setAba(v)} sx={{ mb: 2.5 }}>
             <Tab value="bancas" label="Bancas" />
             <Tab value="planos" label="Planos" />
+            <Tab value="cobranca" label="Cobrança automática e relatórios" />
           </Tabs>
-          {aba === 'bancas' ? <ListaBancas onAbrir={setBanca} /> : <Planos />}
+          {aba === 'bancas' && <ListaBancas onAbrir={setBanca} />}
+          {aba === 'planos' && <Planos />}
+          {aba === 'cobranca' && <Cobranca />}
         </>
       )}
     </Box>
@@ -323,6 +326,54 @@ const Planos: React.FC = () => {
         <DialogActions><Button onClick={() => setEdit(null)}>Cancelar</Button><Button variant="contained" onClick={salvar} disabled={!edit?.codigo || !edit?.nome}>Salvar</Button></DialogActions>
       </Dialog>
     </Box>
+  );
+};
+
+const Cobranca: React.FC = () => {
+  const [c, setC] = useState<any>(null);
+  const [msg, setMsg] = useState<{ tipo: 'success' | 'error'; texto: string } | null>(null);
+  const [inicio, setInicio] = useState('');
+  const [fim, setFim] = useState('');
+  useEffect(() => { api.get('/plataforma/financeiro/cobranca').then(({ data }) => setC(data)).catch(() => setC(null)); }, []);
+  if (!c) return <Typography>Carregando...</Typography>;
+  const salvar = async () => {
+    try {
+      await api.put('/config/plataforma', { financeiro: Object.fromEntries(Object.entries(c).map(([k, v]) => [k, Number(v) || 0])) });
+      setMsg({ tipo: 'success', texto: 'Regras de cobrança salvas.' });
+    } catch (e: any) { setMsg({ tipo: 'error', texto: erroApi(e, 'Não foi possível salvar.') }); }
+  };
+  const campos: [string, string, string][] = [
+    ['lembrete_fatura_dias', 'Avisar a banca antes do vencimento (dias)', 'A banca recebe o aviso N dias antes de cada fatura vencer.'],
+    ['aviso_atraso_cada_dias', 'Repetir o aviso de atraso a cada (dias)', 'A banca e a plataforma recebem o aviso de atraso nesse intervalo.'],
+    ['suspender_apos_dias', 'Suspender a banca após atraso de (dias)', '0 = nunca suspende sozinho. Suspensa: ninguém da banca entra; os dados ficam guardados.'],
+    ['lembrete_aceite_dias', 'Lembrar o professor do contrato não aceito a cada (dias)', 'Depois de 7 dias sem aceite, a banca também é avisada.'],
+  ];
+  return (
+    <Stack spacing={2.5}>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography fontWeight={800} sx={{ mb: 1.5 }}>Cobrança e lembretes automáticos</Typography>
+        <Stack spacing={2}>
+          {campos.map(([k, rot, ajuda]) => (
+            <TextField key={k} type="number" label={rot} helperText={ajuda} value={c[k]} onChange={(e) => setC({ ...c, [k]: e.target.value })} sx={{ maxWidth: 520 }} />
+          ))}
+        </Stack>
+        {msg && <Alert severity={msg.tipo} sx={{ mt: 2 }}>{msg.texto}</Alert>}
+        <Button variant="contained" sx={{ mt: 2 }} onClick={salvar}>Salvar</Button>
+      </Paper>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+        <Typography fontWeight={800} sx={{ mb: 1.5 }}>Receita da plataforma (abre no Excel)</Typography>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }}>
+          <TextField size="small" type="month" label="Competência de" InputLabelProps={{ shrink: true }} value={inicio} onChange={(e) => setInicio(e.target.value)} />
+          <TextField size="small" type="month" label="até" InputLabelProps={{ shrink: true }} value={fim} onChange={(e) => setFim(e.target.value)} />
+          <Button variant="contained" onClick={() => {
+            const q = new URLSearchParams();
+            if (inicio) q.set('inicio', inicio);
+            if (fim) q.set('fim', fim);
+            baixar(`/plataforma/financeiro/relatorios/faturas.csv${q.toString() ? `?${q}` : ''}`, 'faturas-plataforma.csv');
+          }}>Faturas (CSV)</Button>
+        </Stack>
+      </Paper>
+    </Stack>
   );
 };
 

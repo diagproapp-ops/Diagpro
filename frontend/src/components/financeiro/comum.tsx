@@ -12,9 +12,26 @@ export const dataHoraBR = (iso?: string | null) => (iso ? new Date(iso).toLocale
 export function erroApi(e: any, padrao: string): string {
   const d = e?.response?.data?.detail;
   if (typeof d === 'string') return d;
+  if (d?.mensagem) return [d.mensagem, ...(d.problemas || [])].join(' ');
   if (Array.isArray(d)) return 'Confira os campos preenchidos.';
   return padrao;
 }
+
+export const BarraUso: React.FC<{ rotulo: string; uso: number; limite: number | null }> = ({ rotulo, uso, limite }) => {
+  const pct = limite ? Math.min(100, Math.round((uso / limite) * 100)) : 0;
+  const cor = !limite ? '#64748b' : pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981';
+  return (
+    <Box sx={{ mb: 1.25 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+        <Typography variant="body2">{rotulo}</Typography>
+        <Typography variant="body2" fontWeight={700}>{uso}{limite ? ` de ${limite}` : ' (sem limite)'}</Typography>
+      </Box>
+      <Box sx={{ height: 8, borderRadius: 4, bgcolor: 'action.hover', overflow: 'hidden' }}>
+        <Box sx={{ width: `${limite ? pct : 100}%`, height: '100%', bgcolor: cor, opacity: limite ? 1 : 0.25 }} />
+      </Box>
+    </Box>
+  );
+};
 
 type Cor = 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'error' | 'info';
 const STATUS: Record<string, [string, Cor]> = {

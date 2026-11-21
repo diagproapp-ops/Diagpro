@@ -7,6 +7,7 @@ from typing import List
 import uuid
 from datetime import datetime
 
+from backend.app import limites_plano
 from backend.app.security import conferir_senha_evento, get_tenant_db, is_admin_geral, require_roles
 from backend.app.roles import UserRole
 from backend.app.db_models import Evento as DBEvento, Tenant as DBTenant
@@ -159,7 +160,7 @@ async def get_evento_for_edit(
         identificador_evento=getattr(evento, "identificador_evento", None),
     )
 
-@router.post("/", response_model=PydanticEventoOut)
+@router.post("/", response_model=PydanticEventoOut, dependencies=[Depends(limites_plano.dependencia("eventos"))])
 async def create_evento(
     evento_data: PydanticEventoCreate,
     db: AsyncSession = Depends(get_tenant_db),

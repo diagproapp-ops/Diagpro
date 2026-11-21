@@ -108,17 +108,43 @@ def contrato(info: dict) -> bytes:
 
 
 def recibo(info: dict) -> bytes:
-    """info: banca, professor{nome,cpf}, numero_contrato, evento, parcela{ordem,descricao}, valor, data, forma, codigo."""
-    prof = info["professor"]
+    """info: banca, professor{nome,cpf}, numero_contrato, evento, parcela{ordem,descricao}, valor, data, forma, codigo,
+    retencoes (opcional: bruto, inss, irrf, iss, liquido)."""
+    prof, ret = info["professor"], info.get("retencoes")
+    valor = ret["liquido"] if ret else info["valor"]
+    linhas = [["Professor", prof.get("nome", "")], ["CPF", prof.get("cpf") or "não informado"],
+              ["Data do pagamento", info["data"]], ["Forma", info.get("forma") or "—"]]
+    if ret:
+        linhas += [["Valor bruto", moeda(ret["bruto"])], ["INSS retido", moeda(ret["inss"])], ["IRRF retido", moeda(ret["irrf"])],
+                   ["ISS retido", moeda(ret["iss"])], ["Valor líquido pago", moeda(ret["liquido"])]]
     el = [_p("RECIBO DE PAGAMENTO", TITULO), _p(f"Código: {info['codigo']}", PEQ), Spacer(1, 10),
-          _p(f"Recebi de {info['banca']} a importância de {moeda(info['valor'])},"),
+          _p(f"Recebi de {info['banca']} a importância líquida de {moeda(valor)},"),
           _p(f"referente à parcela {info['parcela']['ordem']} ({info['parcela'].get('descricao', '')}) do contrato "
              f"nº {info['numero_contrato']} — {info['evento']}."),
-          Spacer(1, 8),
-          _tabela([["Professor", prof.get("nome", "")], ["CPF", prof.get("cpf") or "não informado"],
-                   ["Data do pagamento", info["data"]], ["Forma", info.get("forma") or "—"]], [5 * cm, 12 * cm], cabecalho=False),
+          Spacer(1, 8), _tabela(linhas, [5 * cm, 12 * cm], cabecalho=False),
           Spacer(1, 14), _p("Documento gerado pelo DiagPro a partir do pagamento registrado pela banca.", PEQ)]
     return _montar(el, f"DiagPro — Recibo {info['codigo']}")
+
+
+def rpa(info: dict) -> bytes:
+    """Recibo de Pagamento a Autônomo. info: banca, contratante{razao_social,cnpj,endereco}, professor{nome,cpf,email},
+    servico, competencia, data, retencoes{bruto,inss,base_irrf,irrf,iss,liquido}, codigo."""
+    ct, prof, r = info.get("contratante") or {}, info["professor"], info["retencoes"]
+    el = [_p("RPA — RECIBO DE PAGAMENTO A AUTÔNOMO", TITULO), _p(f"Código: {info['codigo']}", PEQ), Spacer(1, 6),
+          _p("FONTE PAGADORA", SUB),
+          _tabela([["Razão social", ct.get("razao_social") or info["banca"]], ["CNPJ", ct.get("cnpj") or "—"],
+                   ["Endereço", ct.get("endereco") or "—"]], [5 * cm, 12 * cm], cabecalho=False),
+          _p("PRESTADOR (AUTÔNOMO)", SUB),
+          _tabela([["Nome", prof.get("nome", "")], ["CPF", prof.get("cpf") or "não informado"], ["E-mail", prof.get("email") or "—"]],
+                  [5 * cm, 12 * cm], cabecalho=False),
+          _p("SERVIÇO", SUB), _p(info["servico"]), _p(f"Competência: {info['competencia']} — data do pagamento: {info['data']}"),
+          _p("VALORES", SUB),
+          _tabela([["Valor bruto do serviço", moeda(r["bruto"])], ["(-) INSS", moeda(r["inss"])],
+                   ["Base de cálculo do IRRF", moeda(r["base_irrf"])], ["(-) IRRF", moeda(r["irrf"])], ["(-) ISS", moeda(r["iss"])],
+                   ["Valor líquido", moeda(r["liquido"])]], [8 * cm, 9 * cm], cabecalho=False),
+          Spacer(1, 30), _p("_______________________________________", CENTRO), _p(prof.get("nome", ""), CENTRO),
+          Spacer(1, 10), _p("Retenções calculadas pelo DiagPro com a tabela configurada pela banca; confira com a contabilidade.", PEQ)]
+    return _montar(el, f"DiagPro — RPA {info['codigo']}")
 
 
 def proposta(info: dict) -> bytes:

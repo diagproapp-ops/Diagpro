@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app import configuracoes, notificacoes, politica_senha, sessoes, vinculos
 from backend.app import dois_fatores as df
+from backend.app import limites_plano
 from backend.app.auth import get_admin_user, get_password_hash, verify_password
 from backend.app.database import PlatformSessionLocal, get_auth_db
 from backend.app.db_models import Convite, Tenant, User, VinculoBanca
@@ -111,7 +112,7 @@ class NovoConvite(BaseModel):
     nome: Optional[str] = None
 
 
-@router.post("/convites", dependencies=[Depends(rate_limit(30, 60, "convites"))])
+@router.post("/convites", dependencies=[Depends(rate_limit(30, 60, "convites")), Depends(limites_plano.dependencia("usuarios"))])
 async def criar_convite(body: NovoConvite, db: AsyncSession = Depends(get_tenant_db), admin_user=Depends(get_admin_user)):
     t = _exigir_banca(admin_user)
     role = body.role.strip().lower()

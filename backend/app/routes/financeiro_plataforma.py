@@ -341,3 +341,26 @@ async def baixar(tipo: str, item_id: int, db: AsyncSession = Depends(get_platfor
 @router.get("/tipos")
 async def tipos(u=Depends(admin_geral)):
     return {"termos": TIPOS_TERMO}
+
+
+
+@router.get("/relatorios/faturas.csv")
+async def exportar_faturas(inicio: Optional[str] = None, fim: Optional[str] = None, db: AsyncSession = Depends(get_platform_db),
+                           u=Depends(admin_geral)):
+    """Receita da plataforma: todas as faturas (competência AAAA-MM entre início e fim)."""
+    from backend.app.routes.financeiro import _csv
+    bancas = {t.id: t.name for t in (await db.execute(select(Tenant))).scalars()}
+    linhas = [["Fatura", "Banca", "Competência", "Vencimento", "Situação", "Valor", "Descrição", "Paga em"]]
+    for f in (await db.execute(select(FinFatura).order_by(FinFatura.competencia, FinFatura.id))).scalars().all():
+        if (inicio and f.competencia < inicio) or (fim and f.competencia > fim):
+            continue
+        s = saida_fatura(f)
+        linhas.append([f.numero, bancas.get(f.tenant_id, ""), f.competencia, f.vencimento.strftime("%d/%m/%Y"), s["status"], s["valor"],
+                       s["descricao"], f.paga_em.strftime("%d/%m/%Y") if f.paga_em else ""])
+    return _csv(linhas, "faturas-plataforma.csv")
+
+
+@router.get("/cobranca")
+async def ler_cobranca(u=Depends(admin_geral)):
+    from backend.app import configuracoes
+    return (await configuracoes.ler_plataforma())["financeiro"]

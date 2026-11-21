@@ -8,10 +8,12 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import api from '../../api';
 import { erroApi, moeda } from './comum';
 
-export type Parcela = { descricao: string; percentual: number | null; valor_fixo: number | null; gatilho: string; data_prevista: string | null };
+export type Parcela = { descricao: string; percentual: number | null; valor_fixo: number | null; gatilho: string; data_prevista: string | null; base?: string | null };
+export const BASES_CURTAS: Record<string, string> = { aprovadas: 'Aprovadas', entregues: 'Entregues', integral: 'Integral' };
 type Config = {
   precos: Record<string, number>; cronograma: Parcela[]; rotulos_precos: Record<string, string>; gatilhos: Record<string, string>;
   tipos_bonus: Record<string, string>; tipos_pessoa: Record<string, string>; bonus_padrao: { tipo: string; valor: number }; tipo_pessoa_padrao: string;
+  bases?: Record<string, string>; base_pagamento_padrao?: string;
 };
 
 const numero = (v: any) => (v === '' || v === null || v === undefined ? null : Number(v));
@@ -40,11 +42,13 @@ const ContratoEditor: React.FC<{
         valor_fechado: inicial.dados?.valor_fechado ?? '', prazo_entrega: inicial.dados?.prazo_entrega || '',
         observacoes: inicial.dados?.observacoes || '',
         tipo_pessoa: inicial.dados?.tipo_pessoa || 'pf_rpa', bonus: inicial.dados?.bonus || { tipo: 'nenhum', valor: 0 },
+        base_pagamento: inicial.dados?.base_pagamento || 'aprovadas',
         parcelas: inicial.parcelas.map((p: any) => ({ descricao: p.descricao, percentual: p.percentual, valor_fixo: p.valor_fixo,
-          gatilho: p.gatilho, data_prevista: p.data_prevista })),
+          gatilho: p.gatilho, data_prevista: p.data_prevista, base: p.base || '' })),
       } : {
         professor_id: professorPadrao || '', evento_id: eventoPadrao || '', modalidade: 'por_questao', precos: { ...data.precos },
-        quantidades: {}, valor_fechado: '', prazo_entrega: '', observacoes: '', parcelas: data.cronograma.map((p: Parcela) => ({ ...p })),
+        quantidades: {}, valor_fechado: '', prazo_entrega: '', observacoes: '', parcelas: data.cronograma.map((p: Parcela) => ({ ...p, base: p.base || '' })),
+        base_pagamento: data.base_pagamento_padrao || 'aprovadas',
         tipo_pessoa: data.tipo_pessoa_padrao || 'pf_rpa', bonus: { ...(data.bonus_padrao || { tipo: 'nenhum', valor: 0 }) },
       });
     }).catch((e) => setErro(erroApi(e, 'Não foi possível carregar a configuração.')));
@@ -86,9 +90,9 @@ const ContratoEditor: React.FC<{
         quantidades: Object.fromEntries(Object.entries(f.quantidades).map(([k, v]) => [k, Number(v) || 0])),
         valor_fechado: f.modalidade === 'valor_fechado' ? Number(f.valor_fechado) || 0 : null,
         prazo_entrega: f.prazo_entrega || null, observacoes: f.observacoes, tipo_pessoa: f.tipo_pessoa,
-        bonus: { tipo: f.bonus.tipo, valor: Number(f.bonus.valor) || 0 },
+        bonus: { tipo: f.bonus.tipo, valor: Number(f.bonus.valor) || 0 }, base_pagamento: f.base_pagamento,
         parcelas: f.parcelas.map((p: any) => ({ descricao: p.descricao, gatilho: p.gatilho, data_prevista: p.data_prevista || null,
-          percentual: numero(p.percentual), valor_fixo: numero(p.valor_fixo) })),
+          percentual: numero(p.percentual), valor_fixo: numero(p.valor_fixo), base: p.base || null })),
       };
       if (inicial) { await api.put(`/financeiro/contratos/${inicial.id}`, corpo); onSalvo(inicial.id); }
       else { const { data } = await api.post('/financeiro/contratos', corpo); onSalvo(data.id); }
@@ -153,9 +157,22 @@ const ContratoEditor: React.FC<{
                 ))}
               </Box>
             )}
-            <Typography fontWeight={800}>Total estimado: {moeda(previsto)}
-              {f.modalidade === 'por_questao' && <Typography component="span" variant="caption" color="text.secondary"> — o valor final é calculado sobre as questões aprovadas</Typography>}
-            </Typography>
+            <Typography fontWeight={800}>Total estimado: {moeda(previsto)}</Typography>
+            {f.modalidade === 'por_questao' ? (
+              <Box>
+                <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>Base do pagamento</Typography>
+                <ToggleButtonGroup exclusive size="small" value={f.base_pagamento} onChange={(_, v) => v && set('base_pagamento', v)}>
+                  {Object.entries(cfg.bases || {}).map(([k, v]: any) => <ToggleButton key={k} value={k}>{v}</ToggleButton>)}
+                </ToggleButtonGroup>
+                <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                  {f.base_pagamento === 'integral' ? 'Paga o valor contratado inteiro, aprovadas ou não.'
+                    : f.base_pagamento === 'entregues' ? 'Paga as questões enviadas à revisão (aprovadas ou não; reprovadas não contam).'
+                      : 'Paga só as questões aprovadas na revisão.'} Cada parcela pode ter uma base diferente.
+                </Typography>
+              </Box>
+            ) : (
+              <Typography variant="caption" color="text.secondary">Valor fechado: pago integralmente, nas parcelas e condições abaixo.</Typography>
+            )}
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1.4fr 0.8fr' }, gap: 1.5 }}>
               <TextField label="Prazo de entrega" placeholder="ex.: 15/12/2026" value={f.prazo_entrega} onChange={(e) => set('prazo_entrega', e.target.value)} />
               <TextField select label="Bônus por qualidade" value={f.bonus.tipo} onChange={(e) => set('bonus', { ...f.bonus, tipo: e.target.value })}
@@ -177,16 +194,22 @@ const ContratoEditor: React.FC<{
             <Divider />
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="subtitle2" fontWeight={800}>Parcelas e condições</Typography>
-              <Button size="small" startIcon={<AddIcon />} onClick={() => set('parcelas', [...f.parcelas, { descricao: '', percentual: 0, valor_fixo: null, gatilho: 'manual', data_prevista: null }])}>Parcela</Button>
+              <Button size="small" startIcon={<AddIcon />} onClick={() => set('parcelas', [...f.parcelas, { descricao: '', percentual: 0, valor_fixo: null, gatilho: 'manual', data_prevista: null, base: '' }])}>Parcela</Button>
             </Stack>
             {f.parcelas.map((p: any, i: number) => (
-              <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 0.8fr 1fr 1.6fr 1.1fr auto' }, gap: 1, alignItems: 'center' }}>
+              <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.6fr 0.6fr 0.9fr 1fr 1.6fr 1fr auto' }, gap: 1, alignItems: 'center' }}>
                 <TextField size="small" label={`Parcela ${i + 1}`} value={p.descricao} onChange={(e) => setParc(i, 'descricao', e.target.value)} />
                 <TextField size="small" label="%" type="number" value={p.percentual ?? ''} disabled={p.valor_fixo !== null && p.valor_fixo !== '' && p.valor_fixo !== undefined}
                   onChange={(e) => setParc(i, 'percentual', e.target.value)} />
                 <Tooltip title="Se preencher, vale o valor em vez do percentual">
                   <TextField size="small" label="ou valor (R$)" type="number" value={p.valor_fixo ?? ''} onChange={(e) => setParc(i, 'valor_fixo', e.target.value === '' ? null : e.target.value)} />
                 </Tooltip>
+                <TextField size="small" select label="% sobre" value={p.base || ''} onChange={(e) => setParc(i, 'base', e.target.value)}
+                  SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}
+                  disabled={f.modalidade === 'valor_fechado' || (p.valor_fixo !== null && p.valor_fixo !== '' && p.valor_fixo !== undefined)}>
+                  <MenuItem value="">Do contrato ({BASES_CURTAS[f.base_pagamento] || 'Aprovadas'})</MenuItem>
+                  {Object.entries(BASES_CURTAS).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+                </TextField>
                 <TextField size="small" select label="Libera quando" value={p.gatilho} onChange={(e) => setParc(i, 'gatilho', e.target.value)}>
                   {Object.entries(cfg.gatilhos).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
                 </TextField>

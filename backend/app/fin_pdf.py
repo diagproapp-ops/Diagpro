@@ -12,7 +12,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from backend.app.fin_calculo import GATILHOS, PRECOS, moeda
+from backend.app.fin_calculo import BASES, CLAUSULA_ANTIGA, GATILHOS, PRECOS, moeda
 
 _EST = getSampleStyleSheet()
 TITULO = ParagraphStyle("t", parent=_EST["Title"], fontSize=15, spaceAfter=6)
@@ -66,7 +66,11 @@ def contrato(info: dict) -> bytes:
     d, ct, prof, ev = info["dados"], info.get("contratante") or {}, info["professor"], info["evento"]
     var = {"BANCA": info["banca"], "PROFESSOR": prof.get("nome", ""), "CPF": prof.get("cpf") or "não informado",
            "EVENTO": ev.get("nome", ""), "VALOR_TOTAL": moeda(info["previsto"]),
-           "PRAZO_ENTREGA": d.get("prazo_entrega") or "a data combinada pela banca", "DATA": datetime.now().strftime("%d/%m/%Y")}
+           "PRAZO_ENTREGA": d.get("prazo_entrega") or "a data combinada pela banca", "DATA": datetime.now().strftime("%d/%m/%Y"),
+           "REGRA_PAGAMENTO": info.get("regra_pagamento", "")}
+    clausulas = info["clausulas_contrato"]
+    if CLAUSULA_ANTIGA in clausulas:  # texto padrão antigo ("só aprovadas"): vale a regra escolhida neste contrato
+        clausulas = clausulas.replace("; " + CLAUSULA_ANTIGA, ". " + var["REGRA_PAGAMENTO"]).replace(CLAUSULA_ANTIGA, var["REGRA_PAGAMENTO"])
     el = [_p(f"CONTRATO DE ELABORAÇÃO DE QUESTÕES Nº {info['numero']}", TITULO),
           _p(f"Código de verificação: {info['codigo']}", PEQ), Spacer(1, 6),
           _p("PARTES", SUB),
@@ -86,12 +90,16 @@ def contrato(info: dict) -> bytes:
             if preco or qtd:
                 linhas.append([rot, moeda(preco), f"{qtd:g}", moeda(preco * qtd)])
         linhas.append(["Total estimado", "", "", moeda(info["previsto"])])
-        el += [_tabela(linhas, [6.5 * cm, 3.2 * cm, 3.6 * cm, 3.7 * cm]),
-               _p("O valor final é calculado sobre as questões aprovadas na revisão.", PEQ)]
+        el += [_tabela(linhas, [6.5 * cm, 3.2 * cm, 3.6 * cm, 3.7 * cm])]
+    if info.get("regra_pagamento"):
+        el.append(_p(info["regra_pagamento"], PEQ))
     el.append(_p("PARCELAS E CONDIÇÕES DE PAGAMENTO", SUB))
     linhas = [["#", "Descrição", "Valor", "Condição para liberar"]]
     for i, p in enumerate(info["parcelas"], 1):
-        valor = moeda(p["valor_fixo"]) if p.get("valor_fixo") not in (None, "") else f"{float(p.get('percentual') or 0):g}% do total"
+        b = p.get("base") if p.get("base") in BASES else info.get("base_pagamento", "aprovadas")
+        valor = moeda(p["valor_fixo"]) if p.get("valor_fixo") not in (None, "") else (
+            f"{float(p.get('percentual') or 0):g}% " + {"aprovadas": "das aprovadas", "entregues": "das entregues",
+                                                     "integral": "do valor integral"}[b])
         cond = GATILHOS.get(p["gatilho"], p["gatilho"])
         if p["gatilho"] == "data" and p.get("data_prevista"):
             cond += f" ({datetime.fromisoformat(p['data_prevista']).strftime('%d/%m/%Y')})"
@@ -99,7 +107,7 @@ def contrato(info: dict) -> bytes:
     el.append(_tabela(linhas, [0.8 * cm, 6.2 * cm, 3.2 * cm, 6.8 * cm]))
     if d.get("observacoes"):
         el += [_p("OBSERVAÇÕES", SUB), _p(d["observacoes"])]
-    el += [_p("CLÁUSULAS", SUB), _p(preencher(info["clausulas_contrato"], var)),
+    el += [_p("CLÁUSULAS", SUB), _p(preencher(clausulas, var)),
            PageBreak(), _p("TERMO DE CESSÃO DE DIREITOS AUTORAIS E DE SIGILO", TITULO), Spacer(1, 4),
            _p(preencher(info["clausulas_cessao"], var)), Spacer(1, 18),
            _p("O aceite eletrônico no DiagPro (com senha pessoal, data, hora, endereço IP e o código de verificação deste "

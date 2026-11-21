@@ -8,7 +8,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import api from '../../api';
 import ContratoDetalhe from './ContratoDetalhe';
-import ContratoEditor from './ContratoEditor';
+import ContratoEditor, { BASES_CURTAS } from './ContratoEditor';
 import PlataformaDaBanca from './PlataformaDaBanca';
 import { Indicador, StatusChip, baixar, erroApi, moeda } from './comum';
 
@@ -64,7 +64,7 @@ const Professores: React.FC = () => {
     <Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0,1fr))', md: 'repeat(4, minmax(0,1fr))' }, gap: 1.5, mb: 2.5 }}>
         <Indicador rotulo="Previsto nos contratos" valor={moeda(v.totais.previsto)} />
-        <Indicador rotulo="Apurado (aprovadas)" valor={moeda(v.totais.apurado)} />
+        <Indicador rotulo="Apurado (regra de cada contrato)" valor={moeda(v.totais.apurado)} />
         <Indicador rotulo="Liberado a pagar" valor={moeda(v.totais.a_receber)} cor="#f59e0b" />
         <Indicador rotulo="Já pago" valor={moeda(v.totais.pago)} cor="#10b981" />
       </Box>
@@ -145,10 +145,11 @@ const Configuracao: React.FC = () => {
     try {
       await api.put('/financeiro/config', {
         precos: Object.fromEntries(Object.entries(cfg.precos).map(([k, v]) => [k, Number(v) || 0])),
-        cronograma: cfg.cronograma.map((p: any) => ({ ...p, percentual: p.percentual === '' || p.percentual === null ? null : Number(p.percentual),
+        cronograma: cfg.cronograma.map((p: any) => ({ ...p, base: p.base || null, percentual: p.percentual === '' || p.percentual === null ? null : Number(p.percentual),
           valor_fixo: p.valor_fixo === '' || p.valor_fixo === null || p.valor_fixo === undefined ? null : Number(p.valor_fixo), data_prevista: p.data_prevista || null })),
         clausulas_contrato: cfg.clausulas_contrato, clausulas_cessao: cfg.clausulas_cessao, contratante: cfg.contratante,
         observacoes_padrao: cfg.observacoes_padrao || '', tipo_pessoa_padrao: cfg.tipo_pessoa_padrao,
+        base_pagamento_padrao: cfg.base_pagamento_padrao || 'aprovadas',
         bonus_padrao: { tipo: cfg.bonus_padrao?.tipo || 'nenhum', valor: Number(cfg.bonus_padrao?.valor) || 0 },
         retencoes: {
           ...cfg.retencoes,
@@ -172,13 +173,23 @@ const Configuracao: React.FC = () => {
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
         <Stack direction="row" justifyContent="space-between" sx={{ mb: 1.5 }}>
           <Typography fontWeight={800}>Parcelas padrão</Typography>
-          <Button size="small" startIcon={<AddIcon />} onClick={() => set('cronograma', [...cfg.cronograma, { descricao: '', percentual: 0, valor_fixo: null, gatilho: 'manual', data_prevista: null }])}>Parcela</Button>
+          <Button size="small" startIcon={<AddIcon />} onClick={() => set('cronograma', [...cfg.cronograma, { descricao: '', percentual: 0, valor_fixo: null, gatilho: 'manual', data_prevista: null, base: '' }])}>Parcela</Button>
         </Stack>
+        <TextField select size="small" label="Base do pagamento padrão" value={cfg.base_pagamento_padrao || 'aprovadas'} sx={{ mb: 1.5, minWidth: 340 }}
+          onChange={(e) => set('base_pagamento_padrao', e.target.value)}
+          helperText="Sobre o que o percentual das parcelas é calculado. Cada contrato e cada parcela podem mudar.">
+          {Object.entries(cfg.bases || {}).map(([k, v]: any) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+        </TextField>
         <Stack spacing={1}>
           {cfg.cronograma.map((p: any, i: number) => (
-            <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 0.7fr 1.6fr auto' }, gap: 1, alignItems: 'center' }}>
+            <Box key={i} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '2fr 0.7fr 1.1fr 1.6fr auto' }, gap: 1, alignItems: 'center' }}>
               <TextField size="small" label={`Parcela ${i + 1}`} value={p.descricao} onChange={(e) => setParc(i, 'descricao', e.target.value)} />
               <TextField size="small" type="number" label="%" value={p.percentual ?? ''} onChange={(e) => setParc(i, 'percentual', e.target.value)} />
+              <TextField size="small" select label="% sobre" value={p.base || ''} onChange={(e) => setParc(i, 'base', e.target.value)}
+                  SelectProps={{ displayEmpty: true }} InputLabelProps={{ shrink: true }}>
+                <MenuItem value="">Base padrão</MenuItem>
+                {Object.entries(BASES_CURTAS).map(([k, v]) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
+              </TextField>
               <TextField size="small" select label="Libera quando" value={p.gatilho} onChange={(e) => setParc(i, 'gatilho', e.target.value)}>
                 {Object.entries(cfg.gatilhos).map(([k, v]: any) => <MenuItem key={k} value={k}>{v}</MenuItem>)}
               </TextField>

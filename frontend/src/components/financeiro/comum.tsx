@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Paper, TextField, Typography,
 } from '@mui/material';
@@ -97,19 +97,30 @@ export const DialogoAceite: React.FC<{
 
 export const DialogoTexto: React.FC<{
   aberto: boolean; titulo: string; rotulo: string; minimo?: number; botao: string; cor?: 'error' | 'primary';
-  onConfirmar: (texto: string) => Promise<void>; onFechar: () => void;
-}> = ({ aberto, titulo, rotulo, minimo = 0, botao, cor = 'primary', onConfirmar, onFechar }) => {
+  onConfirmar: (texto: string, valor?: number) => Promise<void>; onFechar: () => void;
+  // opcional: campo de valor (ex.: liberar a parcela com outro valor negociado)
+  valor?: { rotulo: string; inicial: number; ajuda?: string };
+}> = ({ aberto, titulo, rotulo, minimo = 0, botao, cor = 'primary', onConfirmar, onFechar, valor }) => {
   const [texto, setTexto] = useState('');
+  const [quanto, setQuanto] = useState('');
   const [erro, setErro] = useState<string | null>(null);
+  useEffect(() => { if (aberto && valor) setQuanto(String(valor.inicial ?? '')); }, [aberto, valor?.inicial]); // eslint-disable-line react-hooks/exhaustive-deps
   const confirmar = async () => {
     setErro(null);
-    try { await onConfirmar(texto); setTexto(''); } catch (e: any) { setErro(erroApi(e, 'Não foi possível concluir.')); }
+    try {
+      await onConfirmar(texto, valor && quanto !== '' ? Number(quanto) : undefined);
+      setTexto('');
+    } catch (e: any) { setErro(erroApi(e, 'Não foi possível concluir.')); }
   };
   return (
     <Dialog open={aberto} onClose={onFechar} maxWidth="sm" fullWidth>
       <DialogTitle>{titulo}</DialogTitle>
       <DialogContent>
-        <TextField label={rotulo} fullWidth multiline minRows={3} sx={{ mt: 1 }} value={texto} onChange={(e) => setTexto(e.target.value)} />
+        {valor && (
+          <TextField label={valor.rotulo} type="number" fullWidth sx={{ mt: 1 }} value={quanto} onChange={(e) => setQuanto(e.target.value)}
+            helperText={valor.ajuda} inputProps={{ min: 0, step: '0.01' }} />
+        )}
+        <TextField label={rotulo} fullWidth multiline minRows={3} sx={{ mt: valor ? 2 : 1 }} value={texto} onChange={(e) => setTexto(e.target.value)} />
         {erro && <Alert severity="error" sx={{ mt: 2 }}>{erro}</Alert>}
       </DialogContent>
       <DialogActions>

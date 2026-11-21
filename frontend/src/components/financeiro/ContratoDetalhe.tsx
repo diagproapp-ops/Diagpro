@@ -102,7 +102,7 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0,1fr))', md: 'repeat(4, minmax(0,1fr))' }, gap: 1.5, mb: 2 }}>
         <Indicador rotulo="Previsto no contrato" valor={moeda(t.previsto)} />
-        <Indicador rotulo="Apurado (questões aprovadas)" valor={moeda(t.apurado)} detalhe={t.bonus ? `inclui ${moeda(t.bonus)} de bônus por qualidade` : undefined} />
+        <Indicador rotulo={`Apurado (${({ aprovadas: 'aprovadas', entregues: 'entregues', integral: 'integral' } as Record<string, string>)[c.base_pagamento] || 'aprovadas'})`} valor={moeda(t.apurado)} detalhe={t.bonus ? `inclui ${moeda(t.bonus)} de bônus por qualidade` : undefined} />
         <Indicador rotulo="Liberado" valor={moeda(t.liberado)} cor="#f59e0b" detalhe={t.a_receber ? `${moeda(t.a_receber)} a pagar` : undefined} />
         <Indicador rotulo="Pago" valor={moeda(t.pago)} cor="#10b981" />
       </Box>
@@ -137,7 +137,8 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
                   <TableCell>
                     <Typography variant="body2" fontWeight={700}>{p.descricao || `Parcela ${p.ordem}`}</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {p.valor_fixo !== null && p.valor_fixo !== undefined && p.valor_fixo !== '' ? 'valor fixo' : `${p.percentual}% do total`}
+                      {p.valor_fixo !== null && p.valor_fixo !== undefined && p.valor_fixo !== '' ? 'valor fixo'
+                        : `${p.percentual}% ${({ aprovadas: 'das aprovadas', entregues: 'das entregues', integral: 'do valor integral' } as Record<string, string>)[p.base || c.base_pagamento] || 'do total'}`}
                     </Typography>
                   </TableCell>
                   <TableCell sx={{ maxWidth: 320 }}>
@@ -208,7 +209,10 @@ const ContratoDetalhe: React.FC<{ c: any; modo: 'banca' | 'professor'; onAtualiz
       <DialogoTexto aberto={cancelar} titulo="Cancelar o contrato" rotulo="Motivo" botao="Cancelar contrato" cor="error"
         onFechar={() => setCancelar(false)} onConfirmar={async (m) => { await api.post(`/financeiro/contratos/${c.id}/cancelar`, { motivo: m }); setCancelar(false); onAtualizar(); }} />
       <DialogoTexto aberto={!!liberar} titulo={`Liberar a parcela ${liberar?.ordem || ''}`} rotulo="Justificativa (fica registrada)" minimo={3} botao="Liberar"
-        onFechar={() => setLiberar(null)} onConfirmar={async (j) => { await api.post(`/financeiro/parcelas/${liberar.id}/liberar`, { justificativa: j }); setLiberar(null); onAtualizar(); }} />
+        valor={liberar ? { rotulo: 'Valor a liberar (R$)', inicial: liberar.valor_base,
+          ajuda: `Calculado: ${moeda(liberar.valor_base)}. Pode liberar outro valor combinado; a justificativa fica registrada.` } : undefined}
+        onFechar={() => setLiberar(null)}
+        onConfirmar={async (j, v) => { await api.post(`/financeiro/parcelas/${liberar.id}/liberar`, { justificativa: j, valor: v }); setLiberar(null); onAtualizar(); }} />
 
       <Dialog open={!!ajuste} onClose={() => setAjuste(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Ajuste na parcela</DialogTitle>

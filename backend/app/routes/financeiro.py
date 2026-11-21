@@ -144,6 +144,7 @@ class ItemCronograma(BaseModel):
     valor_fixo: Optional[float] = Field(None, ge=0)
     gatilho: str
     data_prevista: Optional[date] = None
+    base: Optional[str] = None  # None = segue a base do contrato
 
 
 def _validar_cronograma(itens: list[ItemCronograma], exigir_100: bool) -> None:
@@ -154,6 +155,10 @@ def _validar_cronograma(itens: list[ItemCronograma], exigir_100: bool) -> None:
             raise HTTPException(status_code=400, detail=f"Condição inválida: {it.gatilho}")
         if it.gatilho == "data" and not it.data_prevista and exigir_100:
             raise HTTPException(status_code=400, detail="Parcela por data precisa da data.")
+        if it.base not in (None, "") and it.base not in fc.BASES:
+            raise HTTPException(status_code=400, detail=f"Base de pagamento inválida: {it.base}")
+        if it.base == "":
+            it.base = None
         if it.valor_fixo is None and it.percentual is None:
             raise HTTPException(status_code=400, detail="Cada parcela precisa de percentual ou valor fixo.")
     pct = [it.percentual for it in itens if it.valor_fixo is None]
@@ -175,6 +180,7 @@ class ConfigIn(BaseModel):
     observacoes_padrao: str = Field("", max_length=5000)
     bonus_padrao: BonusIn = BonusIn()
     tipo_pessoa_padrao: str = "pf_rpa"
+    base_pagamento_padrao: str = fc.BASE_PADRAO
     retencoes: dict = {}
 
 
@@ -190,8 +196,8 @@ def _validar_bonus(b: BonusIn) -> dict:
 async def obter_config(db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
     cfg = await ler_config(db, u.tenant_id)
     return {**cfg, "retencoes": fin_retencoes.config(cfg), "rotulos_precos": fc.PRECOS, "gatilhos": fc.GATILHOS,
-            "tipos_bonus": fc.TIPOS_BONUS, "tipos_pessoa": fc.TIPOS_PESSOA,
-            "variaveis": ["BANCA", "PROFESSOR", "CPF", "EVENTO", "VALOR_TOTAL", "PRAZO_ENTREGA", "DATA"]}
+            "tipos_bonus": fc.TIPOS_BONUS, "tipos_pessoa": fc.TIPOS_PESSOA, "bases": fc.BASES,
+            "variaveis": ["BANCA", "PROFESSOR", "CPF", "EVENTO", "VALOR_TOTAL", "PRAZO_ENTREGA", "DATA", "REGRA_PAGAMENTO"]}
 
 
 @router.put("/config")
@@ -203,6 +209,7 @@ async def salvar_config(body: ConfigIn, db: AsyncSession = Depends(get_tenant_db
              "contratante": {k: str(v)[:300] for k, v in (body.contratante or {}).items()},
              "observacoes_padrao": body.observacoes_padrao, "bonus_padrao": _validar_bonus(body.bonus_padrao),
              "tipo_pessoa_padrao": body.tipo_pessoa_padrao if body.tipo_pessoa_padrao in fc.TIPOS_PESSOA else "pf_rpa",
+             "base_pagamento_padrao": body.base_pagamento_padrao if body.base_pagamento_padrao in fc.BASES else fc.BASE_PADRAO,
              "retencoes": fin_retencoes.config({"retencoes": body.retencoes})}
     cfg = (await db.execute(select(FinConfig).where(FinConfig.tenant_id == u.tenant_id))).scalars().first()
     if cfg is None:
@@ -246,6 +253,7 @@ class ContratoIn(BaseModel):
     parcelas: list[ItemCronograma] = []
     bonus: Optional[BonusIn] = None
     tipo_pessoa: Optional[str] = None
+    base_pagamento: Optional[str] = None
 
 
 def _dados_contrato(body: ContratoIn) -> dict:
@@ -258,7 +266,8 @@ def _dados_contrato(body: ContratoIn) -> dict:
             "valor_fechado": fc.num(body.valor_fechado) if body.valor_fechado is not None else None,
             "prazo_entrega": body.prazo_entrega or "", "observacoes": body.observacoes,
             "bonus": _validar_bonus(body.bonus or BonusIn()),
-            "tipo_pessoa": body.tipo_pessoa if body.tipo_pessoa in fc.TIPOS_PESSOA else "pf_rpa"}
+            "tipo_pessoa": body.tipo_pessoa if body.tipo_pessoa in fc.TIPOS_PESSOA else "pf_rpa",
+            "base_pagamento": body.base_pagamento if body.base_pagamento in fc.BASES else fc.BASE_PADRAO}
 
 
 async def _gravar_parcelas(db: AsyncSession, c: FinContrato, itens: list[ItemCronograma]) -> None:
@@ -268,7 +277,8 @@ async def _gravar_parcelas(db: AsyncSession, c: FinContrato, itens: list[ItemCro
     for i, it in enumerate(itens, 1):
         db.add(FinParcela(tenant_id=c.tenant_id, contrato_id=c.id, ordem=i, gatilho=it.gatilho, status="prevista",
                           data_prevista=it.data_prevista,
-                          dados={"descricao": it.descricao, "percentual": it.percentual, "valor_fixo": it.valor_fixo}))
+                          dados={"descricao": it.descricao, "percentual": it.percentual, "valor_fixo": it.valor_fixo,
+                                 "base": it.base}))
 
 
 @router.get("/visao")
@@ -324,6 +334,8 @@ async def criar_contrato(body: ContratoIn, db: AsyncSession = Depends(get_tenant
         body.bonus = BonusIn(**(cfg.get("bonus_padrao") or {}))
     if body.tipo_pessoa is None:
         body.tipo_pessoa = cfg.get("tipo_pessoa_padrao") or "pf_rpa"
+    if body.base_pagamento is None:
+        body.base_pagamento = cfg.get("base_pagamento_padrao") or fc.BASE_PADRAO
     dados = _dados_contrato(body)
     if not dados["observacoes"]:
         dados["observacoes"] = cfg.get("observacoes_padrao", "")
@@ -423,6 +435,8 @@ async def _gerar_documento(db: AsyncSession, c: FinContrato) -> bytes:
     ev = (await db.execute(select(Evento).where(Evento.id_evento == c.evento_id))).scalars().first()
     parcelas = (await db.execute(select(FinParcela).where(FinParcela.contrato_id == c.id).order_by(FinParcela.ordem))).scalars().all()
     dados = c.dados or {}
+    lista = [{**(p.dados or {}), "gatilho": p.gatilho, "data_prevista": p.data_prevista.isoformat() if p.data_prevista else None}
+             for p in parcelas]
     return fin_pdf.contrato({
         "banca": await _nome_banca(db, c.tenant_id), "contratante": cfg.get("contratante") or {},
         "professor": {"nome": prof.full_name or prof.username, "email": prof.email or "",
@@ -430,8 +444,8 @@ async def _gerar_documento(db: AsyncSession, c: FinContrato) -> bytes:
         "evento": {"nome": ev.nome_evento if ev else "", "edital": (ev.numero_edital if ev else "") or "",
                    "data": ev.data_prova.strftime("%d/%m/%Y") if ev and ev.data_prova else ""},
         "numero": c.numero, "modalidade": c.modalidade, "dados": dados,
-        "parcelas": [{**(p.dados or {}), "gatilho": p.gatilho, "data_prevista": p.data_prevista.isoformat() if p.data_prevista else None}
-                     for p in parcelas],
+        "parcelas": lista, "base_pagamento": fc.base_do_contrato(c.modalidade, dados),
+        "regra_pagamento": fc.regra_pagamento(c.modalidade, dados, lista),
         "previsto": fc.total_previsto(c.modalidade, dados),
         "clausulas_contrato": cfg["clausulas_contrato"], "clausulas_cessao": cfg["clausulas_cessao"],
         "codigo": c.codigo_verificacao,
@@ -557,6 +571,7 @@ async def remover_ajuste(ajuste_id: int = Path(...), db: AsyncSession = Depends(
 
 class LiberarIn(BaseModel):
     justificativa: str = Field(..., min_length=3, max_length=1000)
+    valor: Optional[float] = Field(None, ge=0)  # opcional: a banca libera outro valor (negociado), com justificativa
 
 
 @router.post("/parcelas/{parcela_id}/liberar")
@@ -569,9 +584,11 @@ async def liberar_parcela(body: LiberarIn, parcela_id: int = Path(...), db: Asyn
     if p.status != "prevista":
         raise HTTPException(status_code=409, detail="A parcela já foi liberada.")
     cc = await fc.contrato_completo(db, c, persistir=False)
-    ref = cc["totais"]["apurado"] or cc["totais"]["previsto"]
+    calc = next(x["valor_base"] for x in cc["parcelas"] if x["id"] == p.id)
     dp = dict(p.dados or {})
-    dp["valor_liberado"] = fc.valor_base_parcela(dp, ref)
+    dp["valor_liberado"] = round(body.valor, 2) if body.valor is not None else calc
+    if body.valor is not None and abs(body.valor - calc) > 0.004:
+        dp["valor_calculado"] = calc
     dp["liberacao"] = f"manual por {u.full_name or u.username}: {body.justificativa}"
     p.dados, p.status, p.liberada_em = dp, "liberada", datetime.utcnow()
     await db.commit()

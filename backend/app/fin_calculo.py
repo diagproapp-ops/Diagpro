@@ -4,9 +4,12 @@ Financeiro banca x professor: produção apurada, valores do contrato, gatilhos 
 Regras (o administrador da banca pode sempre ajustar à mão, com justificativa):
 - produção = questões do professor no evento (criador da questão ou professor do conteúdo), contadas por tipo;
   só entram as APROVADAS na revisão; questões anuladas aparecem como sugestão de desconto, nunca descontam sozinhas;
-- total apurado = preço x produção aprovada (por questão) ou o valor fechado; total previsto = preço x quantidade
-  contratada (ou o valor fechado);
-- parcela = valor fixo ou percentual do total (apurado; enquanto nada foi aprovado, mostra a estimativa pelo previsto);
+- cada negociação escolhe a BASE de pagamento (no contrato e, se quiser, em cada parcela):
+  aprovadas (preço x questões aprovadas), entregues (preço x questões enviadas à revisão, aprovadas ou não) ou
+  integral (o valor contratado, independente de aprovação); valor fechado é sempre integral;
+- total previsto = preço x quantidade contratada (ou o valor fechado);
+- parcela = valor fixo ou percentual da sua base (enquanto a base é zero, mostra a estimativa pelo previsto);
+  condições: na assinatura, na entrega, na entrega aprovada, nos recursos, numa data ou manual;
   na liberação o valor fica congelado; ajustes (desconto, acréscimo, adiantamento) entram na parcela escolhida.
 """
 from __future__ import annotations
@@ -28,16 +31,24 @@ PRECOS = {
     "SUBJETIVA": "Subjetiva (por questão)",
 }
 GATILHOS = {
+    "aceite": "Na assinatura do contrato (aceite do professor)",
+    "entrega": "Entrega das questões (enviadas à revisão, aprovadas ou não)",
     "entrega_aprovada": "Entrega das questões aprovadas na revisão",
     "recursos_respondidos": "Recursos das questões respondidos",
     "data": "Na data combinada",
     "manual": "Liberação manual pela banca",
 }
+BASES = {
+    "aprovadas": "Sobre as questões aprovadas",
+    "entregues": "Sobre as questões entregues (aprovadas ou não)",
+    "integral": "Valor integral contratado (independe da aprovação)",
+}
+BASE_PADRAO = "aprovadas"
 MODALIDADES = {"por_questao": "Por questão elaborada", "valor_fechado": "Valor fechado"}
 TIPOS_AJUSTE = {"desconto": -1, "adiantamento": -1, "acrescimo": 1}
 
 CLAUSULAS_CONTRATO = """1. OBJETO. O CONTRATADO elaborará questões inéditas para o evento {EVENTO}, conforme as quantidades, os tipos e os prazos deste contrato, seguindo o edital e as orientações da {BANCA}.
-2. ENTREGA E REVISÃO. As questões serão entregues pelo DiagPro até {PRAZO_ENTREGA}. Questões devolvidas pela revisão devem ser corrigidas no prazo combinado; só questões aprovadas contam para a remuneração.
+2. ENTREGA E REVISÃO. As questões serão entregues pelo DiagPro até {PRAZO_ENTREGA}. Questões devolvidas pela revisão devem ser corrigidas no prazo combinado. {REGRA_PAGAMENTO}
 3. REMUNERAÇÃO. O valor total estimado é de {VALOR_TOTAL}, pago nas parcelas e nas condições descritas neste documento, mediante a nota fiscal ou o RPA correspondente.
 4. RECURSOS. O CONTRATADO se compromete a elaborar os pareceres sobre os recursos interpostos às suas questões, no prazo indicado pela {BANCA}.
 5. QUALIDADE. Questões anuladas por erro de elaboração podem gerar desconto proporcional, sempre informado e justificado no DiagPro.
@@ -62,7 +73,32 @@ CONFIG_PADRAO = {
     # bônus por qualidade: questões aprovadas na PRIMEIRA revisão (sem devolução com ajustes nem reprovação)
     "bonus_padrao": {"tipo": "nenhum", "valor": 0.0},
     "tipo_pessoa_padrao": "pf_rpa",
+    "base_pagamento_padrao": BASE_PADRAO,
 }
+# texto da cláusula 2 das versões anteriores (fixava "só aprovadas"): trocado pela regra do contrato ao gerar o PDF
+CLAUSULA_ANTIGA = "só questões aprovadas contam para a remuneração."
+REGRAS_TEXTO = {
+    "aprovadas": "A remuneração é calculada sobre as questões aprovadas na revisão.",
+    "entregues": "A remuneração é calculada sobre as questões entregues (enviadas à revisão), aprovadas ou não; questões reprovadas não contam.",
+    "integral": "A remuneração é o valor integral contratado, independente da aprovação das questões na revisão.",
+}
+
+
+def base_do_contrato(modalidade: str, dados: dict) -> str:
+    if modalidade == "valor_fechado":
+        return "integral"
+    b = (dados or {}).get("base_pagamento")
+    return b if b in BASES else BASE_PADRAO
+
+
+def regra_pagamento(modalidade: str, dados: dict, parcelas: list[dict]) -> str:
+    """Frase do contrato que descreve como se calcula o pagamento (contrato + exceções por parcela)."""
+    b = base_do_contrato(modalidade, dados)
+    texto = REGRAS_TEXTO[b]
+    outras = sorted({p.get("base") for p in parcelas if p.get("base") in BASES and p.get("base") != b and p.get("valor_fixo") in (None, "")})
+    if outras:
+        texto += " Parcelas com base própria seguem o indicado na tabela de parcelas."
+    return texto
 TIPOS_BONUS = {"nenhum": "Sem bônus", "por_questao": "R$ por questão aprovada de primeira",
                "percentual": "% sobre o valor das questões aprovadas de primeira"}
 TIPOS_PESSOA = {"pf_rpa": "Pessoa física (RPA, com retenções)", "pj_nf": "Pessoa jurídica / MEI (nota fiscal)"}
@@ -96,12 +132,14 @@ async def questoes_do_professor(db: AsyncSession, tenant_id: int, evento_id: str
 async def producao(db: AsyncSession, tenant_id: int, evento_id: str, professor_id: int) -> dict:
     questoes = await questoes_do_professor(db, tenant_id, evento_id, professor_id)
     aprovadas = [x for x in questoes if (x.status_revisao or "").upper() == "APROVADA"]
+    entregues = [x for x in questoes if (x.status_revisao or "").upper() in ("ENVIADA", "AJUSTES", "APROVADA")]
     por_tipo: dict[str, dict] = {}
     for x in questoes:
         t = (x.tipo or "MULTIPLA_ESCOLHA").upper()
-        d = por_tipo.setdefault(t, {"total": 0, "aprovadas": 0})
+        d = por_tipo.setdefault(t, {"total": 0, "aprovadas": 0, "entregues": 0})
         d["total"] += 1
         d["aprovadas"] += (x in aprovadas)
+        d["entregues"] += (x in entregues)
     devolvidas = set()
     if aprovadas:
         devolvidas = {h for h in (await db.execute(select(HistoricoRevisaoQuestao.id_questao_fk).where(
@@ -110,34 +148,41 @@ async def producao(db: AsyncSession, tenant_id: int, evento_id: str, professor_i
     primeira = [x for x in aprovadas if x.id_questao not in devolvidas]
     ids_ce = [x.id_questao for x in aprovadas if (x.tipo or "").upper() == "CERTO_ERRADO"]
     ids_ce_todas = [x.id_questao for x in questoes if (x.tipo or "").upper() == "CERTO_ERRADO"]
-    itens_ce = itens_ce_total = 0
+    ids_ce_entregues = {x.id_questao for x in entregues if (x.tipo or "").upper() == "CERTO_ERRADO"}
+    itens_ce = itens_ce_total = itens_ce_entregues = 0
     if ids_ce_todas:
         por_questao = dict((await db.execute(select(ItensVerdadeiroFalso.id_questao_fk, func.count(ItensVerdadeiroFalso.id_item_vf))
                                               .where(ItensVerdadeiroFalso.id_questao_fk.in_(ids_ce_todas))
                                               .group_by(ItensVerdadeiroFalso.id_questao_fk))).all())
         itens_ce_total = int(sum(por_questao.values()))
         itens_ce = int(sum(por_questao.get(i, 0) for i in ids_ce))
+        itens_ce_entregues = int(sum(por_questao.get(i, 0) for i in ids_ce_entregues))
     return {
         "total": len(questoes),
         "aprovadas": len(aprovadas),
         "aprovadas_primeira": len(primeira),
+        "entregues": len(entregues),
         "pendentes": len(questoes) - len(aprovadas),
+        "reprovadas": sum(1 for x in questoes if (x.status_revisao or "").upper() == "REPROVADA"),
         "por_tipo": por_tipo,
         "itens_ce_aprovados": int(itens_ce),
         "itens_ce_total": int(itens_ce_total),
+        "itens_ce_entregues": int(itens_ce_entregues),
         "anuladas": [x.codigo_curto_questao or x.id_questao for x in questoes if x.anulada],
         "ids": [x.id_questao for x in questoes],
     }
 
 
-def unidades_aprovadas(prod: dict) -> dict[str, int]:
+def unidades_aprovadas(prod: dict, campo: str = "aprovadas") -> dict[str, int]:
+    """Unidades pagáveis por tipo; campo = "aprovadas" ou "entregues"."""
     pt = prod.get("por_tipo", {})
+    itens = prod.get("itens_ce_entregues" if campo == "entregues" else "itens_ce_aprovados", 0)
     return {
-        "MULTIPLA_ESCOLHA": pt.get("MULTIPLA_ESCOLHA", {}).get("aprovadas", 0),
-        "CERTO_ERRADO_ITEM": prod.get("itens_ce_aprovados", 0),
-        "CERTO_ERRADO_BASE": pt.get("CERTO_ERRADO", {}).get("aprovadas", 0),
-        "DISCURSIVA": pt.get("DISCURSIVA", {}).get("aprovadas", 0),
-        "SUBJETIVA": pt.get("SUBJETIVA", {}).get("aprovadas", 0),
+        "MULTIPLA_ESCOLHA": pt.get("MULTIPLA_ESCOLHA", {}).get(campo, 0),
+        "CERTO_ERRADO_ITEM": itens,
+        "CERTO_ERRADO_BASE": pt.get("CERTO_ERRADO", {}).get(campo, 0),
+        "DISCURSIVA": pt.get("DISCURSIVA", {}).get(campo, 0),
+        "SUBJETIVA": pt.get("SUBJETIVA", {}).get(campo, 0),
     }
 
 
@@ -180,11 +225,17 @@ def total_previsto(modalidade: str, dados: dict) -> float:
     return round(sum(num(precos.get(k)) * num(qtd.get(k)) for k in PRECOS), 2)
 
 
-def total_apurado(modalidade: str, dados: dict, prod: dict) -> float:
-    if modalidade == "valor_fechado":
-        return round(num(dados.get("valor_fechado")), 2)
-    precos, uni = dados.get("precos", {}), unidades_aprovadas(prod)
+def total_por_base(base: str, modalidade: str, dados: dict, prod: dict) -> float:
+    """Total devido numa base: aprovadas, entregues ou integral (o contratado)."""
+    if modalidade == "valor_fechado" or base == "integral":
+        return total_previsto(modalidade, dados)
+    precos, uni = dados.get("precos", {}), unidades_aprovadas(prod, "entregues" if base == "entregues" else "aprovadas")
     return round(sum(num(precos.get(k)) * uni.get(k, 0) for k in PRECOS), 2)
+
+
+def total_apurado(modalidade: str, dados: dict, prod: dict) -> float:
+    """Total devido pela base do contrato (sem bônus)."""
+    return total_por_base(base_do_contrato(modalidade, dados), modalidade, dados, prod)
 
 
 def bonus(dados: dict, prod: dict, apurado: float) -> float:
@@ -213,8 +264,20 @@ def avaliar_gatilho(gatilho: str, data_prevista: date | None, contrato: FinContr
     """(cumprido, explicação do que falta) — o texto aparece para a banca e para o professor."""
     if contrato.status not in ("aceito", "encerrado"):
         return False, "O contrato ainda não foi aceito pelo professor."
+    if gatilho == "aceite":
+        return True, "Contrato aceito pelo professor."
+    contratadas = int(sum(num(v) for k, v in (dados_contrato.get("quantidades") or {}).items() if k != "CERTO_ERRADO_ITEM"))
+    if gatilho == "entrega":
+        entregues = prod.get("entregues", 0)
+        if entregues == 0:
+            return False, "Nenhuma questão entregue ainda."
+        if contratadas and entregues < contratadas:
+            return False, f"{entregues} de {contratadas} questões entregues."
+        em_elaboracao = prod["total"] - entregues - _reprovadas(prod)
+        if not contratadas and em_elaboracao > 0:
+            return False, f"{em_elaboracao} questão(ões) ainda em elaboração."
+        return True, f"{entregues} questões entregues."
     if gatilho == "entrega_aprovada":
-        contratadas = int(sum(num(v) for k, v in (dados_contrato.get("quantidades") or {}).items() if k != "CERTO_ERRADO_ITEM"))
         if prod["total"] == 0:
             return False, "Nenhuma questão entregue ainda."
         if contratadas and prod["aprovadas"] < contratadas:
@@ -237,6 +300,10 @@ def avaliar_gatilho(gatilho: str, data_prevista: date | None, contrato: FinContr
     return False, "Aguardando liberação pela banca."
 
 
+def _reprovadas(prod: dict) -> int:
+    return prod.get("reprovadas", 0)
+
+
 def valor_base_parcela(dp: dict, total_ref: float) -> float:
     if dp.get("valor_fixo") not in (None, ""):
         return round(num(dp.get("valor_fixo")), 2)
@@ -256,7 +323,14 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
     apurado_base = total_apurado(c.modalidade, dados, prod)
     valor_bonus = bonus(dados, prod, apurado_base)
     apurado = round(apurado_base + valor_bonus, 2)
-    referencia = apurado if apurado > 0 else previsto
+    base_contrato = base_do_contrato(c.modalidade, dados)
+
+    def referencia(dp: dict) -> float:
+        """Total sobre o qual o percentual da parcela incide (base própria ou a do contrato; bônus incluso)."""
+        b = dp.get("base") if dp.get("base") in BASES else base_contrato
+        total = apurado_base if b == base_contrato else total_por_base(b, c.modalidade, dados, prod)
+        total = round(total + valor_bonus, 2)
+        return total if total > 0 else previsto
     liberadas_agora = []
     parcelas = (await db.execute(select(FinParcela).where(FinParcela.contrato_id == c.id).order_by(FinParcela.ordem))).scalars().all()
     ajustes = (await db.execute(select(FinAjuste).where(FinAjuste.contrato_id == c.id).order_by(FinAjuste.id))).scalars().all()
@@ -266,11 +340,12 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
         dp = dict(p.dados or {})
         cumprido, explicacao = avaliar_gatilho(p.gatilho, p.data_prevista, c, dados, prod, rec, hoje)
         if persistir and p.status == "prevista" and cumprido:
-            dp["valor_liberado"] = valor_base_parcela(dp, apurado if apurado > 0 else previsto)
+            dp["valor_liberado"] = valor_base_parcela(dp, referencia(dp))
             dp["liberacao"] = "automática: " + explicacao
             p.status, p.liberada_em, p.dados, mudou = "liberada", datetime.utcnow(), dp, True
             liberadas_agora.append((p.ordem, dp["valor_liberado"]))
-        base = num(dp["valor_liberado"]) if dp.get("valor_liberado") is not None else valor_base_parcela(dp, referencia)
+        base = num(dp["valor_liberado"]) if dp.get("valor_liberado") is not None else valor_base_parcela(dp, referencia(dp))
+        base_parcela = dp.get("base") if dp.get("base") in BASES else None
         meus = [a for a in ajustes if a.parcela_id == p.id]
         a_pagar = round(base + sum(efeito_ajuste(a) for a in meus), 2)
         if p.status in ("liberada", "paga", "confirmada"):
@@ -280,6 +355,7 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
         saida_parcelas.append({
             "id": p.id, "ordem": p.ordem, "descricao": dp.get("descricao", ""), "gatilho": p.gatilho,
             "gatilho_rotulo": GATILHOS.get(p.gatilho, p.gatilho), "percentual": dp.get("percentual"),
+            "base": base_parcela, "base_rotulo": BASES[base_parcela or base_contrato],
             "valor_fixo": dp.get("valor_fixo"), "data_prevista": p.data_prevista.isoformat() if p.data_prevista else None,
             "status": p.status, "valor_base": base, "estimado": dp.get("valor_liberado") is None, "a_pagar": a_pagar,
             "valor_pago": dp.get("valor_pago"), "gatilho_cumprido": cumprido, "explicacao": explicacao,
@@ -298,6 +374,7 @@ async def contrato_completo(db: AsyncSession, c: FinContrato, persistir: bool = 
         "criado_em": _iso(c.criado_em), "enviado_em": _iso(c.enviado_em), "respondido_em": _iso(c.respondido_em),
         "encerrado_em": _iso(c.encerrado_em),
         "producao": {k: v for k, v in prod.items() if k != "ids"}, "recursos": rec,
+        "base_pagamento": base_contrato, "base_rotulo": BASES[base_contrato],
         "totais": {"previsto": previsto, "apurado": apurado, "apurado_base": apurado_base, "bonus": valor_bonus,
                    "liberado": round(liberado, 2), "pago": round(pago, 2),
                    "a_receber": round(liberado - pago, 2),

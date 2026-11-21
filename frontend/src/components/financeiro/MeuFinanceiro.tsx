@@ -17,7 +17,7 @@ const MeuFinanceiro: React.FC = () => {
     <Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0,1fr))', md: 'repeat(4, minmax(0,1fr))' }, gap: 1.5, mb: 2.5 }}>
         <Indicador rotulo="Previsto nos contratos" valor={moeda(d.totais.previsto)} />
-        <Indicador rotulo="Apurado (aprovadas)" valor={moeda(d.totais.apurado)} />
+        <Indicador rotulo="Apurado" valor={moeda(d.totais.apurado)} />
         <Indicador rotulo="Liberado para receber" valor={moeda(d.totais.a_receber)} cor="#f59e0b" />
         <Indicador rotulo="Já recebido" valor={moeda(d.totais.pago)} cor="#10b981" />
       </Box>

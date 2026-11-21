@@ -71,7 +71,7 @@ def main() -> int:
         psql(f"DROP DATABASE IF EXISTS {TEST_DB} WITH (FORCE)", f"CREATE DATABASE {TEST_DB} OWNER diagpro_admin")
 
         print("2/4 Aplicando migrações, RLS e grants...")
-        r = subprocess.run([PY, "-m", "alembic", "upgrade", "head"], cwd=ROOT, env=env, capture_output=True, text=True)
+        r = subprocess.run([PY, "-m", "alembic", "upgrade", "heads"], cwd=ROOT, env=env, capture_output=True, text=True)
         if r.returncode:
             sys.exit("Falha no Alembic:\n" + r.stderr[-1500:])
         psql(db=TEST_DB, arquivo=ROOT / "backend" / "app" / "rls_policies.sql")

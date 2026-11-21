@@ -27,6 +27,7 @@ from backend.app.routes.estatisticas import router as estatisticas_router
 from backend.app.routes.recursos import router as recursos_router
 from backend.app.routes.editor import router as editor_router
 from backend.app.routes.convites import router as convites_router
+from backend.app.routes.plataforma_admins import router as plataforma_admins_router
 from backend.app import entregas as _entregas
 from backend.app import lgpd as _lgpd
 from backend.app import backups as _backups
@@ -133,6 +134,7 @@ app.include_router(estatisticas_router)
 app.include_router(recursos_router)
 app.include_router(editor_router)
 app.include_router(convites_router)
+app.include_router(plataforma_admins_router)
 
 
 @app.on_event("startup")

@@ -8,7 +8,7 @@ from backend.app.database import PlatformSessionLocal
 from backend.app.db_models import HistoricoRevisaoQuestao, Notificacao, User
 from backend.app.rate_limit import reset_rate_limits
 from backend.app.roles import UserRole
-from tests.conftest import auth_headers
+from tests.conftest import auth_headers, com_evento_liberado
 
 EV, CT = "c2438719-23aa-4f7d-8e0f-e6a310c10440", "ci-conteudo-1"
 BASE = f"/eventos/{EV}/conteudos/{CT}/questoes"
@@ -34,7 +34,7 @@ async def test_review_workflow_send_queue_return_approve_reopen(async_client):
         await s.commit()
         ids = {u.username: u.id for u in (await s.execute(select(User))).scalars()}
     hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
-    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    a1 = await com_evento_liberado(async_client, "admin1", UserRole.ADMIN, 1)  # fila/revisão: só com a senha do evento
     a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
     hd = auth_headers("vhugo1234", UserRole.DIAGRAMADOR, tenant_id=1)
     try:

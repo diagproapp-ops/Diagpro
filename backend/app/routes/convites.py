@@ -81,7 +81,12 @@ async def _enviar(cfg: dict, para: str, titulo: str, mensagem: str, token: str) 
         return False
 
 
-async def _nome_da_banca(db: AsyncSession, tenant_id: int) -> str:
+NOME_PLATAFORMA = "Plataforma DiagPro (administração geral)"
+
+
+async def _nome_da_banca(db: AsyncSession, tenant_id: int | None) -> str:
+    if tenant_id is None:  # convite de administrador geral
+        return NOME_PLATAFORMA
     # a tabela de clientes é da plataforma (a sessão da banca não a lê); a linha inteira: o ORM decifra o nome
     async with PlatformSessionLocal() as pdb:
         t = (await pdb.execute(select(Tenant).where(Tenant.id == tenant_id))).scalars().first()
@@ -204,7 +209,15 @@ async def _conta_do_email(db: AsyncSession, email: str) -> User | None:
     return (await db.execute(select(User).where(blind_eq(User.email, email)))).scalars().first()
 
 
-async def _avisar_admins(db: AsyncSession, tenant_id: int, quem: str) -> None:
+async def _avisar_admins(db: AsyncSession, tenant_id: int | None, quem: str) -> None:
+    if tenant_id is None:  # novo administrador geral: quem aprova são os administradores gerais
+        admins = [u.id for u in (await db.execute(select(User).where(
+            User.tenant_id.is_(None), User.role == UserRole.ADMIN_GERAL.value, User.is_active.is_(True)))).scalars()]
+        await notificacoes.notificar_varios(
+            admins, "sistema", "Administrador geral aguardando aprovação",
+            f"{quem} respondeu ao convite de administrador geral. Confira a foto e os dados em Configurações > "
+            "Administradores da plataforma.", "/settings?secao=plataforma_admins")
+        return
     admins = [u.id for u in (await db.execute(select(User).where(
         User.tenant_id == tenant_id, User.role == UserRole.ADMIN.value, User.is_active.is_(True)))).scalars()]
     await notificacoes.notificar_varios(
@@ -293,6 +306,8 @@ async def aceitar_convite(
 ):
     """Quem já tem conta (de outra banca) aceita o vínculo com login, senha e 2FA. Vínculo pendente até a aprovação."""
     c = await _convite_valido(db, token, "cadastro")
+    if c.tenant_id is None:
+        raise HTTPException(status_code=400, detail="Administrador geral precisa de uma conta própria: use \"Ainda não tenho conta\".")
     chave = f"convite:{c.id}"
     checar_bloqueio_por_falhas(chave, _MAX_FALHAS, _JANELA_FALHAS)
     user = (await db.execute(select(User).where(blind_eq(User.username, username.strip())))).scalars().first()

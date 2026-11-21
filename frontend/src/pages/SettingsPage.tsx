@@ -31,6 +31,8 @@ import BancaTemplatesTab from './SettingsTabs/BancaTemplatesTab';
 import PlataformaEmailTab from './SettingsTabs/PlataformaEmailTab';
 import PlataformaSaudeTab from './SettingsTabs/PlataformaSaudeTab';
 import { BancaLgpdTab, PlataformaLgpdTab } from './SettingsTabs/LgpdTabs';
+import PlataformaAdminsTab from './SettingsTabs/PlataformaAdminsTab';
+import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import PrivacyTipOutlinedIcon from '@mui/icons-material/PrivacyTipOutlined';
 import MonitorHeartOutlinedIcon from '@mui/icons-material/MonitorHeartOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
@@ -63,6 +65,7 @@ type SectionKey =
   | 'plataforma_email'
   | 'plataforma_saude'
   | 'plataforma_lgpd'
+  | 'plataforma_admins'
   | 'banca_lgpd';
 
 function SettingsPage() {
@@ -74,7 +77,7 @@ function SettingsPage() {
   // ?secao=banca_templates|users abre direto uma seção (ex.: link da tela do evento ou do aviso de cadastro pendente)
   const [section, setSection] = useState<SectionKey>(() => {
     const pedida = new URLSearchParams(window.location.search).get('secao');
-    return (['banca_templates', 'users', 'clients'].includes(pedida || '') ? pedida : 'overview') as SectionKey;
+    return (['banca_templates', 'users', 'clients', 'plataforma_admins'].includes(pedida || '') ? pedida : 'overview') as SectionKey;
   });
   const [counts, setCounts] = useState({
     users: 0,
@@ -268,6 +271,13 @@ function SettingsPage() {
         desc: 'Termos e política com versão (novo aceite de todos) e prazos de retenção.',
         icon: <PrivacyTipOutlinedIcon fontSize="small" />,
         badge: 'Novo',
+      }, {
+        key: 'plataforma_admins' as SectionKey,
+        group: 'PLATAFORMA',
+        title: 'Administradores da plataforma',
+        desc: 'Equipe de suporte às bancas: convite por link, aprovação e desativação de administradores gerais.',
+        icon: <AdminPanelSettingsOutlinedIcon fontSize="small" />,
+        badge: 'Novo',
       }]
       : []),
     ...(podeAuditoria ? [{
@@ -412,6 +422,10 @@ function SettingsPage() {
                 <ListItemButton selected={section === 'plataforma_lgpd'} onClick={() => setSection('plataforma_lgpd')} sx={subNavSx(section === 'plataforma_lgpd')}>
                   <ListItemIcon><PrivacyTipOutlinedIcon fontSize="small" /></ListItemIcon>
                   <ListItemText primary="Privacidade (LGPD)" />
+                </ListItemButton>
+                <ListItemButton selected={section === 'plataforma_admins'} onClick={() => setSection('plataforma_admins')} sx={subNavSx(section === 'plataforma_admins')}>
+                  <ListItemIcon><AdminPanelSettingsOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemText primary="Administradores da plataforma" />
                 </ListItemButton>
               </>
             )}
@@ -573,6 +587,7 @@ function SettingsPage() {
               {section === 'plataforma_email' && isAdminGeral && <PlataformaEmailTab />}
               {section === 'plataforma_saude' && isAdminGeral && <PlataformaSaudeTab />}
               {section === 'plataforma_lgpd' && isAdminGeral && <PlataformaLgpdTab />}
+              {section === 'plataforma_admins' && isAdminGeral && <PlataformaAdminsTab />}
               {section === 'banca_lgpd' && <BancaLgpdTab />}
             </Box>
           )}

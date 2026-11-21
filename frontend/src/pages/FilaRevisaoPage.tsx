@@ -7,6 +7,8 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import api from '../api';
 import { COR_STATUS_REVISAO } from '../components/statusRevisao';
+import { DialogoSenhaEvento } from '../components/SenhaEvento';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 
 type Item = {
   id_questao: string; codigo: string; tipo: string; status: string; evento_id: string; evento: string | null;
@@ -14,6 +16,7 @@ type Item = {
   mensagem_envio: string | null; alterada_em: string | null;
 };
 type Resumo = Record<string, { rotulo: string; quantidade: number }>;
+type Bloqueado = { evento_id: string; evento: string | null; quantidade: number };
 
 const ABAS = ['ENVIADA', 'AJUSTES', 'REPROVADA', 'APROVADA', 'RASCUNHO'];
 const TIPOS: Record<string, string> = { MULTIPLA_ESCOLHA: 'Múltipla escolha', CERTO_ERRADO: 'Certo/Errado', DISCURSIVA: 'Discursiva', SUBJETIVA: 'Subjetiva' };
@@ -26,6 +29,9 @@ const FilaRevisaoPage: React.FC = () => {
   const [resumo, setResumo] = useState<Resumo | null>(null);
   const [itens, setItens] = useState<Item[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  // eventos sem a senha digitada nesta sessão: só o nome e quantas questões há (nada das questões)
+  const [bloqueados, setBloqueados] = useState<Bloqueado[]>([]);
+  const [liberando, setLiberando] = useState<Bloqueado | null>(null);
 
   const carregar = useCallback(async (status: string) => {
     setItens(null);
@@ -34,6 +40,7 @@ const FilaRevisaoPage: React.FC = () => {
       const [r1, r2] = await Promise.all([api.get('/revisao/resumo'), api.get('/revisao/fila', { params: { status } })]);
       setResumo(r1.data);
       setItens(r2.data.itens);
+      setBloqueados(r2.data.eventos_bloqueados || []);
     } catch (e: any) {
       setErro(typeof e?.response?.data?.detail === 'string' ? e.response.data.detail : 'Não foi possível carregar a fila.');
       setItens([]);
@@ -59,8 +66,18 @@ const FilaRevisaoPage: React.FC = () => {
           ))}
         </Tabs>
         {erro && <Alert severity="warning" sx={{ mb: 2 }}>{erro}</Alert>}
+        {bloqueados.length > 0 && (
+          <Box sx={{ mb: 2, display: 'grid', gap: 1 }}>
+            {bloqueados.map(b => (
+              <Alert key={b.evento_id} severity="info" icon={<LockOutlinedIcon fontSize="small" />}
+                action={<Button size="small" variant="outlined" onClick={() => setLiberando(b)}>Digitar senha</Button>}>
+                <b>{b.evento || 'Evento'}</b>: {b.quantidade} questão(ões) neste estado. As questões só aparecem com a senha do evento.
+              </Alert>
+            ))}
+          </Box>
+        )}
         {!itens ? <CircularProgress /> : !itens.length ? (
-          <Typography color="text.secondary">Nenhuma questão neste estado.</Typography>
+          <Typography color="text.secondary">{bloqueados.length ? 'Nenhuma questão de evento liberado neste estado.' : 'Nenhuma questão neste estado.'}</Typography>
         ) : (
           <Box sx={{ overflowX: 'auto' }}>
             <Table size="small">
@@ -98,6 +115,8 @@ const FilaRevisaoPage: React.FC = () => {
           </Box>
         )}
       </Paper>
+      <DialogoSenhaEvento aberto={!!liberando} eventoId={liberando?.evento_id || ''} nomeEvento={liberando?.evento}
+        onCancelar={() => setLiberando(null)} onLiberado={() => { setLiberando(null); carregar(aba); }} />
     </Layout>
   );
 };

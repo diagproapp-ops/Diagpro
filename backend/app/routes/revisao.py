@@ -3,15 +3,17 @@
 from collections import Counter
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app import fluxo_revisao as fr
+from backend.app import liberacao_evento
+from backend.app.rate_limit import rate_limit
 from backend.app.db_models import Conteudo, Evento, HistoricoRevisaoQuestao, QuestoesBanco, User
 from backend.app.roles import UserRole
-from backend.app.security import get_tenant_db, require_roles
+from backend.app.security import carregar_evento_autorizado, conferir_senha_evento, get_tenant_db, require_roles
 
 router = APIRouter(prefix="/revisao", tags=["Revisão"])
 _REVISORES = require_roles(UserRole.REVISOR, UserRole.ADMIN, UserRole.ADMIN_GERAL)
@@ -39,10 +41,33 @@ async def enviar(id_questao: str, dados: Optional[EnviarIn] = None, db: AsyncSes
     return {"status_revisao": fr.ENVIADA}
 
 
+class SenhaIn(BaseModel):
+    senha: str = Field(..., max_length=200)
+
+
+@router.post("/eventos/{evento_id}/liberar", dependencies=[Depends(rate_limit(10, 60, "liberar-evento"))])
+async def liberar_evento(evento_id: str, dados: SenhaIn, request: Request, db: AsyncSession = Depends(get_tenant_db),
+                         current_user=Depends(require_roles(UserRole.REVISOR, UserRole.ADMIN, UserRole.ADMIN_GERAL,
+                                                            UserRole.DIAGRAMADOR, UserRole.PROFESSOR))):
+    """Senha do evento -> as questões dele ficam visíveis na fila e na revisão, só nesta sessão."""
+    _tenant(current_user)
+    evento = await carregar_evento_autorizado(evento_id, db, current_user)
+    conferir_senha_evento(evento, dados.senha, current_user)  # tempo constante + bloqueio por falhas
+    await liberacao_evento.liberar(request, current_user, evento_id)
+    return {"ok": True, "evento_id": evento_id}
+
+
+@router.get("/eventos/{evento_id}/liberado")
+async def evento_liberado(evento_id: str, request: Request, current_user=Depends(require_roles(
+        UserRole.REVISOR, UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR, UserRole.PROFESSOR))):
+    return {"liberado": await liberacao_evento.esta_liberado(request, current_user, evento_id)}
+
+
 @router.get("/fila")
-async def fila(status: str = fr.ENVIADA, evento_id: Optional[str] = None,
+async def fila(request: Request, status: str = fr.ENVIADA, evento_id: Optional[str] = None,
                db: AsyncSession = Depends(get_tenant_db), current_user=Depends(_REVISORES)):
-    """Questões da banca num estado (padrão: aguardando revisão), com evento, conteúdo e autor."""
+    """Questões da banca num estado, com evento, conteúdo e autor. Só de eventos liberados com a senha NESTA
+    sessão; dos outros, apenas o nome do evento e quantas questões estão ali (sem nada das questões)."""
     tenant = _tenant(current_user)
     status = status.upper()
     if status not in fr.ROTULOS:
@@ -54,9 +79,12 @@ async def fila(status: str = fr.ENVIADA, evento_id: Optional[str] = None,
         q = q.where(QuestoesBanco.status_revisao == status)
     if evento_id:
         q = q.where(QuestoesBanco.id_evento_fk == evento_id)
-    questoes = (await db.execute(q.order_by(QuestoesBanco.data_modificacao.asc()).limit(500))).scalars().all()
+    todas = (await db.execute(q.order_by(QuestoesBanco.data_modificacao.asc()).limit(500))).scalars().all()
+    abertos = await liberacao_evento.liberados(request, current_user)
+    questoes = [x for x in todas if x.id_evento_fk in abertos]
+    fechados = Counter(x.id_evento_fk for x in todas if x.id_evento_fk not in abertos)
 
-    ids_ev = {x.id_evento_fk for x in questoes}
+    ids_ev = {x.id_evento_fk for x in todas}
     ids_ct = {x.conteudo_id for x in questoes if x.conteudo_id}
     eventos = {e.id_evento: e.nome_evento for e in (await db.execute(select(Evento).where(Evento.id_evento.in_(ids_ev)))).scalars()} if ids_ev else {}
     conteudos = {c.id_conteudo: c for c in (await db.execute(select(Conteudo).where(Conteudo.id_conteudo.in_(ids_ct)))).scalars()} if ids_ct else {}
@@ -87,7 +115,8 @@ async def fila(status: str = fr.ENVIADA, evento_id: Optional[str] = None,
             "mensagem_envio": envio.observacao_revisor if envio else None,
             "alterada_em": x.data_modificacao.isoformat() if x.data_modificacao else None,
         })
-    return {"status": status, "rotulo": fr.ROTULOS[status], "itens": itens}
+    bloqueados = [{"evento_id": ev, "evento": eventos.get(ev), "quantidade": n} for ev, n in fechados.most_common()]
+    return {"status": status, "rotulo": fr.ROTULOS[status], "itens": itens, "eventos_bloqueados": bloqueados}
 
 
 @router.get("/resumo")

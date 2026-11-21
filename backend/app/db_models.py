@@ -173,7 +173,7 @@ class Convite(Base):
     """
     __tablename__ = "convites"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)  # nulo = administrador geral
     token_hash = Column(String(64), nullable=False, unique=True)
     tipo = Column(String(20), nullable=False, default="cadastro")  # cadastro | senha
     email = Column(Ciphertext, nullable=False)

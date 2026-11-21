@@ -5,8 +5,8 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
-import UploadFileIcon from "@mui/icons-material/UploadFile";
 import api from "../api";
+import CapaDoCargo from "../components/capa/CapaDoCargo";
 
 const NIVEIS_VALIDOS = [
   "Nível Fundamental", "Nível Médio", "Nível Superior", "Outro"
@@ -333,26 +333,13 @@ export default function CargoForm({ eventId, cargo, onSaved, onError }: Props) {
             ref={coverFileInputRef}
             onChange={handleCoverPdfFileChange}
           />
-          <Button
-            startIcon={<UploadFileIcon />}
-            variant="outlined"
-            color="secondary"
-            onClick={handleCoverPdfImportClick}
-            sx={{ mb: 2 }}
-          >
-            Importar PDF de Capa
-          </Button>
-          <TextField
-            label="PDFs de Capa"
-            name="cover_pdf_paths"
-            value={form.cover_pdf_paths}
-            onChange={handleChange}
-            fullWidth
-            sx={{ mb: 2 }}
-            placeholder="Caminho/arquivo da capa (preenchido ao importar)"
-            disabled
-          />
         </Box>
+        <CapaDoCargo
+          eventId={eventId || ''}
+          refCapa={(Array.isArray(form.cover_pdf_paths) ? form.cover_pdf_paths[0] : String(form.cover_pdf_paths || '').split(';')[0]) || ''}
+          cargo={{ nome_cargo: form.nome_cargo, codigo_cargo: form.codigo_cargo, nivel: form.nivel, turno: form.turno }}
+          onImportar={handleCoverPdfImportClick}
+        />
 
         <TextField
           label="Peso Total da Prova"

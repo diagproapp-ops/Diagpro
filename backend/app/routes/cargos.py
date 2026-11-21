@@ -311,3 +311,73 @@ async def upload_capa_pdf(
     ref = await secure_files.save_upload_http(file, evento.tenant_id, "pdf")
     # A referência volta ao cliente, que a reenvia ao salvar o cargo (validada por ref_from_client)
     return {"cover_pdf_paths": [ref]}
+
+# ------------------------------------------------------------------------------------------ capa: guia e prévia
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+from backend.app import campos_capa  # noqa: E402
+from backend.app.rate_limit import rate_limit  # noqa: E402
+
+_PODE_CAPA = require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR)
+
+
+@router.get("/cargos/capa/guia")
+async def guia_da_capa(current_user=Depends(_PODE_CAPA)):
+    """Campos que a capa (PDF com formulário) pode ter e o que o DiagPro coloca em cada um."""
+    return {"campos": campos_capa.guia()}
+
+
+class PreviaCapaIn(_BaseModel):
+    ref: str
+    nome_cargo: str | None = None
+    codigo_cargo: str | None = None
+    nivel: str | None = None
+    turno: str | None = None
+
+
+@router.post("/eventos/{event_id}/cargos/capa/previa", dependencies=[Depends(rate_limit(20, 60, "capa-previa"))])
+async def previa_da_capa(event_id: str, body: PreviaCapaIn, db: AsyncSession = Depends(get_tenant_db),
+                         current_user=Depends(_PODE_CAPA)):
+    """A capa preenchida como sai na prova (dados de exemplo do cargo/evento) + os campos que o PDF tem."""
+    import asyncio
+    import base64
+    from types import SimpleNamespace
+
+    from backend.app import capa_previa
+    from backend.app.db_models import Company
+
+    evento = await carregar_evento_autorizado(event_id, db, current_user)
+    ref = secure_files.ref_from_client((body.ref or "").strip(), evento.tenant_id)
+    if ref is None:
+        valor = (body.ref or "").strip()
+        if valor.lower().endswith(".pdf") and ("/" in valor or "\\" in valor or ":" in valor):
+            # capa antiga: guardava o caminho de uma pasta do computador (não o arquivo cifrado)
+            return {"legado": True, "mensagem": "Esta capa foi cadastrada como um caminho de pasta do computador. "
+                                                "Use \"Importar PDF de Capa\" para enviar o arquivo de novo."}
+        raise HTTPException(status_code=400, detail="Capa inválida. Importe o PDF de novo.")
+    try:
+        dados = secure_files.read_bytes(ref, evento.tenant_id)
+        campos = capa_previa.campos_do_pdf(dados)
+    except secure_files.SecureFileError:
+        raise HTTPException(status_code=404, detail="Arquivo da capa não encontrado. Importe o PDF de novo.")
+    except capa_previa.CapaInvalida as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    empresa = (await db.execute(select(Company).where(Company.tenant_id == evento.tenant_id))).scalars().first()
+    valores = campos_capa.montar_dados_capa(
+        candidato={}, evento=evento,
+        cargo=SimpleNamespace(nome_cargo=body.nome_cargo or "Nome do cargo", codigo_cargo=body.codigo_cargo or "COD-01",
+                              nivel=body.nivel or "", turno=body.turno or ""),
+        prova=SimpleNamespace(nome_prova_montada="Prova Objetiva"), frase="Exemplo de frase para transcrição.",
+        tipo="Tipo A", letra_tipo="A", tempo_prova="", quantidade_questoes="60",
+        empresa=(empresa.company_name if empresa else "") or "Nome da banca")
+    png, preenchida = await asyncio.to_thread(capa_previa.gerar_previa, dados, valores, campos is not None)
+    lista = campos or []
+    return {
+        "legado": False,
+        "imagem": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+        "sem_formulario": campos is None,
+        "preenchida": preenchida,
+        "campos_no_pdf": lista,
+        "reconhecidos": [c for c in lista if c in campos_capa.CAMPOS_RECONHECIDOS],
+        "desconhecidos": [c for c in lista if c not in campos_capa.CAMPOS_RECONHECIDOS],
+    }

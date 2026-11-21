@@ -118,7 +118,9 @@ async def listar(evento_id: str, db: AsyncSession = Depends(get_tenant_db), even
     if ids:
         for o in (await db.execute(select(OpcoesQuestao).where(OpcoesQuestao.id_questao_fk.in_(ids)))).scalars():
             opcoes.setdefault(o.id_questao_fk, []).append(o)
-    nomes = {u.id: u.username for u in (await db.execute(select(User).where(User.tenant_id == evento.tenant_id))).scalars()}
+    from backend.app import vinculos
+    nomes = {u.id: u.username for u in (await db.execute(
+        select(User).where(vinculos.membros_da_banca(evento.tenant_id)))).scalars()}
     grupos = {}
     for r in lista:
         k = (r.id_questao, r.item)
@@ -199,7 +201,8 @@ async def decidir(evento_id: str, id_questao: str, dados: DecisaoIn, db: AsyncSe
     if autor:
         texto = {"manter": "gabarito mantido", "anular": "questão anulada", "alterar": f"gabarito alterado para {nova}"}[dados.decisao]
         await notificacoes.notificar(autor, "sistema", f"Recursos da questão {q.codigo_curto_questao or ''} decididos",
-                                     f"Decisão: {texto}.", f"/eventos/{evento.id_evento}/candidatos/recursos")
+                                     f"Decisão: {texto}.", f"/eventos/{evento.id_evento}/candidatos/recursos",
+                                     tenant_id=evento.tenant_id)
     return {"ok": True, "status_recursos": novo_status}
 
 

@@ -37,6 +37,8 @@ import AvisoManutencao from './components/AvisoManutencao';
 import AceiteTermos from './components/AceiteTermos';
 import DocumentoLegalPage from './pages/DocumentoLegalPage';
 import EntregaPublicaPage from './pages/EntregaPublicaPage';
+import ConvitePage from './pages/ConvitePage';
+import FotoObrigatoria from './components/usuarios/FotoObrigatoria';
 
 function App() {
   const { isAuthenticated, loading, user } = useAuth();
@@ -45,6 +47,7 @@ function App() {
     <CustomThemeProvider>
       <AvisoManutencao />
       {isAuthenticated && !loading && <AceiteTermos />}
+      {isAuthenticated && !loading && <FotoObrigatoria />}
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
           <CircularProgress />
@@ -56,6 +59,8 @@ function App() {
             <Route path="/privacidade" element={<DocumentoLegalPage tipo="politica" />} />
             <Route path="/termos" element={<DocumentoLegalPage tipo="termos" />} />
             <Route path="/entrega/:id" element={<EntregaPublicaPage />} />
+            {/* link de convite / nova senha: público, uso único */}
+            <Route path="/convite/:token" element={<ConvitePage />} />
             {!isAuthenticated ? (
               <>
                 <Route path="/login" element={<LoginPage />} />

@@ -14,6 +14,10 @@ from backend.app.db_models import Company, User
 from sqlalchemy import select, update
 from tests.conftest import auth_headers
 
+# só o administrador geral cria conta direto (na banca, a pessoa se cadastra pelo convite)
+def _ag1():
+    return {**auth_headers("Victor Hugo", UserRole.ADMIN_GERAL), "X-Tenant-Id": "1"}
+
 
 @pytest.mark.asyncio
 async def test_unauthenticated_endpoints_return_401(async_client):
@@ -89,9 +93,9 @@ async def test_rbac_matrix_five_roles(async_client):
     for h in (h_prof, h_diag):
         assert (await async_client.put("/company", headers=h)).status_code == 403
 
-    # GET /admin/logs/geracao/: ADMIN, ADMIN_GERAL, DIAGRAMADOR (bloqueado para PROFESSOR)
-    assert (await async_client.get("/admin/logs/geracao/", headers=h_prof)).status_code == 403
-    assert (await async_client.get("/admin/logs/geracao/", headers=h_diag)).status_code == 200
+    # GET /admin/logs/geracao/ (auditoria): só ADMIN e ADMIN_GERAL; os demais perfis não veem
+    for h in (h_prof, h_diag):
+        assert (await async_client.get("/admin/logs/geracao/", headers=h)).status_code == 403
     assert (await async_client.get("/admin/logs/geracao/", headers=h_admin)).status_code == 200
 
     # POST /frases/: bloqueado para PROFESSOR
@@ -758,10 +762,10 @@ async def test_forced_password_change_session_renewal_and_recaptcha(async_client
     a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
     base = {"username": "novo_prof", "email": "novo_prof@example.com", "role": "professor", "tenant_id": 1, "status": "ativo"}
     # senha fraca recusada já na criação
-    r = await async_client.post("/users/", headers=a1, json={**base, "password": "fraca123"})
+    r = await async_client.post("/users/", headers=_ag1(), json={**base, "password": "fraca123"})
     assert r.status_code == 400 and r.json()["detail"]["problemas"]
     provisoria = "Provisoria-Forte-48"
-    assert (await async_client.post("/users/", headers=a1, json={**base, "password": provisoria})).status_code == 201
+    assert (await async_client.post("/users/", headers=_ag1(), json={**base, "password": provisoria})).status_code == 201
 
     login = lambda s: async_client.post("/auth/login", data={"username": "novo_prof", "password": s, "recaptcha_token": "x"})
     r = (await login(provisoria)).json()
@@ -816,7 +820,7 @@ async def test_platform_and_bank_settings_take_effect(async_client):
     assert r.status_code == 200 and r.json()["seguranca"]["senha_tamanho_minimo"] == 16
     try:
         assert (await async_client.get("/auth/senha/regras")).json()["tamanho_minimo"] == 16
-        r = await async_client.post("/users/", headers=a1, json={"username": "cfg_u", "email": "cfg_u@example.com", "password": "Doze-Chars-9x",
+        r = await async_client.post("/users/", headers=_ag1(), json={"username": "cfg_u", "email": "cfg_u@example.com", "password": "Doze-Chars-9x",
                                                                  "role": "professor", "tenant_id": 1, "status": "ativo"})
         assert r.status_code == 400  # 13 caracteres < 16 configurado
         # banca: não pode passar do teto da plataforma; pode encurtar

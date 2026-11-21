@@ -76,6 +76,15 @@ async def anonimizar(user_id: int = Path(...), db: AsyncSession = Depends(get_te
         raise HTTPException(status_code=403, detail="Você não pode anonimizar a própria conta. Peça a outro administrador.")
     if (alvo.username or "").startswith("anonimizado-"):
         raise HTTPException(status_code=409, detail="Este usuário já foi anonimizado.")
+    if not (admin_user.role == UserRole.ADMIN_GERAL and admin_user.tenant_id is None):
+        # a conta é da pessoa: só a banca de origem anonimiza, e só se ela não trabalha para outras bancas
+        from backend.app import vinculos
+        if alvo.tenant_id != admin_user.tenant_id:
+            raise HTTPException(status_code=403, detail="Só a banca de origem desta pessoa pode anonimizar a conta. "
+                                                        "Aqui você pode remover o vínculo dela com a sua banca.")
+        if await vinculos.trabalha_para_outras_bancas(alvo.id):
+            raise HTTPException(status_code=409, detail="Esta pessoa também trabalha para outras bancas: peça ao "
+                                                        "administrador geral para anonimizar a conta.")
     await lgpd.anonimizar(db, alvo, admin_user.id)
     return {"ok": True, "usuario": alvo.username}
 

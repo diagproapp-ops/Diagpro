@@ -40,7 +40,9 @@ DECLARE
         'entregas',
         'analises_prova',
         'recursos',
-        'decisoes_recurso'
+        'decisoes_recurso',
+        'vinculos_banca',
+        'convites'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP
@@ -55,3 +57,10 @@ BEGIN
         );
     END LOOP;
 END $$;
+
+-- A banca LÊ a identidade de quem tem vínculo com ela (professor/revisor de outra banca de origem).
+-- Só SELECT: alterar os dados continua restrito à banca de origem (tenant_isolation_policy).
+DROP POLICY IF EXISTS membros_da_banca ON users;
+CREATE POLICY membros_da_banca ON users FOR SELECT USING (EXISTS (
+    SELECT 1 FROM vinculos_banca v WHERE v.user_id = users.id
+    AND v.tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::integer));

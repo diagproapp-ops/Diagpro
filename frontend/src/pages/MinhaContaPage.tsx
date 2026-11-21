@@ -6,6 +6,8 @@ import Layout from '../components/Layout';
 import PreferenciasAvisos from '../components/PreferenciasAvisos';
 import SessoesAtivas from '../components/SessoesAtivas';
 import PrivacidadeMinhaConta from '../components/PrivacidadeMinhaConta';
+import MinhasBancas from '../components/usuarios/MinhasBancas';
+import { CampoFoto, mensagemDaApi, useFoto, validarFoto } from '../components/usuarios/comum';
 import api from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { mensagemErro } from './SettingsTabs/configComum';
@@ -140,12 +142,51 @@ const MinhaContaPage: React.FC = () => {
         {msgRec && <Alert severity="error" sx={{ mt: 2 }}>{msgRec}</Alert>}
       </Paper>
 
+      <MinhaFoto sx={card} />
+
+      <MinhasBancas sx={card} />
+
       <SessoesAtivas sx={card} />
 
       <PreferenciasAvisos sx={card} />
 
       <PrivacidadeMinhaConta sx={card} />
     </Layout>
+  );
+};
+
+// A própria pessoa troca a foto (obrigatória; cifrada; vista só pelos administradores das bancas dela)
+const MinhaFoto: React.FC<{ sx?: any }> = ({ sx }) => {
+  const { user } = useAuth();
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [ref, setRef] = useState<string | undefined>((user as any)?.avatar_url);
+  const atual = useFoto(ref);
+  const [msg, setMsg] = useState<{ tipo: 'success' | 'error'; texto: string } | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  const enviar = async () => {
+    const problema = validarFoto(arquivo);
+    if (problema) { setMsg({ tipo: 'error', texto: problema }); return; }
+    setEnviando(true);
+    try {
+      const fd = new FormData();
+      fd.append('foto', arquivo as File);
+      const { data } = await api.put('/users/me/foto', fd);
+      setRef(data.avatar_url);
+      setArquivo(null);
+      setMsg({ tipo: 'success', texto: 'Foto atualizada.' });
+    } catch (e: any) {
+      setMsg({ tipo: 'error', texto: mensagemDaApi(e, 'Não foi possível enviar a foto.') });
+    } finally {
+      setEnviando(false);
+    }
+  };
+  return (
+    <Paper variant="outlined" sx={sx}>
+      <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 2 }}>Minha foto</Typography>
+      <CampoFoto arquivo={arquivo} atual={atual} onChange={(f) => { setArquivo(f); setMsg(null); }} />
+      {msg && <Alert severity={msg.tipo} sx={{ mt: 2 }}>{msg.texto}</Alert>}
+      {arquivo && <Button variant="contained" sx={{ mt: 2 }} onClick={enviar} disabled={enviando}>{enviando ? 'Enviando...' : 'Salvar foto'}</Button>}
+    </Paper>
   );
 };
 

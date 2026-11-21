@@ -60,7 +60,8 @@ async def fila(status: str = fr.ENVIADA, evento_id: Optional[str] = None,
     ids_ct = {x.conteudo_id for x in questoes if x.conteudo_id}
     eventos = {e.id_evento: e.nome_evento for e in (await db.execute(select(Evento).where(Evento.id_evento.in_(ids_ev)))).scalars()} if ids_ev else {}
     conteudos = {c.id_conteudo: c for c in (await db.execute(select(Conteudo).where(Conteudo.id_conteudo.in_(ids_ct)))).scalars()} if ids_ct else {}
-    nomes = {u.id: u.username for u in (await db.execute(select(User).where(User.tenant_id == tenant))).scalars()}
+    from backend.app import vinculos
+    nomes = {u.id: u.username for u in (await db.execute(select(User).where(vinculos.membros_da_banca(tenant)))).scalars()}
     envios = {}
     if questoes:
         for h in (await db.execute(select(HistoricoRevisaoQuestao).where(

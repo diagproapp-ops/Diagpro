@@ -68,11 +68,13 @@ type SectionKey =
 function SettingsPage() {
   const { user } = useAuth();
   const isAdminGeral = user?.role === 'administrador geral';
+  // auditoria: só administradores (o da banca vê só a própria banca; o servidor garante)
+  const podeAuditoria = isAdminGeral || user?.role === 'administrador';
 
-  // ?secao=banca_templates abre direto uma seção (ex.: link vindo da tela do evento)
+  // ?secao=banca_templates|users abre direto uma seção (ex.: link da tela do evento ou do aviso de cadastro pendente)
   const [section, setSection] = useState<SectionKey>(() => {
     const pedida = new URLSearchParams(window.location.search).get('secao');
-    return (pedida === 'banca_templates' ? pedida : 'overview') as SectionKey;
+    return (pedida === 'banca_templates' || pedida === 'users' ? pedida : 'overview') as SectionKey;
   });
   const [counts, setCounts] = useState({
     users: 0,
@@ -268,14 +270,14 @@ function SettingsPage() {
         badge: 'Novo',
       }]
       : []),
-    {
+    ...(podeAuditoria ? [{
       key: 'audit' as SectionKey,
       group: 'OPERAÇÃO & CONCURSOS',
       title: 'Auditoria de Geração',
       desc: 'Trilha de auditoria com usuário, evento, cargo, seed, IP e timestamp de geração.',
       icon: <FactCheckOutlinedIcon fontSize="small" />,
       badge: 'Ativo',
-    },
+    }] : []),
   ];
 
   const kpiCards = [
@@ -320,7 +322,7 @@ function SettingsPage() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', md: '240px 1fr' },
+          gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: '240px minmax(0, 1fr)' }, // minmax: tabela larga rola dentro, não estoura a tela
           gap: 3.5,
           alignItems: 'start',
         }}
@@ -419,10 +421,12 @@ function SettingsPage() {
               <ListItemIcon><FormatQuoteOutlinedIcon fontSize="small" /></ListItemIcon>
               <ListItemText primary="Banco de frases" />
             </ListItemButton>
-            <ListItemButton selected={section === 'audit'} onClick={() => setSection('audit')} sx={subNavSx(section === 'audit')}>
-              <ListItemIcon><FactCheckOutlinedIcon fontSize="small" /></ListItemIcon>
-              <ListItemText primary="Auditoria" />
-            </ListItemButton>
+            {podeAuditoria && (
+              <ListItemButton selected={section === 'audit'} onClick={() => setSection('audit')} sx={subNavSx(section === 'audit')}>
+                <ListItemIcon><FactCheckOutlinedIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary="Auditoria" />
+              </ListItemButton>
+            )}
           </List>
         </Box>
 
@@ -558,7 +562,7 @@ function SettingsPage() {
               {section === 'company' && <CompanyDataTab />}
               {section === 'appearance' && <AppearanceTab />}
               {section === 'phrases' && <PhraseBankTab />}
-              {section === 'audit' && <AuditTab />}
+              {section === 'audit' && podeAuditoria && <AuditTab />}
               {section === 'banca_seguranca' && <BancaConfigTab key="seg" secao="seguranca" />}
               {section === 'banca_identidade' && <BancaConfigTab key="ide" secao="identidade" />}
               {section === 'banca_regras' && <BancaConfigTab key="reg" secao="regras" />}

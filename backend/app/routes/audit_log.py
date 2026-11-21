@@ -22,7 +22,8 @@ async def list_audit_logs(
     cargo: Optional[str] = None,
     tenant_id: Optional[int] = None,
     db: AsyncSession = Depends(get_tenant_db),
-    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL, UserRole.DIAGRAMADOR))
+    # auditoria: só administradores. O da banca vê só a própria banca; o geral vê todas (ou a do cliente escolhido)
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.ADMIN_GERAL))
 ):
     filters = []
     if not is_admin_geral(current_user):

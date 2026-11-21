@@ -82,26 +82,32 @@ _UNAUTHORIZED = dict(
 )
 
 
-async def _load_user_from_token(payload: dict) -> DBUser | None:
+async def _load_user_from_token(payload: dict) -> tuple[DBUser | None, tuple[str, str] | None]:
     """
     Resolve o usuário do token com o menor privilégio possível:
-    - token com tenant_id (assinado pelo servidor): role de runtime, sob RLS daquele tenant;
+    - token com tenant_id (assinado pelo servidor): role de runtime, sob RLS daquele tenant. A pessoa pode ser
+      da banca (origem) ou ter vínculo com ela (o RLS de users só deixa ver esses dois casos);
     - token sem tenant_id: role de plataforma, aceito SOMENTE para administrador geral.
+    Devolve (usuário, (função, status) na banca do token).
     """
+    from backend.app import vinculos  # import tardio: vinculos -> db_models
+
     username = payload["sub"]
     tenant_id = payload.get("tenant_id")
     if tenant_id is not None:
         try:
             tenant_id = int(tenant_id)
         except (TypeError, ValueError):
-            return None
+            return None, None
         async with SessionLocal() as db:
             async with db.begin():
                 await set_tenant_context(db, tenant_id)
-                result = await db.execute(
-                    select(DBUser).where(blind_eq(DBUser.username, username), DBUser.tenant_id == tenant_id)
-                )
-                return result.scalars().first()
+                user = (await db.execute(
+                    select(DBUser).where(blind_eq(DBUser.username, username), DBUser.tenant_id.is_not(None))
+                )).scalars().first()
+                if user is None:
+                    return None, None
+                return user, await vinculos.papel_na_banca(db, user, tenant_id)
     async with PlatformSessionLocal() as db:
         result = await db.execute(
             select(DBUser).where(
@@ -110,7 +116,7 @@ async def _load_user_from_token(payload: dict) -> DBUser | None:
                 DBUser.role == UserRole.ADMIN_GERAL.value,
             )
         )
-        return result.scalars().first()
+        return result.scalars().first(), None
 
 
 CLIENTE_EM_GESTAO_HEADER = "X-Tenant-Id"
@@ -156,12 +162,19 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
                 headers={"WWW-Authenticate": "Bearer"},
             )
     request.state.sid = sid
-    user = await _load_user_from_token(payload)
+    user, papel = await _load_user_from_token(payload)
 
     if user is None:
         raise HTTPException(**_UNAUTHORIZED)
 
-    if not user.is_active or (user.status is not None and user.status.lower() == "inativo"):
+    if payload.get("tenant_id") is not None:
+        # vínculo com a banca do token, lido agora: desativado/removido = sem acesso na hora
+        if papel is None:
+            raise HTTPException(**_UNAUTHORIZED)
+        ativo = user.is_active and papel[1] == "ativo"
+    else:
+        ativo = user.is_active and (user.status is None or user.status.lower() != "inativo")
+    if not ativo:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuário inativo ou aguardando aprovação.",
@@ -174,6 +187,11 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
     user_out = PydanticUser.from_orm(user)
     if user.role == UserRole.ADMIN_GERAL.value and user.tenant_id is None:
         user_out.tenant_id = await _cliente_em_gestao(request)
+    elif papel is not None:
+        # dentro da banca do token: função e banca são as do vínculo (a origem continua no cadastro)
+        user_out.tenant_id = int(payload["tenant_id"])
+        user_out.role = papel[0]
+        user_out.status = papel[1]
     for field in PII_FIELDS:
         val = getattr(user_out, field, None)
         if val:

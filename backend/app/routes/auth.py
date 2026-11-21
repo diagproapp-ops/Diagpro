@@ -19,7 +19,7 @@ from backend.app.auth import get_current_user, verify_password
 from backend.app.roles import UserRole
 from backend.app import dois_fatores as df
 from backend.app import politica_senha
-from backend.app import configuracoes, notificacoes, sessoes
+from backend.app import configuracoes, notificacoes, sessoes, vinculos
 from backend.app.auth import oauth2_scheme, decode_token_payload
 from backend.app.database import get_auth_db
 from backend.app.db_models import User as DBUser
@@ -77,12 +77,17 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.is_active or (user.status is not None and user.status.lower() == "inativo"):
+    # conta ativa E ao menos uma banca com vínculo ativo (origem aprovada ou vínculo aprovado por outra banca)
+    if _e_admin_geral(user):
+        liberado = user.is_active and (user.status or "").lower() != "inativo"
+    else:
+        liberado = bool(await vinculos.bancas_da_pessoa(user))
+    if not liberado:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuário inativo ou aguardando aprovação do administrador.",
         )
-    
+
     # Senha correta NÃO libera acesso: só um passe de 5 min para o segundo fator (2FA obrigatório).
     # troca obrigatória (provisória, vencida ou fora da política): pedida DEPOIS do 2FA, antes do acesso
     cfg = (await configuracoes.ler_plataforma())["seguranca"]
@@ -109,7 +114,8 @@ async def _usuario_do_passe(db: AsyncSession, payload: dict) -> DBUser:
     tid = payload.get("tenant_id")
     query = query.where(DBUser.tenant_id == int(tid)) if tid is not None else query.where(DBUser.tenant_id.is_(None))
     user = (await db.execute(query)).scalars().first()
-    if not user or not user.is_active or (user.status or "").lower() == "inativo":
+    # a conta precisa estar ativa; a banca (origem ou vínculo) é conferida ao liberar o acesso
+    if not user or not user.is_active or (_e_admin_geral(user) and (user.status or "").lower() == "inativo"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário não encontrado ou inativo.")
     return user
 
@@ -117,6 +123,25 @@ async def _usuario_do_passe(db: AsyncSession, payload: dict) -> DBUser:
 def _role(user) -> str:
     r = getattr(user, "role", "")
     return r.value if isinstance(r, UserRole) else str(r)
+
+
+def _e_admin_geral(user) -> bool:
+    return _role(user) == UserRole.ADMIN_GERAL.value and user.tenant_id is None
+
+
+def _bancas_json(bancas) -> list[dict]:
+    return [{"tenant_id": b.tenant_id, "nome": b.nome, "role": b.role} for b in bancas]
+
+
+async def _acesso_na_banca(user, banca, request: Request | None, extra: dict | None = None) -> dict:
+    """Token e sessão DENTRO da banca escolhida: função e banca do vínculo."""
+    na_banca = vinculos.UsuarioNaBanca(user, banca.tenant_id, banca.role)
+    minutos = await configuracoes.inatividade_do_usuario(banca.tenant_id)
+    sid = await sessoes.abrir(na_banca, request)
+    resposta = {"access_token": df.criar_token_acesso(na_banca, minutos=minutos, sid=sid), "token_type": "bearer",
+                "role": banca.role, "inatividade_minutos": minutos, "tenant_id": banca.tenant_id, "banca": banca.nome}
+    resposta.update(extra or {})
+    return resposta
 
 
 async def _resposta_acesso(user, extra: dict | None = None, payload: dict | None = None, request: Request | None = None) -> dict:
@@ -127,14 +152,38 @@ async def _resposta_acesso(user, extra: dict | None = None, payload: dict | None
                     "regras": politica_senha.regras(cfg)}
         resposta.update(extra or {})
         return resposta
+    if not _e_admin_geral(user):
+        bancas = await vinculos.bancas_da_pessoa(user)
+        if not bancas:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Usuário inativo ou aguardando aprovação do administrador.")
+        if len(bancas) == 1:
+            return await _acesso_na_banca(user, bancas[0], request, extra)
+        # trabalha para mais de uma banca: escolhe em qual entrar (cada banca só vê o próprio trabalho)
+        resposta = {"etapa": "escolher_banca", "token_2fa": df.criar_passe(user, df.SCOPE_ESCOLHER_BANCA),
+                    "bancas": _bancas_json(bancas)}
+        resposta.update(extra or {})
+        return resposta
     minutos = await configuracoes.inatividade_do_usuario(user.tenant_id)
     sid = await sessoes.abrir(user, request)
     resposta = {"access_token": df.criar_token_acesso(user, minutos=minutos, sid=sid), "token_type": "bearer",
                 "role": user.role, "inatividade_minutos": minutos}
-    if user.tenant_id is not None:
-        resposta["tenant_id"] = user.tenant_id
     resposta.update(extra or {})
     return resposta
+
+
+class EscolhaBancaBody(PasseBody):
+    tenant_id: int
+
+
+@router.post("/2fa/escolher-banca", dependencies=[Depends(rate_limit(20, 60, "escolher-banca"))])
+async def escolher_banca(body: EscolhaBancaBody, request: Request, db: AsyncSession = Depends(get_auth_db)):
+    """Depois do 2FA, quem trabalha para várias bancas escolhe em qual entrar."""
+    user = await _usuario_do_passe(db, df.ler_passe(body.token_2fa, (df.SCOPE_ESCOLHER_BANCA,)))
+    banca = next((b for b in await vinculos.bancas_da_pessoa(user) if b.tenant_id == body.tenant_id), None)
+    if banca is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Você não tem acesso a essa banca.")
+    return await _acesso_na_banca(user, banca, request)
 
 
 @router.post("/2fa/cadastro/iniciar", dependencies=[Depends(rate_limit(10, 60, "2fa-cadastro"))])
@@ -206,10 +255,7 @@ async def novos_codigos_recuperacao(
 ):
     """Gera novos códigos de recuperação (invalida os antigos). Exige um código atual do aplicativo."""
     # admin geral gerenciando um cliente continua sem cliente no banco
-    tenant = None if _role(current_user) == UserRole.ADMIN_GERAL.value else current_user.tenant_id
-    query = select(DBUser).where(blind_eq(DBUser.username, current_user.username))
-    query = query.where(DBUser.tenant_id == tenant) if tenant is not None else query.where(DBUser.tenant_id.is_(None))
-    user = (await db.execute(query)).scalars().first()
+    user = await _minha_conta(db, current_user)
     if not user or not user.totp_ativo:
         raise HTTPException(status_code=409, detail="Verificação em duas etapas não está ativa.")
     chave = f"2fa:{user.username}:{user.tenant_id}"
@@ -223,6 +269,18 @@ async def novos_codigos_recuperacao(
     user.codigos_recuperacao = hashes
     await db.commit()
     return {"codigos_recuperacao": codigos}
+
+
+async def _minha_conta(db: AsyncSession, current_user) -> DBUser | None:
+    """A conta de quem está logado (login é único no sistema; a banca do token pode ser de um vínculo)."""
+    query = select(DBUser).where(blind_eq(DBUser.username, current_user.username))
+    if _role(current_user) == UserRole.ADMIN_GERAL.value and current_user.tenant_id is None:
+        query = query.where(DBUser.tenant_id.is_(None))
+    elif _role(current_user) == UserRole.ADMIN_GERAL.value:
+        query = query.where(DBUser.tenant_id.is_(None), DBUser.role == UserRole.ADMIN_GERAL.value)
+    else:
+        query = query.where(DBUser.tenant_id.is_not(None))
+    return (await db.execute(query)).scalars().first()
 
 
 # ------------------------------------------------------- senha e sessão ---
@@ -275,10 +333,7 @@ async def trocar_minha_senha(
     db: AsyncSession = Depends(get_auth_db),
 ):
     """O próprio usuário troca a senha: exige a senha atual E um código atual do autenticador."""
-    tenant = None if _role(current_user) == UserRole.ADMIN_GERAL.value else current_user.tenant_id
-    query = select(DBUser).where(blind_eq(DBUser.username, current_user.username))
-    query = query.where(DBUser.tenant_id == tenant) if tenant is not None else query.where(DBUser.tenant_id.is_(None))
-    user = (await db.execute(query)).scalars().first()
+    user = await _minha_conta(db, current_user)
     chave = f"2fa:{user.username}:{user.tenant_id}"
     checar_bloqueio_por_falhas(chave, _MAX_FALHAS_2FA, _JANELA_FALHAS_2FA)
     passo = df.conferir_totp(user.totp_secret, body.codigo, user.totp_ultimo_passo)
@@ -324,6 +379,37 @@ async def renovar_sessao(request: Request, token: str = Depends(oauth2_scheme), 
     minutos = await configuracoes.inatividade_do_usuario(payload.get("tenant_id"))
     return {"access_token": create_access_token(dados, expires_delta=_td(minutes=minutos)), "token_type": "bearer",
             "inatividade_minutos": minutos}
+
+
+# --------------------------------------------------------------------------- bancas da pessoa
+@router.get("/bancas")
+async def minhas_bancas(current_user=Depends(get_current_user), db: AsyncSession = Depends(get_auth_db)):
+    """Bancas em que a pessoa pode entrar (para trocar sem sair). Só nomes e funções da própria pessoa."""
+    if _role(current_user) == UserRole.ADMIN_GERAL.value:
+        return {"atual": current_user.tenant_id, "bancas": []}
+    user = await _minha_conta(db, current_user)
+    return {"atual": current_user.tenant_id, "bancas": _bancas_json(await vinculos.bancas_da_pessoa(user))}
+
+
+class TrocaBancaBody(BaseModel):
+    tenant_id: int
+
+
+@router.post("/trocar-banca", dependencies=[Depends(rate_limit(20, 60, "trocar-banca"))])
+async def trocar_banca(body: TrocaBancaBody, request: Request, token: str = Depends(oauth2_scheme),
+                       current_user=Depends(get_current_user), db: AsyncSession = Depends(get_auth_db)):
+    """Entra em outra banca da pessoa: novo acesso só daquela banca; o acesso atual é encerrado."""
+    if _role(current_user) == UserRole.ADMIN_GERAL.value:
+        raise HTTPException(status_code=400, detail="O administrador geral escolhe o cliente no topo da tela.")
+    user = await _minha_conta(db, current_user)
+    banca = next((b for b in await vinculos.bancas_da_pessoa(user) if b.tenant_id == body.tenant_id), None)
+    if banca is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Você não tem acesso a essa banca.")
+    sid_atual = decode_token_payload(token).get("sid")
+    resposta = await _acesso_na_banca(user, banca, request)
+    if sid_atual:
+        await sessoes.encerrar(sid_atual, user.id, "troca_de_banca")
+    return resposta
 
 
 # --------------------------------------------------------------------------- acessos (sessões) da própria pessoa

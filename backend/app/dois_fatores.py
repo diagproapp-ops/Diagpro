@@ -29,6 +29,7 @@ VALIDADE_PASSE = timedelta(minutes=5)
 SCOPE_VERIFICAR = "2fa"
 SCOPE_CADASTRO = "2fa_cadastro"
 SCOPE_TROCA_SENHA = "troca_senha"
+SCOPE_ESCOLHER_BANCA = "escolher_banca"  # 2FA ok; a pessoa trabalha para mais de uma banca
 SESSAO_MAXIMA_SEGUNDOS = 12 * 3600  # mesmo em uso contínuo, depois disso precisa entrar de novo
 QTD_CODIGOS_RECUPERACAO = 10
 

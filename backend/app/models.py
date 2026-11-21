@@ -1,6 +1,6 @@
 # backend/app/models.py (VERSÃO FINAL COMPLETA)
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, computed_field
 from typing import Optional, List, Union, Dict, Any
 from datetime import datetime, date
 
@@ -218,9 +218,16 @@ class User(BaseModel):
     totp_ativo: Optional[bool] = None  # só o status; o segredo nunca sai da API
     role: str
     tenant_id: Optional[int] = None
+    # nesta banca a pessoa é de OUTRA banca de origem (vínculo): só ela/origem alteram os dados pessoais
+    outra_banca: Optional[bool] = None
 
     class Config:
         from_attributes = True
+
+    @computed_field
+    @property
+    def tem_foto(self) -> bool:
+        return bool(self.avatar_url)
 
     @field_serializer("avatar_url")
     def _serializar_arquivos(self, value):

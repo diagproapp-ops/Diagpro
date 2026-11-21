@@ -59,9 +59,10 @@ async def autor_id(db: AsyncSession, q: QuestoesBanco) -> int | None:
 
 async def revisores_da_banca(db: AsyncSession, tenant_id: int) -> list[int]:
     """Revisores ativos da banca; se não houver, os administradores (alguém precisa receber)."""
-    usuarios = (await db.execute(select(User).where(User.tenant_id == tenant_id, User.is_active.is_(True)))).scalars().all()
-    revisores = [u.id for u in usuarios if u.role == UserRole.REVISOR.value]
-    return revisores or [u.id for u in usuarios if u.role == UserRole.ADMIN.value]
+    from backend.app import vinculos  # quem é da banca ou tem vínculo ativo com ela (revisores atendem várias)
+    usuarios = await vinculos.usuarios_da_banca(db, tenant_id)
+    revisores = [u.id for u, role in usuarios if role == UserRole.REVISOR.value]
+    return revisores or [u.id for u, role in usuarios if role == UserRole.ADMIN.value]
 
 
 def _role(user) -> str:
@@ -89,7 +90,7 @@ async def enviar_para_revisao(db: AsyncSession, q: QuestoesBanco, user, mensagem
         await revisores_da_banca(db, q.tenant_id), "revisao_recebida",
         f"Questão {q.codigo_curto_questao or ''} aguardando revisão".strip(),
         f"{user.username} enviou a questão {q.codigo_curto_questao or ''} para revisão.",
-        "/revisao")
+        "/revisao", tenant_id=q.tenant_id)
 
 
 async def decisao_do_revisor(db: AsyncSession, q: QuestoesBanco, status: str, revisor_nome: str) -> None:
@@ -101,12 +102,12 @@ async def decisao_do_revisor(db: AsyncSession, q: QuestoesBanco, status: str, re
     codigo = q.codigo_curto_questao or ""
     if status == APROVADA:
         await notificacoes.notificar(autor, "revisao_aprovada", f"Questão {codigo} aprovada",
-                                     f"{revisor_nome} aprovou a questão {codigo}.", link)
+                                     f"{revisor_nome} aprovou a questão {codigo}.", link, tenant_id=q.tenant_id)
     elif status in (AJUSTES, REPROVADA):
         acao = "pediu ajustes na" if status == AJUSTES else "reprovou a"
         await notificacoes.notificar(autor, "revisao_devolvida", f"Questão {codigo} voltou da revisão",
                                      f"{revisor_nome} {acao} questão {codigo}. Veja as observações na tela da questão, "
-                                     "corrija e envie de novo para revisão.", link)
+                                     "corrija e envie de novo para revisão.", link, tenant_id=q.tenant_id)
 
 
 def reabrir_se_aprovada(db: AsyncSession, q: QuestoesBanco, usuario: str) -> bool:

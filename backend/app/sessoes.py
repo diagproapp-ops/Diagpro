@@ -115,11 +115,15 @@ async def encerrar(sid: str, usuario_id: int, motivo: str) -> bool:
     return r.rowcount > 0
 
 
-async def encerrar_do_usuario(usuario_id: int, motivo: str, exceto: str | None = None) -> int:
+async def encerrar_do_usuario(usuario_id: int, motivo: str, exceto: str | None = None,
+                              tenant_id: int | None = None) -> int:
+    """tenant_id = só os acessos àquela banca (vínculo desativado/removido por uma banca que não é a de origem)."""
     async with PlatformSessionLocal() as db:
         q = update(Sessao).where(Sessao.usuario_id == usuario_id, Sessao.encerrada_em.is_(None))
         if exceto:
             q = q.where(Sessao.id != exceto)
+        if tenant_id is not None:
+            q = q.where(Sessao.tenant_id == tenant_id)
         r = await db.execute(q.values(encerrada_em=datetime.utcnow(), motivo_encerramento=motivo))
         await db.commit()
     if r.rowcount:

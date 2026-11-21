@@ -183,6 +183,7 @@ ENCRYPTED: dict[str, dict[str, str]] = {
     "sessoes": {"detalhes": "json"},
     "versoes_questao": {"autor": "text", "snapshot": "json"},
     "registros_lgpd": {"detalhes": "json"},
+    "convites": dict.fromkeys(["email", "nome"], "text"),
     "entregas": {"arquivo": "text", "detalhes": "json"},
     "analises_prova": {"resultado": "json"},
     "recursos": dict.fromkeys(["protocolo", "argumentacao", "parecer"], "text"),
@@ -367,7 +368,11 @@ def _decrypt_instance(obj, context) -> None:
     if not info.get("platform"):
         expected = info.get("tenant_id")
         row_tid = getattr(obj, "tenant_id", None)
-        if table == "tenants" or expected is None or row_tid != expected:
+        # exceção única: a identidade (users) de quem tem vínculo com a banca da sessão. A lista é lida sob o RLS
+        # da própria banca ao abrir o contexto (database.set_tenant_context); decifra com a chave da origem.
+        vinculado = (table == "users" and row_tid is not None and expected is not None
+                     and getattr(obj, "id", None) in info.get("membros_outra_banca", ()))
+        if table == "tenants" or expected is None or (row_tid != expected and not vinculado):
             raise FieldCryptoError(
                 f"Linha de {table} fora do tenant da sessão: carregamento bloqueado (possível adulteração de contexto)."
             )

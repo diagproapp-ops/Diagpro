@@ -3,6 +3,7 @@ import ReCAPTCHA from 'react-google-recaptcha';
 import { useAuth } from '../contexts/AuthContext';
 import DoisFatoresDialog from '../components/DoisFatoresDialog';
 import TrocarSenhaDialog from '../components/TrocarSenhaDialog';
+import EscolherBancaDialog, { BancaDaPessoa } from '../components/usuarios/EscolherBancaDialog';
 import DiagProLogo, { DiagProIcon } from '../components/DiagProLogo';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -246,6 +247,8 @@ export default function LoginPage() {
   const [passe2fa, setPasse2fa] = useState<{ etapa: '2fa' | 'cadastro_2fa'; token_2fa: string } | null>(null);
   // troca obrigatória de senha (provisória/vencida/fraca), pedida depois do 2FA
   const [passeTroca, setPasseTroca] = useState<string | null>(null);
+  // quem trabalha para mais de uma banca escolhe em qual entrar (depois do 2FA)
+  const [passeBanca, setPasseBanca] = useState<{ token_2fa: string; bancas: BancaDaPessoa[] } | null>(null);
   // aviso de sessão encerrada (inatividade, 12 h ou token vencido)
   useEffect(() => {
     const motivo = new URLSearchParams(window.location.search).get('sessao');
@@ -258,9 +261,16 @@ export default function LoginPage() {
       setPasseTroca(dados.token_2fa);
       return;
     }
+    if (dados?.etapa === 'escolher_banca') {
+      setPasse2fa(null);
+      setPasseTroca(null);
+      setPasseBanca({ token_2fa: dados.token_2fa, bancas: dados.bancas || [] });
+      return;
+    }
     await concluirLogin(dados);
     setPasse2fa(null);
     setPasseTroca(null);
+    setPasseBanca(null);
     navigate('/dashboard');
   };
   const recaptchaRef = useRef<ReCAPTCHA>(null);
@@ -757,6 +767,20 @@ export default function LoginPage() {
           onConcluido={entrarComAcesso}
           onCancelar={(mensagem) => {
             setPasse2fa(null);
+            setPassword('');
+            if (mensagem) setError(mensagem);
+            try { recaptchaRef.current?.reset(); } catch (_) {}
+            setRecaptchaToken(null);
+          }}
+        />
+      )}
+      {passeBanca && (
+        <EscolherBancaDialog
+          token2fa={passeBanca.token_2fa}
+          bancas={passeBanca.bancas}
+          onConcluido={entrarComAcesso}
+          onCancelar={(mensagem) => {
+            setPasseBanca(null);
             setPassword('');
             if (mensagem) setError(mensagem);
             try { recaptchaRef.current?.reset(); } catch (_) {}

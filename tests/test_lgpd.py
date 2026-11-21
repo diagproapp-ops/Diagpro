@@ -14,6 +14,10 @@ from backend.app.rate_limit import reset_rate_limits
 from backend.app.roles import UserRole
 from tests.conftest import auth_headers
 
+# só o administrador geral cria conta direto (na banca, a pessoa se cadastra pelo convite)
+def _ag1():
+    return {**auth_headers("Victor Hugo", UserRole.ADMIN_GERAL), "X-Tenant-Id": "1"}
+
 
 async def _usuario(nome):
     async with PlatformSessionLocal() as s:
@@ -52,7 +56,7 @@ async def test_lgpd_terms_export_anonymize_records_and_retention(async_client):
         assert prof.password_hash not in texto
 
         # 3) anonimização: só administrador da banca, nunca de si mesmo, irreversível
-        r = await async_client.post("/users/", headers=a1, json={"username": "lgpd_alvo", "email": "alvo@example.com",
+        r = await async_client.post("/users/", headers=_ag1(), json={"username": "lgpd_alvo", "email": "alvo@example.com",
                                     "password": "Senha-Forte-2026!x", "role": "professor", "tenant_id": 1, "status": "ativo"})
         assert r.status_code in (200, 201), r.text
         alvo = await _usuario("lgpd_alvo")

@@ -145,6 +145,48 @@ class RegistroLGPD(Base):
     detalhes = Column(Ciphertext, nullable=True)
 
 
+class VinculoBanca(Base):
+    """
+    Pessoa que trabalha para uma banca que NÃO é a de origem dela (professores e revisores atendem várias).
+    A banca de origem (users.tenant_id) não tem linha aqui: o vínculo com ela é o próprio cadastro.
+    Cada banca aprova, muda a função e desativa só o próprio vínculo; os dados pessoais são da pessoa.
+    """
+    __tablename__ = "vinculos_banca"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default="pendente")  # pendente | ativo | inativo
+    criado_em = Column(DateTime, nullable=False)
+    convidado_por = Column(Integer, nullable=True)
+    aprovado_por = Column(Integer, nullable=True)
+    aprovado_em = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("tenant_id", "user_id", name="uq_vinculos_banca_tenant_user"),)
+
+
+class Convite(Base):
+    """
+    Link de uso único enviado pelo administrador: a pessoa se cadastra com os próprios dados (inclusive senha e
+    foto) ou, se já tem conta, aceita o vínculo; tipo 'senha' = link para criar uma nova senha.
+    Só o hash do token fica no banco; e-mail e nome cifrados.
+    """
+    __tablename__ = "convites"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    tipo = Column(String(20), nullable=False, default="cadastro")  # cadastro | senha
+    email = Column(Ciphertext, nullable=False)
+    nome = Column(Ciphertext, nullable=True)
+    role = Column(String(30), nullable=True)
+    user_id = Column(Integer, nullable=True)  # tipo 'senha': de quem é a senha
+    criado_por = Column(Integer, nullable=True)
+    criado_em = Column(DateTime, nullable=False)
+    expira_em = Column(DateTime, nullable=False)
+    usado_em = Column(DateTime, nullable=True)
+    cancelado_em = Column(DateTime, nullable=True)
+
+
 class Entrega(Base):
     """Pacote de prova entregue por link com código, validade e limite de downloads (arquivo cifrado)."""
     __tablename__ = "entregas"

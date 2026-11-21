@@ -102,7 +102,8 @@ async def painel_banca(db: AsyncSession = Depends(get_tenant_db), current_user=D
     entregas_ativas = sum(1 for e in (await db.execute(select(Entrega).where(Entrega.tenant_id == t, Entrega.encerrada_em.is_(None)))).scalars()
                           if e.expira_em > datetime.utcnow() and e.downloads < e.max_downloads)
     ia_30 = (await db.execute(select(func.count(UsoIA.id)).where(UsoIA.tenant_id == t, UsoIA.criado_em >= desde))).scalar_one()
-    papeis = Counter(u.role for u in (await db.execute(select(User).where(User.tenant_id == t, User.is_active.is_(True)))).scalars())
+    from backend.app import vinculos
+    papeis = Counter(role for _u, role in await vinculos.usuarios_da_banca(db, t))
     por_evento = []
     for e in eventos:
         cts = [c for c in conteudos if c.evento_id == e.id_evento]

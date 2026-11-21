@@ -57,8 +57,11 @@ def validar_preferencias(dados: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- criar aviso
-async def notificar(usuario_id: int, tipo: str, titulo: str, mensagem: str, link: str | None = None) -> None:
-    """Cria o aviso. Nunca derruba quem chamou: falha vira log (sem o conteúdo)."""
+async def notificar(usuario_id: int, tipo: str, titulo: str, mensagem: str, link: str | None = None,
+                    tenant_id: int | None = None) -> None:
+    """Cria o aviso. Nunca derruba quem chamou: falha vira log (sem o conteúdo).
+    tenant_id = banca do trabalho (quem atende várias bancas vê o aviso quando entra nela; o assunto de uma
+    banca nunca fica guardado em outra). Sem ele: banca de origem da pessoa (avisos da conta)."""
     if tipo not in TIPOS:
         raise ValueError(f"tipo de aviso desconhecido: {tipo}")
     if link and not link.startswith("/"):
@@ -72,7 +75,8 @@ async def notificar(usuario_id: int, tipo: str, titulo: str, mensagem: str, link
                 return
             quer_email = email_ligado and bool(usuario.email) and preferencias_de(usuario).get(tipo, False)
             db.add(Notificacao(
-                tenant_id=usuario.tenant_id, usuario_id=usuario.id, tipo=tipo, criado_em=datetime.utcnow(),
+                tenant_id=tenant_id if tenant_id is not None else usuario.tenant_id, usuario_id=usuario.id, tipo=tipo,
+                criado_em=datetime.utcnow(),
                 conteudo={"titulo": titulo[:200], "mensagem": mensagem[:2000], "link": link},
                 email_estado="pendente" if quer_email else "nao_enviar", email_tentativas=0,
             ))
@@ -81,9 +85,10 @@ async def notificar(usuario_id: int, tipo: str, titulo: str, mensagem: str, link
         logger.error("Falha ao criar aviso %s para o usuário %s: %s", tipo, usuario_id, type(exc).__name__)
 
 
-async def notificar_varios(usuario_ids, tipo: str, titulo: str, mensagem: str, link: str | None = None) -> None:
+async def notificar_varios(usuario_ids, tipo: str, titulo: str, mensagem: str, link: str | None = None,
+                           tenant_id: int | None = None) -> None:
     for uid in dict.fromkeys(usuario_ids):
-        await notificar(uid, tipo, titulo, mensagem, link)
+        await notificar(uid, tipo, titulo, mensagem, link, tenant_id=tenant_id)
 
 
 # --------------------------------------------------------------------------- e-mail

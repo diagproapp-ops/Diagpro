@@ -168,15 +168,15 @@ async def delete_conteudo(
 
 # Função auxiliar para buscar id do professor pelo nome
 async def get_professor_id_by_name(prof_name: str, db: AsyncSession, tenant_id: int) -> int | None:
-    result = await db.execute(
-        select(DBUser.id)
-        .where(
-            blind_eq(DBUser.full_name, prof_name, tenant_id),
-            DBUser.role == "professor",
-            DBUser.tenant_id == tenant_id
-        )
-    )
-    return result.scalar_one_or_none()
+    """Professor ativo da banca (origem ou vínculo) com esse nome. Compara o nome decifrado: o índice cego do
+    nome é por banca de origem, então não serve para quem veio de outra banca."""
+    from backend.app import vinculos
+    alvo = " ".join((prof_name or "").split()).casefold()
+    if not alvo:
+        return None
+    achados = [u.id for u, role in await vinculos.usuarios_da_banca(db, tenant_id, roles={"professor"})
+               if " ".join((u.full_name or "").split()).casefold() == alvo]
+    return achados[0] if len(achados) == 1 else None
 
 # IMPORTAÇÃO via CSV
 @router.post("/eventos/{evento_id}/conteudos/csv", response_model=ImportResult)

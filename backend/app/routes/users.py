@@ -24,7 +24,8 @@ from uuid import uuid4
 import logging
 from datetime import datetime
 
-from backend.app import configuracoes, notificacoes, politica_senha, sessoes
+from backend.app import configuracoes, notificacoes, politica_senha, sessoes, vinculos
+from backend.app.db_models import VinculoBanca
 
 logger = logging.getLogger(__name__)
 
@@ -127,19 +128,8 @@ async def public_register(
     if existing_email.scalars().first():
         raise HTTPException(status_code=400, detail="Email já registrado")
 
-    # 3. Salva avatar (obrigatório, com validação de extensão e tamanho)
-    allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
-    _, ext = os.path.splitext((avatar_file.filename or "").lower())
-    if ext not in allowed_exts:
-        raise HTTPException(status_code=400, detail="Formato de imagem inválido. Use JPG, PNG ou WEBP.")
-    avatar_bytes = await avatar_file.read(5 * 1024 * 1024 + 1)
-    if len(avatar_bytes) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Imagem excede o limite de 5 MB.")
-    try:
-        # cifrado com a chave do tenant informado no cadastro; nunca em pasta pública
-        avatar_url = secure_files.store_bytes(avatar_bytes, tenant_id, ext)
-    except secure_files.SecureFileError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    # 3. Foto obrigatória (segurança: o administrador confere quem é antes de aprovar)
+    avatar_url = await guardar_foto(avatar_file, tenant_id)
 
     # 4. Cria usuário (sempre inativo até aprovação do administrador); senha dentro da política
     await _exigir_politica(password, username, email)
@@ -157,8 +147,8 @@ async def public_register(
         department=department,
         institution=institution,
         birth_date=birth_date,
-        status="inativo",
-        is_active=False,
+        status=vinculos.PENDENTE,  # entra só depois da aprovação do administrador da banca
+        is_active=True,
         notes=notes,
         address=address,
         avatar_url=avatar_url,
@@ -174,6 +164,43 @@ async def public_register(
     await db.commit()
     await db.refresh(new_user)
     return {"ok": True, "msg": "Cadastro enviado! Aguarde a aprovação do administrador."}
+
+# ------------ FOTO ------------
+FOTO_MAX_BYTES = 5 * 1024 * 1024
+
+
+def preparar_foto(dados: bytes) -> bytes:
+    """Regrava a foto como JPEG (sem EXIF/GPS, no máx. 800 px): o que fica guardado é só a imagem."""
+    from io import BytesIO
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    if not dados or len(dados) > FOTO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Envie uma foto de até 5 MB.")
+    try:
+        img = Image.open(BytesIO(dados))
+        if img.width * img.height > 40_000_000:
+            raise HTTPException(status_code=400, detail="Foto grande demais.")
+        img = ImageOps.exif_transpose(img).convert("RGB")
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        raise HTTPException(status_code=400, detail="Arquivo de foto inválido. Use JPG, PNG ou WEBP.")
+    if min(img.size) < 80:
+        raise HTTPException(status_code=400, detail="Foto pequena demais: o rosto precisa aparecer com nitidez.")
+    img.thumbnail((800, 800))
+    saida = BytesIO()
+    img.save(saida, format="JPEG", quality=85)
+    return saida.getvalue()
+
+
+async def guardar_foto(arquivo: UploadFile | None, tenant_id: int | None) -> str:
+    """Foto obrigatória: valida, limpa e guarda cifrada com a chave da banca de origem."""
+    if arquivo is None:
+        raise HTTPException(status_code=400, detail="A foto é obrigatória.")
+    dados = await arquivo.read(FOTO_MAX_BYTES + 1)
+    try:
+        return secure_files.store_bytes(preparar_foto(dados), tenant_id, ".jpg")
+    except secure_files.SecureFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 
 # ------------ ARQUIVOS ------------
 
@@ -215,17 +242,38 @@ async def _exigir_politica(senha: str, username: str, email: str) -> dict:
 async def _buscar_usuario_gerenciavel(db: AsyncSession, user_id: int, admin_user) -> DBUser:
     """
     Retorna o usuário-alvo se o admin puder gerenciá-lo:
-    - admin geral gerencia qualquer usuário;
-    - admin de cliente só gerencia usuários do próprio cliente e nunca um admin geral.
+    - admin geral na visão global gerencia qualquer usuário;
+    - na banca: quem é da banca (origem) ou tem vínculo com ela; nunca um admin geral.
     Responde 404 para não revelar usuários de outros clientes.
     """
     query = select(DBUser).filter(DBUser.id == user_id)
-    if not _is_admin_geral(admin_user):
-        query = query.where(DBUser.tenant_id == admin_user.tenant_id)
+    if not (_is_admin_geral(admin_user) and admin_user.tenant_id is None):
+        query = query.where(vinculos.membros_da_banca(admin_user.tenant_id))
     user = (await db.execute(query)).scalars().first()
     if not user or (user.role == UserRole.ADMIN_GERAL.value and not _is_admin_geral(admin_user)):
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     return user
+
+
+def _de_outra_banca(user, admin_user) -> bool:
+    """A pessoa é de outra banca de origem (só tem vínculo com esta): os dados pessoais não são desta banca."""
+    if _is_admin_geral(admin_user) and admin_user.tenant_id is None:
+        return False
+    return user.tenant_id != admin_user.tenant_id
+
+
+async def _vinculo(db: AsyncSession, user, admin_user) -> VinculoBanca | None:
+    return (await db.execute(select(VinculoBanca).where(
+        VinculoBanca.user_id == user.id, VinculoBanca.tenant_id == admin_user.tenant_id))).scalars().first()
+
+
+def _exigir_foto(user) -> None:
+    if not user.avatar_url:
+        raise HTTPException(status_code=400, detail="Sem foto: a pessoa precisa enviar a foto antes de ser aprovada.")
+
+
+def _anonimizado(user) -> bool:
+    return (user.username or "").startswith("anonimizado-")
 
 # ------------ ROTA DE PERFIL ------------
 
@@ -233,14 +281,49 @@ async def _buscar_usuario_gerenciavel(db: AsyncSession, user_id: int, admin_user
 async def get_me(current_user: DBUser = Depends(get_current_user)):
     return current_user
 
+
+@router.put("/me/foto", response_model=PydanticUser, dependencies=[Depends(rate_limit(10, 60, "minha-foto"))])
+async def enviar_minha_foto(
+    foto: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_auth_db),
+):
+    """A própria pessoa envia/troca a foto (obrigatória). Guardada cifrada com a chave da banca de origem."""
+    query = select(DBUser).where(blind_eq(DBUser.username, current_user.username))
+    if _is_admin_geral(current_user):
+        query = query.where(DBUser.tenant_id.is_(None))
+    else:
+        query = query.where(DBUser.tenant_id.is_not(None))
+    user = (await db.execute(query)).scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    user.avatar_url = await guardar_foto(foto, user.tenant_id)
+    await db.commit()
+    await db.refresh(user)
+    out = _serialize_user(user)
+    out.role, out.tenant_id, out.status = current_user.role, current_user.tenant_id, current_user.status
+    return out
+
 # ------------ ROTAS DE ADMIN ------------
 
-def _serialize_user(user_orm: DBUser) -> PydanticUser:
+# de outra banca: esta banca vê só o necessário para trabalhar com a pessoa (nada financeiro nem documento)
+_CAMPOS_SO_DA_ORIGEM = ("cpf", "pix_key", "banco", "agencia", "conta_corrente", "address", "birth_date", "notes",
+                        "terms_acceptance")
+
+
+def _serialize_user(user_orm: DBUser, papel: tuple[str, str, bool] | None = None, tenant_id: int | None = None) -> PydanticUser:
     user_out = PydanticUser.from_orm(user_orm)
     for field in PII_FIELDS:
         val = getattr(user_out, field, None)
         if val:
             setattr(user_out, field, safe_decrypt_pii(val))
+    if papel is not None:
+        role, status_banca, origem = papel
+        user_out.role, user_out.status, user_out.outra_banca = role, status_banca, not origem
+        user_out.tenant_id = tenant_id
+        if not origem:
+            for campo in _CAMPOS_SO_DA_ORIGEM:
+                setattr(user_out, campo, None)
     return user_out
 
 
@@ -251,11 +334,13 @@ async def list_users(
 ):
     query = select(DBUser).order_by(DBUser.tenant_id.nulls_first(), DBUser.id)
     # Admin geral na visão global vê os usuários de todos os clientes; com um cliente escolhido (ou sendo
-    # usuário de cliente), só os daquele cliente — o RLS da sessão também garante isso.
-    if not (_is_admin_geral(admin_user) and admin_user.tenant_id is None):
-        query = query.where(DBUser.tenant_id == admin_user.tenant_id)
-    users = (await db.execute(query)).scalars().all()
-    return [_serialize_user(u) for u in users]
+    # usuário de cliente), só quem é da banca ou tem vínculo com ela — o RLS da sessão também garante isso.
+    if _is_admin_geral(admin_user) and admin_user.tenant_id is None:
+        return [_serialize_user(u) for u in (await db.execute(query)).scalars().all()]
+    t = admin_user.tenant_id
+    lista = await vinculos.vinculos_da_banca(db, t)
+    users = (await db.execute(query.where(vinculos.membros_da_banca(t)))).scalars().all()
+    return [_serialize_user(u, vinculos.papel_e_status(u, lista, t), t) for u in users]
 
 @router.post("/", response_model=PydanticUser, status_code=status.HTTP_201_CREATED)
 async def create_user(
@@ -263,6 +348,10 @@ async def create_user(
     db: AsyncSession = Depends(get_tenant_db),
     admin_user: DBUser = Depends(get_admin_user)
 ):
+    # Na banca, ninguém cria conta com senha escolhida por outra pessoa: o administrador envia o convite e a
+    # pessoa se cadastra com os próprios dados, senha e foto (ver routes/convites.py).
+    if not _is_admin_geral(admin_user):
+        raise HTTPException(status_code=403, detail="Convide a pessoa por link: ela cria a própria senha e envia a foto.")
     existing_user = await db.execute(select(DBUser).filter(blind_eq(DBUser.username, user_data.username)))
     if existing_user.scalars().first():
         raise HTTPException(status_code=400, detail="Username já registado")
@@ -332,6 +421,42 @@ async def update_user(
         raise HTTPException(status_code=422, detail="Nenhum dado para atualizar.")
 
     update_data = user_data.dict(exclude_unset=True)
+    if update_data.get("password"):
+        # ninguém define a senha de outra pessoa: o administrador envia o link de nova senha
+        raise HTTPException(status_code=400, detail='A senha é criada pela própria pessoa: use "Enviar link de nova senha".')
+    update_data.pop("password", None)
+
+    if _de_outra_banca(user, admin_user):
+        # pessoa de outra banca de origem: aqui só se controla o vínculo (função e situação)
+        if set(update_data) - {"role", "status"}:
+            raise HTTPException(status_code=403, detail="Os dados pessoais desta pessoa são alterados por ela mesma. "
+                                                        "Aqui você muda só a função e a situação do vínculo.")
+        v = await _vinculo(db, user, admin_user)
+        if v is None:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        if update_data.get("role") is not None:
+            role = _normalizar_role(update_data["role"])
+            if role not in vinculos.PAPEIS_CONVIDAVEIS:
+                raise HTTPException(status_code=403, detail="Para quem é de outra banca: professor, revisor ou diagramador.")
+            v.role = role
+        novo = (update_data.get("status") or "").lower()
+        if novo:
+            if novo not in (vinculos.ATIVO, vinculos.INATIVO):
+                raise HTTPException(status_code=400, detail="Situação inválida.")
+            if novo == vinculos.ATIVO and v.status != vinculos.ATIVO:
+                _exigir_foto(user)
+                v.aprovado_por, v.aprovado_em = admin_user.id, datetime.utcnow()
+            v.status = novo
+        await db.commit()
+        if novo == vinculos.INATIVO:
+            await sessoes.encerrar_do_usuario(user.id, "vinculo_desativado", tenant_id=admin_user.tenant_id)
+        return _serialize_user(user, (v.role, v.status, False), admin_user.tenant_id)
+
+    novo_status = (update_data.get("status") or "").lower()
+    if novo_status == vinculos.ATIVO and (vinculos.status_origem(user) != vinculos.ATIVO or not user.is_active):
+        _exigir_foto(user)
+        if not user.is_active and not _anonimizado(user):
+            user.is_active = True  # aprovação de quem se cadastrou (cadastros antigos ficavam com a conta inativa)
 
     # client_id = troca de cliente (tenant): permitido apenas ao admin geral
     novo_tenant = update_data.pop("client_id", None)
@@ -344,12 +469,7 @@ async def update_user(
         user.tenant_id = int(novo_tenant)
 
     for key, value in update_data.items():
-        if key == "password":
-            if value:
-                # redefinida pelo administrador: provisória (troca no próximo login)
-                cfg = await _exigir_politica(value, user.username, user.email or "")
-                politica_senha.aplicar_nova_senha(user, value, provisoria=True, cfg=cfg)
-        elif key == "role":
+        if key == "role":
             if value is not None:
                 _verificar_role_permitida(admin_user, value)
                 user.role = _normalizar_role(value)
@@ -361,6 +481,8 @@ async def update_user(
             setattr(user, key, value)
     await db.commit()
     await db.refresh(user)
+    if admin_user.tenant_id is not None:
+        return _serialize_user(user, vinculos.papel_e_status(user, {}, admin_user.tenant_id), admin_user.tenant_id)
     return _serialize_user(user)
 
 @router.post("/{user_id}/2fa/resetar", status_code=status.HTTP_204_NO_CONTENT)
@@ -376,6 +498,8 @@ async def resetar_2fa(
     user = await _buscar_usuario_gerenciavel(db, user_id, admin_user)
     if user.id == admin_user.id:
         raise HTTPException(status_code=403, detail="Peça a outro administrador para resetar o seu 2FA.")
+    if _de_outra_banca(user, admin_user):
+        raise HTTPException(status_code=403, detail="O 2FA desta pessoa só pode ser resetado pela banca de origem dela.")
     user.totp_secret = None
     user.totp_ativo = False
     user.totp_ultimo_passo = None
@@ -396,7 +520,9 @@ async def desconectar_usuario(
 ):
     """Administrador desconecta todos os acessos de alguém da banca (ex.: computador perdido, saída da equipe)."""
     user = await _buscar_usuario_gerenciavel(db, user_id, admin_user)
-    n = await sessoes.encerrar_do_usuario(user.id, "encerrada_pelo_administrador")
+    # de outra banca: derruba só os acessos a ESTA banca
+    tenant = admin_user.tenant_id if _de_outra_banca(user, admin_user) else None
+    n = await sessoes.encerrar_do_usuario(user.id, "encerrada_pelo_administrador", tenant_id=tenant)
     logger.warning("Administrador %s desconectou o usuário %s (%s acesso(s))", admin_user.id, user.id, n)
     return {"encerradas": n}
 
@@ -410,6 +536,18 @@ async def delete_user(
     user = await _buscar_usuario_gerenciavel(db, user_id, admin_user)
     if user.id == admin_user.id:
         raise HTTPException(status_code=400, detail="Você não pode excluir o próprio usuário.")
+    if _de_outra_banca(user, admin_user):
+        # de outra banca: remove só o vínculo com esta banca (a conta continua sendo da pessoa)
+        v = await _vinculo(db, user, admin_user)
+        if v is not None:
+            await db.delete(v)
+            await db.commit()
+        await sessoes.encerrar_do_usuario(user.id, "vinculo_removido", tenant_id=admin_user.tenant_id)
+        return None
+    if not _is_admin_geral(admin_user):
+        if await vinculos.trabalha_para_outras_bancas(user.id):
+            raise HTTPException(status_code=409, detail="Esta pessoa também trabalha para outras bancas: desative o "
+                                                        "acesso dela aqui em vez de excluir a conta.")
     await db.delete(user)
     await db.commit()
     return None

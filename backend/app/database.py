@@ -118,6 +118,10 @@ async def set_tenant_context(session: AsyncSession, tenant_id: int) -> None:
         text("SELECT set_config('app.current_tenant_id', :tid, true)"),
         {"tid": str(int(tenant_id))},
     )
+    # quem é de outra banca de origem e tem vínculo com esta (o RLS de vinculos_banca só devolve os desta banca):
+    # a camada de cifra só aceita carregar a identidade dessas pessoas fora do tenant da sessão
+    linhas = await session.execute(text("SELECT user_id FROM vinculos_banca"))
+    session.info["membros_outra_banca"] = frozenset(r[0] for r in linhas)
 
 
 async def get_db():

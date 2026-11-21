@@ -42,7 +42,15 @@ DECLARE
         'recursos',
         'decisoes_recurso',
         'vinculos_banca',
-        'convites'
+        'convites',
+        'fin_config',
+        'fin_contratos',
+        'fin_parcelas',
+        'fin_ajustes',
+        'fin_documentos',
+        'fin_propostas',
+        'fin_termos',
+        'fin_faturas'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

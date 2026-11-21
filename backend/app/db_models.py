@@ -567,5 +567,158 @@ class HistoricoRevisaoQuestao(Base):
     tenant = relationship("Tenant")
 
 
+# ============================================================================ FINANCEIRO
+# Dois lados que nunca se misturam:
+#  - BANCA x PROFESSOR (fin_config, fin_contratos, fin_parcelas, fin_ajustes, fin_documentos escopo 'professor'):
+#    só a banca (administrador) e o próprio professor. O administrador geral NÃO tem acesso.
+#  - PLATAFORMA x BANCA (planos_banca, fin_propostas, fin_termos, fin_faturas, fin_documentos escopo 'plataforma').
+# Valores, textos e arquivos ficam cifrados (JSON `dados`); só estados, datas e ids ficam em claro.
+
+class FinConfig(Base):
+    """Padrões da banca: tabela de preços, cronograma de parcelas, modelos de contrato e termo de cessão."""
+    __tablename__ = "fin_config"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, unique=True, index=True)
+    dados = Column(Ciphertext, nullable=False)
+    atualizado_em = Column(DateTime, nullable=False)
+    atualizado_por = Column(Integer, nullable=True)
+
+
+class FinContrato(Base):
+    """Contrato de elaboração: um professor, um evento, a negociação dele (preços, quantidades, prazos)."""
+    __tablename__ = "fin_contratos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    professor_id = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    evento_id = Column(String, nullable=False, index=True)
+    numero = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default="rascunho")  # rascunho|enviado|aceito|recusado|encerrado|cancelado
+    modalidade = Column(String(20), nullable=False, default="por_questao")  # por_questao | valor_fechado
+    dados = Column(Ciphertext, nullable=False)        # preços, quantidades, valor fechado, prazos, observações
+    documento_ref = Column(Ciphertext, nullable=True)  # PDF do contrato + termo (arquivo cifrado)
+    documento_sha256 = Column(String(64), nullable=True)
+    aceite = Column(Ciphertext, nullable=True)         # quem, quando, IP, navegador, hash, código
+    codigo_verificacao = Column(String(20), nullable=True, index=True)
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+    enviado_em = Column(DateTime, nullable=True)
+    respondido_em = Column(DateTime, nullable=True)
+    encerrado_em = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("tenant_id", "numero", name="uq_fin_contratos_tenant_numero"),)
+
+
+class FinParcela(Base):
+    """Parcela do contrato com gatilho: entrega aprovada, recursos respondidos, data ou manual."""
+    __tablename__ = "fin_parcelas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    contrato_id = Column(Integer, ForeignKey("fin_contratos.id", ondelete="CASCADE"), nullable=False, index=True)
+    ordem = Column(Integer, nullable=False)
+    gatilho = Column(String(30), nullable=False)   # entrega_aprovada | recursos_respondidos | data | manual
+    status = Column(String(20), nullable=False, default="prevista")  # prevista|liberada|paga|confirmada|cancelada
+    data_prevista = Column(Date, nullable=True)
+    dados = Column(Ciphertext, nullable=False)     # descrição, percentual/valor, valor liberado/pago, justificativas
+    liberada_em = Column(DateTime, nullable=True)
+    paga_em = Column(DateTime, nullable=True)
+    confirmada_em = Column(DateTime, nullable=True)
+
+
+class FinAjuste(Base):
+    """Desconto, acréscimo ou adiantamento com motivo, sempre numa parcela."""
+    __tablename__ = "fin_ajustes"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    contrato_id = Column(Integer, ForeignKey("fin_contratos.id", ondelete="CASCADE"), nullable=False, index=True)
+    parcela_id = Column(Integer, ForeignKey("fin_parcelas.id", ondelete="CASCADE"), nullable=False)
+    tipo = Column(String(20), nullable=False)      # desconto | acrescimo | adiantamento
+    dados = Column(Ciphertext, nullable=False)     # valor, motivo
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+
+
+class FinDocumento(Base):
+    """Arquivo do financeiro (cifrado): nota fiscal/RPA, comprovante, recibo, contrato, termo, proposta..."""
+    __tablename__ = "fin_documentos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    escopo = Column(String(20), nullable=False)    # professor | plataforma
+    tipo = Column(String(30), nullable=False)      # nota_fiscal|rpa|comprovante|recibo|contrato|termo|proposta|fatura|outro
+    contrato_id = Column(Integer, ForeignKey("fin_contratos.id", ondelete="CASCADE"), nullable=True, index=True)
+    parcela_id = Column(Integer, ForeignKey("fin_parcelas.id", ondelete="SET NULL"), nullable=True)
+    professor_id = Column(Integer, nullable=True)
+    referencia_id = Column(Integer, nullable=True)  # escopo plataforma: id da fatura/proposta/termo
+    dados = Column(Ciphertext, nullable=False)      # nome do arquivo, descrição
+    arquivo_ref = Column(Ciphertext, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    enviado_por = Column(Integer, nullable=True)
+    enviado_em = Column(DateTime, nullable=False)
+
+
+class PlanoBanca(Base):
+    """Catálogo de planos da plataforma DiagPro (não é dado de banca: sem tenant)."""
+    __tablename__ = "planos_banca"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    codigo = Column(String(40), nullable=False, unique=True)
+    nome = Column(String(100), nullable=False)
+    descricao = Column(Text, nullable=True)
+    valor_mensal = Column(Float, nullable=False, default=0.0)
+    valor_anual = Column(Float, nullable=False, default=0.0)
+    limite_eventos = Column(Integer, nullable=True)
+    limite_usuarios = Column(Integer, nullable=True)
+    limite_questoes = Column(Integer, nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True)
+    criado_em = Column(DateTime, nullable=False, default=datetime.now)
+
+
+class FinProposta(Base):
+    """Proposta comercial da plataforma para uma banca (com versões e aceite eletrônico)."""
+    __tablename__ = "fin_propostas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    numero = Column(String(30), nullable=False)
+    versao = Column(Integer, nullable=False, default=1)
+    status = Column(String(20), nullable=False, default="enviada")  # enviada|aceita|recusada|substituida|cancelada
+    dados = Column(Ciphertext, nullable=False)      # plano, valores, desconto, condições, motivo da recusa
+    validade = Column(Date, nullable=True)
+    documento_ref = Column(Ciphertext, nullable=True)
+    aceite = Column(Ciphertext, nullable=True)
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+    respondido_em = Column(DateTime, nullable=True)
+
+
+class FinTermo(Base):
+    """Contrato/termo da plataforma com a banca (contrato, termos de uso, LGPD, aditivo) com aceite eletrônico."""
+    __tablename__ = "fin_termos"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tipo = Column(String(20), nullable=False)       # contrato | termos_uso | lgpd | aditivo | outro
+    status = Column(String(20), nullable=False, default="pendente")  # pendente | aceito | recusado | cancelado
+    dados = Column(Ciphertext, nullable=False)      # título, descrição, motivo
+    documento_ref = Column(Ciphertext, nullable=False)
+    documento_sha256 = Column(String(64), nullable=False)
+    aceite = Column(Ciphertext, nullable=True)
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+    respondido_em = Column(DateTime, nullable=True)
+
+
+class FinFatura(Base):
+    """Fatura da plataforma para a banca."""
+    __tablename__ = "fin_faturas"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    numero = Column(String(30), nullable=False)
+    competencia = Column(String(7), nullable=False)  # AAAA-MM
+    vencimento = Column(Date, nullable=False)
+    status = Column(String(20), nullable=False, default="aberta")  # aberta|em_analise|paga|cancelada
+    dados = Column(Ciphertext, nullable=False)       # descrição, plano, valor, observações, forma de pagamento
+    criado_em = Column(DateTime, nullable=False)
+    criado_por = Column(Integer, nullable=True)
+    informada_em = Column(DateTime, nullable=True)   # banca enviou o comprovante
+    paga_em = Column(DateTime, nullable=True)
+
+
 # Liga a cifragem de campos a todos os modelos (ver backend/app/field_crypto.py)
 install_orm_encryption(Base)

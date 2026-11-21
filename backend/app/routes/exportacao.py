@@ -207,7 +207,8 @@ async def montar_prova_completa(evento, cargo, prova_montada, blocos_questoes, m
         company = company_result.scalar_one_or_none()
         if company:
             cargo_dict["company"] = {
-                "company_logo_path": company.company_logo_path or ""
+                "company_logo_path": company.company_logo_path or "",
+                "company_name": company.company_name or "",  # nome da banca na capa
             }
         else:
             cargo_dict["company"] = {"company_logo_path": ""}
@@ -931,6 +932,10 @@ def gerar_variacao_prova(evento, cargo, prova_montada, prova_dict, metadados_pro
     else:
         setattr(prova_dict, "identificador_prova", tipo_prova_nome)
     frase_para_capa = metadados_prova.get("frases_por_tipo_prova", {}).get(sufixo_tipo, "")
+    _pd = prova_dict if isinstance(prova_dict, dict) else {}
+    nome_banca = ((_pd.get("cargo") or {}).get("company") or {}).get("company_name") or ""
+    total_questoes = sum(len(b.get("questoes") or b.get("questions") or []) for b in (_pd.get("blocos_questoes") or [])
+                         if isinstance(b, dict))
     dados_para_capa = [montar_dados_capa(
         candidato={},
         cargo=cargo,
@@ -940,8 +945,8 @@ def gerar_variacao_prova(evento, cargo, prova_montada, prova_dict, metadados_pro
         tipo=sufixo_tipo,
         letra_tipo=tipo_letra,
         tempo_prova="",
-        quantidade_questoes="",
-        empresa="NOME DA BANCA",
+        quantidade_questoes=total_questoes or "",
+        empresa=nome_banca,
         qrcode="",
         outros=""
     )]

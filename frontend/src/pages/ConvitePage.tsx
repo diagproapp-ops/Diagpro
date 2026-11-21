@@ -134,10 +134,12 @@ const ConvitePage: React.FC = () => {
                   Para atuar como <b>{ROTULO_PAPEL[info.role || ''] || info.role}</b> · convite enviado para {info.email}.
                   Depois que você enviar, o administrador da banca confere e libera o acesso.
                 </Typography>
-                <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-                  <Button size="small" variant={modo === 'novo' ? 'contained' : 'outlined'} onClick={() => setModo('novo')}>Ainda não tenho conta</Button>
-                  <Button size="small" variant={modo === 'existente' ? 'contained' : 'outlined'} onClick={() => setModo('existente')}>Já uso o DiagPro em outra banca</Button>
-                </Stack>
+                {info.role !== 'administrador geral' && (
+                  <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+                    <Button size="small" variant={modo === 'novo' ? 'contained' : 'outlined'} onClick={() => setModo('novo')}>Ainda não tenho conta</Button>
+                    <Button size="small" variant={modo === 'existente' ? 'contained' : 'outlined'} onClick={() => setModo('existente')}>Já uso o DiagPro em outra banca</Button>
+                  </Stack>
+                )}
               </>
             )}
             <Divider sx={{ my: 2.5 }} />

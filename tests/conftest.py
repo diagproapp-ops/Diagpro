@@ -122,3 +122,27 @@ def auth_headers(username: str, role: UserRole | str, tenant_id: int | None = No
     payload["auth_time"] = int(__import__("time").time())
     token = create_access_token(payload)
     return {"Authorization": f"Bearer {token}"}
+
+
+EVENTO_TESTE = "c2438719-23aa-4f7d-8e0f-e6a310c10440"
+
+
+async def com_evento_liberado(client, username: str, role: UserRole | str, tenant_id: int,
+                              evento_id: str = EVENTO_TESTE, senha: str = "1234") -> dict[str, str]:
+    """Cabeçalho de uma sessão REAL (com sid) que já digitou a senha do evento (fila/revisão exigem)."""
+    from types import SimpleNamespace
+
+    from sqlalchemy import select as _select
+
+    from backend.app import sessoes
+    from backend.app.field_crypto import blind_eq
+    async with PlatformSessionLocal() as s:
+        uid = (await s.execute(_select(User.id).where(blind_eq(User.username, username)))).scalar_one()
+    sid = await sessoes.abrir(SimpleNamespace(id=uid, tenant_id=tenant_id), None, alertar=False)
+    role_val = role.value if isinstance(role, UserRole) else role
+    token = create_access_token({"sub": username, "role": role_val, "tenant_id": tenant_id, "mfa": True, "sid": sid,
+                                 "auth_time": int(__import__("time").time())})
+    h = {"Authorization": f"Bearer {token}"}
+    r = await client.post(f"/revisao/eventos/{evento_id}/liberar", headers=h, json={"senha": senha})
+    assert r.status_code == 200, r.text
+    return h

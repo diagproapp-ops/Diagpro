@@ -12,7 +12,7 @@ from backend.app import field_crypto as fc
 from backend.app.field_crypto import blind_eq
 from backend.app.db_models import Company, User
 from sqlalchemy import select, update
-from tests.conftest import auth_headers
+from tests.conftest import auth_headers, com_evento_liberado
 
 # só o administrador geral cria conta direto (na banca, a pessoa se cadastra pelo convite)
 def _ag1():
@@ -507,7 +507,7 @@ async def test_question_types_create_edit_review_and_professor_contents(async_cl
         return (b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
                 + ch(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + ch(b"IEND", b""))
 
-    h = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    h = await com_evento_liberado(async_client, "admin1", UserRole.ADMIN, 1)  # revisão: só com a senha do evento
     ev, ct = "c2438719-23aa-4f7d-8e0f-e6a310c10440", "ci-conteudo-1"
     base = f"/eventos/{ev}/conteudos/{ct}/questoes"
     alts = _json.dumps([{"letra": L, "texto": f"<p>{L}</p>", "correta": L == "A"} for L in "ABCDE"])

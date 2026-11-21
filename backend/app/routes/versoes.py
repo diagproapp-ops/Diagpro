@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app import versoes_questao as vq
+from backend.app import liberacao_evento
 from backend.app.auth import get_current_user
 from backend.app.db_models import Conteudo, Evento, QuestoesBanco, VersaoQuestao
 from backend.app.rate_limit import rate_limit
@@ -35,7 +36,7 @@ def _resumo(snapshot: dict) -> str:
     return t[:140] + ("…" if len(t) > 140 else "")
 
 
-@router.get("/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/versoes")
+@router.get("/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/versoes", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)])
 async def listar_versoes(evento_id: str, conteudo_id: str, id_questao: str, db: AsyncSession = Depends(get_tenant_db),
                          evento=Depends(evento_autorizado), current_user=Depends(get_current_user)):
     await _questao_do_evento(db, evento, conteudo_id, id_questao)
@@ -45,7 +46,7 @@ async def listar_versoes(evento_id: str, conteudo_id: str, id_questao: str, db: 
              "resumo": _resumo(v.snapshot or {})} for v in linhas]
 
 
-@router.get("/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/versoes/{versao}")
+@router.get("/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/versoes/{versao}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)])
 async def ver_versao(evento_id: str, conteudo_id: str, id_questao: str, versao: int, db: AsyncSession = Depends(get_tenant_db),
                      evento=Depends(evento_autorizado), current_user=Depends(get_current_user)):
     await _questao_do_evento(db, evento, conteudo_id, id_questao)

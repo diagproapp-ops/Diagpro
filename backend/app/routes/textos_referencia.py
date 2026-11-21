@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.app import secure_files
+from backend.app import liberacao_evento
 from backend.app.db_models import TextoReferenciaGeral
 from backend.app.models import TextoReferenciaOut
 from backend.app.security import get_tenant_db
@@ -28,7 +29,7 @@ def gerar_codigo_ref():
     return f"TR-{letras}{numeros}"
 
 @router.get(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=list[TextoReferenciaOut],
     summary="Listar textos de referência por evento e conteúdo"
 )
@@ -74,7 +75,7 @@ async def listar_textos_referencia(
     ]
 
 @router.get(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=TextoReferenciaOut,
     summary="Obter um texto de referência pelo ID"
 )
@@ -120,7 +121,7 @@ async def get_texto_referencia(
     )
 
 @router.post(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=TextoReferenciaOut,
     summary="Criar um novo texto de referência"
 )
@@ -218,7 +219,7 @@ async def criar_texto_referencia(
 
 # NOVO ENDPOINT PATCH PARA ATUALIZAR TEXTO DE REFERÊNCIA
 @router.patch(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=TextoReferenciaOut,
     summary="Atualizar um texto de referência"
 )
@@ -326,7 +327,7 @@ async def atualizar_texto_referencia(
     )
 
 @router.delete(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/textos-referencia/{id_texto_ref}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     summary="Deletar um texto de referência"
 )
 async def deletar_texto_referencia(

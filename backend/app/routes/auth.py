@@ -79,7 +79,7 @@ async def login_for_access_token(
 
     # conta ativa E ao menos uma banca com vínculo ativo (origem aprovada ou vínculo aprovado por outra banca)
     if _e_admin_geral(user):
-        liberado = user.is_active and (user.status or "").lower() != "inativo"
+        liberado = user.is_active and (user.status or "").lower() not in ("inativo", "pendente")
     else:
         liberado = bool(await vinculos.bancas_da_pessoa(user))
     if not liberado:
@@ -115,7 +115,7 @@ async def _usuario_do_passe(db: AsyncSession, payload: dict) -> DBUser:
     query = query.where(DBUser.tenant_id == int(tid)) if tid is not None else query.where(DBUser.tenant_id.is_(None))
     user = (await db.execute(query)).scalars().first()
     # a conta precisa estar ativa; a banca (origem ou vínculo) é conferida ao liberar o acesso
-    if not user or not user.is_active or (_e_admin_geral(user) and (user.status or "").lower() == "inativo"):
+    if not user or not user.is_active or (_e_admin_geral(user) and (user.status or "").lower() in ("inativo", "pendente")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário não encontrado ou inativo.")
     return user
 

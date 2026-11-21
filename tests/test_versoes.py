@@ -8,7 +8,7 @@ from backend.app.database import PlatformSessionLocal
 from backend.app.db_models import VersaoQuestao
 from backend.app.rate_limit import reset_rate_limits
 from backend.app.roles import UserRole
-from tests.conftest import auth_headers
+from tests.conftest import auth_headers, com_evento_liberado
 
 EV, CT = "c2438719-23aa-4f7d-8e0f-e6a310c10440", "ci-conteudo-1"
 BASE = f"/eventos/{EV}/conteudos/{CT}/questoes"
@@ -23,7 +23,7 @@ COMUM = {"tipo": "MULTIPLA_ESCOLHA", "indicacao_conteudo": "1", "enunciado": ENU
 @pytest.mark.asyncio
 async def test_question_versions_and_similar_questions(async_client):
     reset_rate_limits()
-    a1 = auth_headers("admin1", UserRole.ADMIN, tenant_id=1)
+    a1 = await com_evento_liberado(async_client, "admin1", UserRole.ADMIN, 1)  # fila/revisão: só com a senha do evento
     a2 = auth_headers("admin2", UserRole.ADMIN, tenant_id=2)
     hp = auth_headers("vhugo", UserRole.PROFESSOR, tenant_id=1)
     hd = auth_headers("vhugo1234", UserRole.DIAGRAMADOR, tenant_id=1)

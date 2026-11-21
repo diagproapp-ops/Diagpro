@@ -173,7 +173,7 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
             raise HTTPException(**_UNAUTHORIZED)
         ativo = user.is_active and papel[1] == "ativo"
     else:
-        ativo = user.is_active and (user.status is None or user.status.lower() != "inativo")
+        ativo = user.is_active and (user.status is None or user.status.lower() not in ("inativo", "pendente"))
     if not ativo:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

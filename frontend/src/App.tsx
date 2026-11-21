@@ -38,6 +38,7 @@ import AceiteTermos from './components/AceiteTermos';
 import DocumentoLegalPage from './pages/DocumentoLegalPage';
 import EntregaPublicaPage from './pages/EntregaPublicaPage';
 import ConvitePage from './pages/ConvitePage';
+import GuardaSenhaEvento from './components/SenhaEvento';
 import FotoObrigatoria from './components/usuarios/FotoObrigatoria';
 
 function App() {
@@ -101,13 +102,13 @@ function App() {
                     <Route path="/eventos/:eventId/conteudo" element={<ConteudoPage />} />
                     <Route path="/eventos/:eventId/conteudo/criar" element={<ConteudoFormPage />} />
                     <Route path="/eventos/:eventId/conteudo/editar/:conteudoId" element={<ConteudoEditPage />} />
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<ConteudoIniciarPage />} />
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<AdicionarTextoReferenciaPage />} /> {/* <-- NOVA ROTA */}
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/criar" element={<CriarQuestaoPage />} />
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/editar" element={<EditarQuestaoPage />} />
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/editar" element={<EditarTextoReferenciaPage />} />
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/revisar" element={<RevisarQuestaoPage />} />
-                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/revisar" element={<RevisaoTextoReferenciaPage />} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/iniciar" element={<GuardaSenhaEvento><ConteudoIniciarPage /></GuardaSenhaEvento>} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/adicionar" element={<GuardaSenhaEvento><AdicionarTextoReferenciaPage /></GuardaSenhaEvento>} /> {/* <-- NOVA ROTA */}
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/criar" element={<GuardaSenhaEvento><CriarQuestaoPage /></GuardaSenhaEvento>} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/editar" element={<GuardaSenhaEvento><EditarQuestaoPage /></GuardaSenhaEvento>} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/editar" element={<GuardaSenhaEvento><EditarTextoReferenciaPage /></GuardaSenhaEvento>} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/revisar" element={<GuardaSenhaEvento sempre><RevisarQuestaoPage /></GuardaSenhaEvento>} />
+                    <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/revisar" element={<GuardaSenhaEvento sempre><RevisaoTextoReferenciaPage /></GuardaSenhaEvento>} />
                     <Route path="/eventos/:eventId/provas" element={<MontagemProvaDashboardPage />} />
                     <Route path="/eventos/:eventId/provas/montagem" element={<MontagemProvaPage />} />
                     <Route path="/eventos/:eventId/geracao" element={<ProvaGeracaoPage />} />

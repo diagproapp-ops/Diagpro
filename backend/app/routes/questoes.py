@@ -7,6 +7,7 @@ def print(*args, **kwargs):  # noqa: A001
     _diag_print_logger.debug(" ".join(str(a) for a in args))
 
 
+from backend.app import liberacao_evento
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Body, Request
 from sqlalchemy import select
 from backend.app import secure_files
@@ -44,7 +45,7 @@ def safe_decrypt(text):
 
 
 @router.post(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=QuestaoOut,
     summary="Criar uma nova questão (múltipla escolha, VF, discursiva ou subjetiva)"
 )
@@ -313,7 +314,7 @@ async def criar_questao(
     return saida
 
 @router.get(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=list[QuestaoOut],
     summary="Listar questões por evento e conteúdo"
 )
@@ -419,7 +420,7 @@ async def listar_questoes(
     return lista
 
 @router.delete(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     summary="Excluir uma questão"
 )
 async def excluir_questao(
@@ -461,7 +462,7 @@ async def excluir_questao(
     return {"ok": True, "detail": "Questão excluída com sucesso."}
 
 @router.get(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=QuestaoOut,
     summary="Buscar uma questão específica"
 )
@@ -576,7 +577,7 @@ async def buscar_questao(
     )
 
 @router.put(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     response_model=QuestaoOut,
     summary="Editar uma questão existente"
 )
@@ -791,7 +792,7 @@ async def editar_questao(
     return saida
 
 @router.patch(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/revisao",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/revisao", dependencies=[Depends(liberacao_evento.exige_para_todos)],
     summary="Salvar revisão da questão e registrar no histórico"
 )
 async def revisar_questao(
@@ -1221,7 +1222,7 @@ async def confirmar_importacao_questoes_docx(
 
 
 @router.get(
-    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/revisoes",
+    "/eventos/{evento_id}/conteudos/{conteudo_id}/questoes/{id_questao}/revisoes", dependencies=[Depends(liberacao_evento.exige_para_admin_geral_e_revisor)],
     summary="Listar revisões de uma questão"
 )
 async def listar_revisoes_questao(

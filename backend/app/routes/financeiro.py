@@ -26,7 +26,7 @@ from backend.app import fin_pdf, fin_retencoes, notificacoes, secure_files, vinc
 from backend.app.auth import get_current_user, verify_password
 from backend.app.database import PlatformSessionLocal
 from backend.app.db_models import (
-    Company, Evento, FinAjuste, FinConfig, FinContrato, FinDocumento, FinFatura, FinParcela, FinProposta, FinTermo, Tenant,
+    Company, Conteudo, Evento, FinAjuste, FinConfig, FinContrato, FinDocumento, FinFatura, FinParcela, FinProposta, FinTermo, Tenant,
     User,
 )
 from backend.app.field_crypto import blind_eq
@@ -318,6 +318,8 @@ async def criar_contrato(body: ContratoIn, db: AsyncSession = Depends(get_tenant
     _validar_cronograma(parcelas, exigir_100=False)
     if not body.precos:
         body.precos = cfg["precos"]
+    if not any(fc.num(v) for v in (body.quantidades or {}).values()) and body.modalidade == "por_questao":
+        body.quantidades = (await fc.sugestao_quantidades(db, t, body.evento_id, body.professor_id))["quantidades"]
     if body.bonus is None:
         body.bonus = BonusIn(**(cfg.get("bonus_padrao") or {}))
     if body.tipo_pessoa is None:
@@ -341,6 +343,42 @@ async def criar_contrato(body: ContratoIn, db: AsyncSession = Depends(get_tenant
     await _gravar_parcelas(db, c, parcelas)
     await db.commit()
     return {"id": c.id, "numero": c.numero}
+
+
+@router.get("/sugestao")
+async def sugerir_quantidades(professor_id: int, evento_id: str, db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
+    """Quantidades do contrato tiradas dos conteúdos do professor no evento e do que ele já elaborou."""
+    await _professor_da_banca(db, u.tenant_id, professor_id)
+    return await fc.sugestao_quantidades(db, u.tenant_id, evento_id, professor_id)
+
+
+class LoteIn(BaseModel):
+    evento_id: str
+
+
+@router.post("/contratos/lote", status_code=201)
+async def contratos_em_lote(body: LoteIn, db: AsyncSession = Depends(get_tenant_db), u=Depends(admin_da_banca)):
+    """Rascunho de contrato para cada professor com conteúdo no evento e sem contrato em andamento: preços, parcelas e
+    bônus do padrão da banca; quantidades dos conteúdos. Nada é enviado: a banca revisa cada um antes de enviar."""
+    t = u.tenant_id
+    if not (await db.execute(select(Evento.id_evento).where(Evento.id_evento == body.evento_id, Evento.tenant_id == t))).first():
+        raise HTTPException(status_code=400, detail="Evento não encontrado.")
+    ids = {int(c.professor_id) for c in (await db.execute(select(Conteudo).where(
+        Conteudo.tenant_id == t, Conteudo.evento_id == body.evento_id, Conteudo.is_deleted.isnot(True)))).scalars()
+        if c.professor_id and str(c.professor_id).isdigit()}
+    professores = {p.id for p, _r in await vinculos.usuarios_da_banca(db, t, roles={"professor"})}
+    criados, ignorados = [], []
+    for pid in sorted(ids & professores):
+        ativo = (await db.execute(select(FinContrato.id).where(
+            FinContrato.tenant_id == t, FinContrato.professor_id == pid, FinContrato.evento_id == body.evento_id,
+            FinContrato.status.in_(["rascunho", "enviado", "aceito"])))).first()
+        if ativo:
+            ignorados.append(pid)
+            continue
+        sug = await fc.sugestao_quantidades(db, t, body.evento_id, pid)
+        r = await criar_contrato(ContratoIn(professor_id=pid, evento_id=body.evento_id, quantidades=sug["quantidades"]), db, u)
+        criados.append(r["id"])
+    return {"criados": len(criados), "ids": criados, "ja_tinham_contrato": len(ignorados)}
 
 
 async def _detalhe(db: AsyncSession, c: FinContrato, para_professor: bool = False) -> dict:

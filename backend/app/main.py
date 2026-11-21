@@ -50,6 +50,8 @@ from backend.app.routes.exportacao import router as export_router
 from backend.app.routes.gabarito import router as gabarito_router
 from backend.app.routes.templates import router as templates_router
 from backend.app.routes.files import router as files_router
+from backend.app.routes.financeiro import router as financeiro_router
+from backend.app.routes.financeiro_plataforma import router as financeiro_plataforma_router
 
 # Aqui está o segredo!
 app = FastAPI(multipart_params={"max_part_size": 50 * 1024 * 1024})  # 50 MB por parte
@@ -158,6 +160,8 @@ app.include_router(configuracoes_routes.router)
 app.include_router(export_router, prefix="/api/export")
 app.include_router(gabarito_router, prefix="/api/gabarito")
 app.include_router(templates_router, prefix="/api")
+app.include_router(financeiro_router)
+app.include_router(financeiro_plataforma_router)
 
 @app.get("/")
 def read_root():

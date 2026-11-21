@@ -29,6 +29,7 @@ import GabaritoPage from './pages/GabaritoPage';
 import TemplatesPage from './pages/TemplatesPage';
 import PublicRegisterPage from './pages/PublicRegisterPage';
 import MinhaContaPage from './pages/MinhaContaPage';
+import FinanceiroPage from './pages/FinanceiroPage';
 import FilaRevisaoPage from './pages/FilaRevisaoPage';
 import PainelBancaPage from './pages/PainelBancaPage';
 import EstatisticasProvaPage from './pages/EstatisticasProvaPage';
@@ -83,6 +84,7 @@ function App() {
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/criar" element={<CriarQuestaoPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/questao/:id_questao/editar" element={<EditarQuestaoPage />} />
                     <Route path="/eventos/:eventId/conteudo/:id_conteudo/referencia/:id_texto_ref/editar" element={<EditarTextoReferenciaPage />} />
+                    <Route path="/financeiro" element={<FinanceiroPage />} />
                     {/* Redireciona qualquer outro caminho para "Meus Conteúdos" */}
                     <Route path="*" element={<Navigate to="/conteudos" replace />} />
                   </>
@@ -93,6 +95,7 @@ function App() {
                     <Route path="/eventos/:eventId/editar" element={<EventoEditPage />} />
                     <Route path="/eventos/:eventId" element={<EventoDetalhesPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/financeiro" element={<FinanceiroPage />} />
                     <Route path="/minha-conta" element={<MinhaContaPage />} />
                     <Route path="/revisao" element={<FilaRevisaoPage />} />
                     <Route path="/painel" element={<PainelBancaPage />} />

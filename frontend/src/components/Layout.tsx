@@ -38,6 +38,7 @@ import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import QueryStatsOutlinedIcon from '@mui/icons-material/QueryStatsOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import BusinessOutlinedIcon from '@mui/icons-material/BusinessOutlined';
+import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
 import { DiagProIcon, DIAGPRO_SLOGAN } from './DiagProLogo';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -217,7 +218,13 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       ? [{ label: 'Painel da banca', sub: 'Andamento de eventos, elaboração e revisão', path: '/painel' }]
       : []),
     ...(isAdmin
-      ? [{ label: 'Configurações & Governança', sub: 'Usuários, banca, frases, clientes e temas', path: '/settings' }]
+      ? [
+          { label: 'Configurações & Governança', sub: 'Usuários, banca, frases, clientes e temas', path: '/settings' },
+          { label: 'Financeiro', sub: 'Pagamentos a professores e planos das bancas', path: '/financeiro' },
+        ]
+      : []),
+    ...(isProfessor
+      ? [{ label: 'Meus Ganhos', sub: 'Produção por questões e itens elaborados', path: '/financeiro' }]
       : []),
   ];
 
@@ -465,15 +472,26 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 </ListItemButton>
               </ListItem>
             ) : (
-              <ListItem disablePadding>
-                <ListItemButton
-                  onClick={() => navigate('/conteudos')}
-                  sx={navItemSx(location.pathname.startsWith('/conteudos'))}
-                >
-                  <ListItemIcon><SubjectIcon fontSize="small" /></ListItemIcon>
-                  <ListItemText primary="Meus Conteúdos" />
-                </ListItemButton>
-              </ListItem>
+              <>
+                <ListItem disablePadding>
+                  <ListItemButton
+                    onClick={() => navigate('/conteudos')}
+                    sx={navItemSx(location.pathname.startsWith('/conteudos'))}
+                  >
+                    <ListItemIcon><SubjectIcon fontSize="small" /></ListItemIcon>
+                    <ListItemText primary="Meus Conteúdos" />
+                  </ListItemButton>
+                </ListItem>
+                <ListItem disablePadding>
+                  <ListItemButton
+                    onClick={() => navigate('/financeiro')}
+                    sx={navItemSx(location.pathname.startsWith('/financeiro'))}
+                  >
+                    <ListItemIcon><AccountBalanceWalletOutlinedIcon fontSize="small" /></ListItemIcon>
+                    <ListItemText primary="Meus Ganhos" />
+                  </ListItemButton>
+                </ListItem>
+              </>
             )}
             {isAdmin && (
               <ListItem disablePadding>
@@ -598,6 +616,15 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             <>
               <Typography sx={sectionTitleSx}>GOVERNANÇA & SISTEMA</Typography>
               <List disablePadding>
+                <ListItem disablePadding>
+                  <ListItemButton
+                    onClick={() => navigate('/financeiro')}
+                    sx={navItemSx(location.pathname.startsWith('/financeiro'))}
+                  >
+                    <ListItemIcon><AccountBalanceWalletOutlinedIcon fontSize="small" /></ListItemIcon>
+                    <ListItemText primary="Financeiro" />
+                  </ListItemButton>
+                </ListItem>
                 <ListItem disablePadding>
                   <ListItemButton
                     onClick={() => navigate('/settings')}
